@@ -145,6 +145,21 @@ fn default_per_page() -> i64 {
     20
 }
 
+/// The public NATS connect URL brokered to enrolled runners (the Traefik
+/// WebSocket front door), or `None` when unconfigured. Treats an empty
+/// `runner_nats_public_url` — e.g. an unset `MEKHAN__RUNNER_NATS_PUBLIC_URL`
+/// rendered as `""` — as absent so the runner keeps its own URL rather than
+/// persisting a blank one.
+fn runner_nats_public_url(state: &AppState) -> Option<String> {
+    state
+        .config
+        .runner_nats_public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_owned)
+}
+
 // ── a. Enroll (public) ─────────────────────────────────────────────────────
 
 /// `POST /api/v1/runners/enroll` — GitLab-style enrollment. PUBLIC: authed by
@@ -325,6 +340,7 @@ pub async fn enroll_runner(
             workspace_id: claimed.workspace_id,
             group: claimed.group,
             nats_jwt,
+            nats_url: runner_nats_public_url(&state),
         }),
     ))
 }
@@ -422,6 +438,7 @@ pub async fn issue_runner_nats_creds(
     Ok(Json(RunnerNatsCreds {
         nats_jwt,
         account_public_key: state.runner_nats_signer.account_public_key().to_string(),
+        nats_url: runner_nats_public_url(&state),
     }))
 }
 

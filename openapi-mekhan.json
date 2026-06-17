@@ -21671,6 +21671,13 @@
             ],
             "description": "Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the runner sent at enrollment. `null` when no public\nkey was supplied OR signing was unavailable; the runner can fetch it\nlater via `POST /api/v1/runners/{id}/nats-creds`."
           },
+          "nats_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public NATS connect URL the runner should use (e.g.\n`wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered\nfrom mekhan's `runner_nats_public_url` config. The runner persists it so a\nbare daemon needs no `EXECUTOR_NATS_URL`. `null` when mekhan has no public\nURL configured; the runner then keeps its own configured/default URL."
+          },
           "runner_token": {
             "type": "string"
           },
@@ -31075,6 +31082,13 @@
           "nats_jwt": {
             "type": "string",
             "description": "Freshly signed scoped user JWT, bound to the runner's stored\n`nats_public_key`."
+          },
+          "nats_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public NATS connect URL the runner should use (e.g.\n`wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered\nfrom mekhan's `runner_nats_public_url` config. `null` when unconfigured."
           }
         }
       },

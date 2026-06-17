@@ -15,6 +15,15 @@ pub struct AppConfig {
     /// Path to NATS credentials file (.creds) for authenticated connections.
     #[serde(default)]
     pub nats_creds: Option<String>,
+    /// Public NATS connect URL advertised to enrolled external runners in the
+    /// enroll / refresh-creds response (e.g. `wss://nats.aithericon.eu`). This
+    /// is the Traefik WebSocket front door, NOT the internal mesh `nats_url`
+    /// mekhan itself uses. The runner persists it so a bare `aithericon-executor`
+    /// connects with zero NATS config. `None` ⇒ the response omits the URL and
+    /// the runner keeps its configured/default NATS URL. Parsed from
+    /// `MEKHAN__RUNNER_NATS_PUBLIC_URL`.
+    #[serde(default)]
+    pub runner_nats_public_url: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
     /// File-analytics growth snapshots (docs/32 Cut 2) — the periodic

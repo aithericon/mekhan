@@ -505,6 +505,13 @@ pub struct RunnerIdentity {
     #[serde(default)]
     pub pool: Option<String>,
     pub workspace_id: String,
+    /// Public NATS connect URL brokered by mekhan at enroll (the Traefik
+    /// WebSocket front door, e.g. `wss://nats.aithericon.eu`). Persisted so a
+    /// bare daemon defaults its `nats_url` here and needs no `EXECUTOR_NATS_URL`.
+    /// `None` on identities written before brokering, or when mekhan had no
+    /// public URL configured.
+    #[serde(default)]
+    pub nats_url: Option<String>,
 }
 
 /// On-disk enrolled-worker identity persisted by the boot-time self-enroll
@@ -769,6 +776,29 @@ impl ExecutorConfig {
         // Default the token path alongside the identity when we have a runner.
         if self.runner_id.is_some() && self.runner_token_path.is_none() {
             self.runner_token_path = Some(runner_dir.join("runner.token"));
+        }
+
+        // Default the NATS URL to the enroll-brokered public URL (the Traefik
+        // WebSocket front door) persisted in identity.json, unless the operator
+        // set one explicitly. This is what lets a bare `aithericon-executor`
+        // connect with zero NATS config after `register` — the runner never has
+        // to learn `EXECUTOR_NATS_URL`. Only fills the still-default sentinel;
+        // an explicit env/config URL always wins. Read independently of the
+        // runner_id discovery above so it applies even when runner_id came from
+        // the environment.
+        if self.nats_url == default_nats_url() {
+            let identity_path = runner_dir.join("identity.json");
+            if let Ok(bytes) = std::fs::read(&identity_path) {
+                if let Ok(identity) = serde_json::from_slice::<RunnerIdentity>(&bytes) {
+                    if let Some(url) = identity
+                        .nats_url
+                        .map(|u| u.trim().to_owned())
+                        .filter(|u| !u.is_empty())
+                    {
+                        self.nats_url = url;
+                    }
+                }
+            }
         }
 
         // Phase 3 (presence-lease pool capacity): a registered runner drains a
@@ -1126,6 +1156,52 @@ mod tests {
         // Shared stream key (partition = runner_id is applied at consumer build,
         // not baked into the namespace) — see RUNNER_JOBS_NAMESPACE.
         assert_eq!(config.namespace, RUNNER_JOBS_NAMESPACE);
+    }
+
+    #[test]
+    fn normalize_defaults_nats_url_from_brokered_identity() {
+        // A runner enrolled via mekhan persists the brokered ws front-door URL
+        // in identity.json; a bare daemon must default `nats_url` to it (zero
+        // NATS config post-enroll).
+        let tmp = std::env::temp_dir().join(format!("exec-broker-url-{}", std::process::id()));
+        let runner_dir = tmp.join("runner");
+        std::fs::create_dir_all(&runner_dir).unwrap();
+        std::fs::write(
+            runner_dir.join("identity.json"),
+            br#"{"runner_id":"rnr-1","workspace_id":"ws-1","nats_url":"wss://nats.aithericon.eu"}"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.base_dir = tmp.to_string_lossy().into_owned();
+        assert_eq!(config.nats_url, default_nats_url());
+        config.normalize();
+
+        assert_eq!(config.nats_url, "wss://nats.aithericon.eu");
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn normalize_explicit_nats_url_wins_over_brokered() {
+        // An operator-set EXECUTOR_NATS_URL must not be clobbered by the brokered
+        // value on disk — only the still-default sentinel is filled.
+        let tmp =
+            std::env::temp_dir().join(format!("exec-broker-url-explicit-{}", std::process::id()));
+        let runner_dir = tmp.join("runner");
+        std::fs::create_dir_all(&runner_dir).unwrap();
+        std::fs::write(
+            runner_dir.join("identity.json"),
+            br#"{"runner_id":"rnr-1","workspace_id":"ws-1","nats_url":"wss://nats.aithericon.eu"}"#,
+        )
+        .unwrap();
+
+        let mut config = test_config();
+        config.base_dir = tmp.to_string_lossy().into_owned();
+        config.nats_url = "nats://my-own-nats:4222".into();
+        config.normalize();
+
+        assert_eq!(config.nats_url, "nats://my-own-nats:4222");
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -191,6 +191,11 @@ EOH
         MEKHAN__PORT          = "${service_port}"
         MEKHAN__NATS_URL      = "${nats_url}"
         MEKHAN__NATS_CREDS    = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        # Public WebSocket front door advertised to enrolled external runners so
+        # a bare daemon needs no EXECUTOR_NATS_URL. Distinct from MEKHAN__NATS_URL
+        # (mekhan's own internal mesh connection). Dev shares prod's NATS, so this
+        # is the same `wss://nats.aithericon.eu` host.
+        MEKHAN__RUNNER_NATS_PUBLIC_URL = "${runner_nats_public_url}"
         MEKHAN__PETRI_LAB_URL = "${petri_lab_url}"
         MEKHAN__S3__ENDPOINT  = "${s3_endpoint}"
         MEKHAN__S3__BUCKET    = "${s3_bucket}"

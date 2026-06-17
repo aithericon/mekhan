@@ -7961,6 +7961,14 @@ export interface components {
              *     later via `POST /api/v1/runners/{id}/nats-creds`.
              */
             nats_jwt?: string | null;
+            /**
+             * @description Public NATS connect URL the runner should use (e.g.
+             *     `wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered
+             *     from mekhan's `runner_nats_public_url` config. The runner persists it so a
+             *     bare daemon needs no `EXECUTOR_NATS_URL`. `null` when mekhan has no public
+             *     URL configured; the runner then keeps its own configured/default URL.
+             */
+            nats_url?: string | null;
             runner_token: string;
             /** Format: uuid */
             workspace_id: string;
@@ -12409,6 +12417,12 @@ export interface components {
              *     `nats_public_key`.
              */
             nats_jwt: string;
+            /**
+             * @description Public NATS connect URL the runner should use (e.g.
+             *     `wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered
+             *     from mekhan's `runner_nats_public_url` config. `null` when unconfigured.
+             */
+            nats_url?: string | null;
         };
         /**
          * @description Phase 5 — one row of the live in-memory presence snapshot returned by

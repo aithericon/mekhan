@@ -34,24 +34,25 @@ resource "nomad_job" "mekhan_service" {
     # Secret VALUES are NOT passed into the jobspec — the `template` stanzas in
     # mekhan.nomad.hcl.tpl read them from Vault at alloc start. Only these PATHS
     # appear in the rendered Nomad job.
-    runtime_secret_path = local.runtime_secret_read_path
-    storage_secret_path = local.storage_secret_read_path
-    datacenters         = jsonencode(var.nomad_datacenters)
-    node_class          = var.node_class
-    image               = "${var.image_repository}:${var.image_tag}"
-    image_tag           = var.image_tag
-    service_port        = var.service_port
-    cpu_mhz             = var.cpu_mhz
-    memory_mb           = var.memory_mb
-    hostname            = var.hostname
-    traefik_enabled     = var.traefik_enabled
-    nats_url            = var.nats_url
-    vault_addr          = var.vault_addr
-    petri_lab_url       = local.petri_lab_url
-    s3_endpoint         = var.s3_endpoint
-    s3_bucket           = var.s3_bucket
-    auth_mode           = var.auth_mode
-    rust_log            = var.rust_log
+    runtime_secret_path    = local.runtime_secret_read_path
+    storage_secret_path    = local.storage_secret_read_path
+    datacenters            = jsonencode(var.nomad_datacenters)
+    node_class             = var.node_class
+    image                  = "${var.image_repository}:${var.image_tag}"
+    image_tag              = var.image_tag
+    service_port           = var.service_port
+    cpu_mhz                = var.cpu_mhz
+    memory_mb              = var.memory_mb
+    hostname               = var.hostname
+    traefik_enabled        = var.traefik_enabled
+    nats_url               = var.nats_url
+    runner_nats_public_url = var.runner_nats_public_url
+    vault_addr             = var.vault_addr
+    petri_lab_url          = local.petri_lab_url
+    s3_endpoint            = var.s3_endpoint
+    s3_bucket              = var.s3_bucket
+    auth_mode              = var.auth_mode
+    rust_log               = var.rust_log
 
     auth_issuer_url = var.zitadel_issuer_url
     auth_client_id  = zitadel_application_oidc.spa.client_id

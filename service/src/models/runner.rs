@@ -175,6 +175,13 @@ pub struct EnrolledRunner {
     /// later via `POST /api/v1/runners/{id}/nats-creds`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats_jwt: Option<String>,
+    /// Public NATS connect URL the runner should use (e.g.
+    /// `wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered
+    /// from mekhan's `runner_nats_public_url` config. The runner persists it so a
+    /// bare daemon needs no `EXECUTOR_NATS_URL`. `null` when mekhan has no public
+    /// URL configured; the runner then keeps its own configured/default URL.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nats_url: Option<String>,
 }
 
 /// Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted
@@ -189,6 +196,11 @@ pub struct RunnerNatsCreds {
     /// The runners-account signing key's PUBLIC key (`A…`) — the JWT issuer and
     /// the value the NATS server's account resolver must trust.
     pub account_public_key: String,
+    /// Public NATS connect URL the runner should use (e.g.
+    /// `wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered
+    /// from mekhan's `runner_nats_public_url` config. `null` when unconfigured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nats_url: Option<String>,
 }
 
 /// Request body for `POST /api/v1/runners/registration-tokens`.

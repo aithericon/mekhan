@@ -129,6 +129,12 @@ variable "nats_url" {
   type        = string
 }
 
+variable "runner_nats_public_url" {
+  description = "Public NATS WebSocket front-door URL advertised to enrolled external runners (the Traefik HTTP router for NATS's native ws listener, layer 04c `nats_public_host`). The runner persists this so a bare daemon needs no EXECUTOR_NATS_URL. Empty disables brokering. Dev and prod share one NATS, so both point at the same host."
+  type        = string
+  default     = "wss://nats.aithericon.eu"
+}
+
 variable "vault_addr" {
   description = "Vault server address as resolvable from inside a Nomad alloc. Nomad's `vault {}` stanza already injects VAULT_TOKEN via workload-identity exchange; VAULT_ADDR is rendered here so mekhan-service's VaultResourceStore, the engine's secret-wrapping path, and the executor's unwrap call all reach the same server. HetznerCluster Vault: http://10.20.0.20:8200."
   type        = string
