@@ -190,12 +190,45 @@ pub fn build_pool_net(resource_id: Uuid, source: CapacitySource) -> ScenarioDefi
         ctx.bridge_in(well_known::POOL_REGISTER_INBOX, "Register Inbox");
     let release_inbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_in(well_known::POOL_RELEASE_INBOX, "Release Inbox");
+    // Claim-withdrawal inbox — a claimant net torn down (cancelled / permanently
+    // failed) while its claim is still QUEUED in `claim_inbox` bridges a
+    // `{ grant_id }` here from its teardown finalizer; `t_withdraw` (below) drops
+    // the matching claim so it is never granted to a dead net.
+    let withdraw_inbox: aithericon_sdk::PlaceHandle<DynamicToken> =
+        ctx.bridge_in(well_known::POOL_WITHDRAW_INBOX, "Withdraw Inbox");
 
     // --- SHARED: grant reply channel ----------------------------------------
     // Routes the grant back to the claiming instance's `p_<id>_grant_inbox` via
     // the "grant" channel carried on the claim token.
     let grant_outbox: aithericon_sdk::PlaceHandle<DynamicToken> =
         ctx.bridge_reply_channel("grant_outbox", "Grant Outbox", "grant");
+
+    // --- SHARED: claim withdrawal -------------------------------------------
+    // t_withdraw — a claimant net was cancelled / failed permanently while its
+    // claim was still QUEUED here (the instance was torn down parked at its
+    // `p_<id>_pending`, before any grant arrived). Its teardown finalizer
+    // bridged a `{ grant_id }` to `withdraw_inbox`; consume the matching claim
+    // (correlate on `grant_id`) and record the discard. Without this the
+    // orphaned claim would sit in `claim_inbox` and `t_grant` would grant it the
+    // instant capacity arrives — consuming a unit that the dead net can never
+    // register (capacity leak) and bouncing the grant reply against a terminal
+    // net. `t_withdraw` requires a `wd` token, so it is INERT for a healthy net
+    // (no effect on the normal claim→grant path).
+    //
+    // Race note: if a grant already fired (claim gone from `claim_inbox`) the
+    // withdrawal finds no match and harmlessly waits in `withdraw_inbox` — that
+    // narrow in-flight window is reclaimed by the held-release finalizer
+    // (release_inbox) or, for presence pools, by the runner-expiry reap. The
+    // common stuck case — claim queued with NO capacity — is fully covered, as
+    // `t_grant` is disabled there so the withdrawal always wins.
+    ctx.transition("t_withdraw", "Withdraw Queued Claim")
+        .auto_input("wd", &withdraw_inbox)
+        .auto_input("claim", &claim_inbox)
+        .correlate("wd", "claim", "grant_id")
+        .auto_output("done", &done)
+        .logic(
+            r#"#{ done: #{ grant_id: claim.grant_id, outcome: "withdrawn" } }"#,
+        );
 
     // ========================================================================
     // BRANCH on capacity source. The two kinds diverge on: the admission +
@@ -1285,6 +1318,7 @@ mod tests {
             well_known::POOL_CLAIM_INBOX,
             well_known::POOL_REGISTER_INBOX,
             well_known::POOL_RELEASE_INBOX,
+            well_known::POOL_WITHDRAW_INBOX,
         ] {
             let p = place(&a, name).unwrap_or_else(|| panic!("missing place {name}"));
             assert_eq!(p["type"], "bridge_in", "{name} kind");
@@ -1299,10 +1333,31 @@ mod tests {
         // lease_expired is a signal place (journaled reap, replay-safe).
         assert_eq!(place(&a, "lease_expired").unwrap()["type"], "signal");
 
-        // The four transitions exist.
-        for t in ["t_grant", "t_register", "t_release", "t_reap"] {
+        // The five transitions exist (t_withdraw drops an orphaned queued claim
+        // when its claimant net is torn down before a grant).
+        for t in ["t_grant", "t_register", "t_release", "t_reap", "t_withdraw"] {
             assert!(transition(&a, t).is_some(), "missing transition {t}");
         }
+
+        // t_withdraw consumes both the withdrawal and the still-queued claim
+        // (correlated on grant_id) and records the discard — never grants.
+        let wd = transition(&a, "t_withdraw").expect("t_withdraw");
+        let ins: Vec<String> = wd["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["place"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            ins.contains(&well_known::POOL_WITHDRAW_INBOX.to_string())
+                && ins.contains(&well_known::POOL_CLAIM_INBOX.to_string()),
+            "t_withdraw must consume withdraw_inbox + claim_inbox: {ins:?}"
+        );
+        assert!(
+            wd["logic"].to_string().contains("withdrawn"),
+            "t_withdraw must record outcome \"withdrawn\": {}",
+            wd["logic"]
+        );
     }
 
     /// The grant reply must be `{ grant_id, unit_id }` — `unit_id` is R1's
