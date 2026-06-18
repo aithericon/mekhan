@@ -591,15 +591,16 @@ fn jetstream_pull_pub_allow(namespace: &str, partition: &str) -> Vec<String> {
         out.push(format!("$JS.ACK.{stream}.{durable}.>"));
     }
     // The apalis ack path publishes a dead-lettered job to the `{namespace}.dlq`
-    // SUBJECT on terminal failure — and `NatsStorage` ensures the backing
-    // `{namespace}_dlq` STREAM at init (`get_or_create` → STREAM.INFO, then
-    // STREAM.CREATE when absent). Unlike the per-priority job streams, the DLQ
-    // stream is NOT pre-created in-cluster, so grant its INFO+CREATE or the
-    // ensure step's reply never arrives and startup fails with a JetStream
-    // request timeout (a denied JS-API publish drops silently → no reply).
+    // SUBJECT on terminal failure, and `NatsStorage` resolves the backing
+    // `{namespace}_dlq` STREAM at init (`get_or_create` → STREAM.INFO). That
+    // stream is CLUSTER-OWNED — mekhan pre-creates it at startup
+    // (`MekhanNats::ensure_runner_jobs_dlq_stream`) — so the runner only needs
+    // INFO (to resolve it) + the publish subject, NOT STREAM.CREATE. A
+    // fleet-shared stream must never be creatable/reconfigurable by a scoped
+    // edge runner; with the stream pre-created, `get_or_create` resolves via
+    // INFO and never attempts a create.
     let dlq_stream = format!("{namespace}_dlq");
     out.push(format!("$JS.API.STREAM.INFO.{dlq_stream}"));
-    out.push(format!("$JS.API.STREAM.CREATE.{dlq_stream}"));
     out.push(format!("{namespace}.dlq"));
     out
 }
@@ -741,12 +742,19 @@ mod tests {
             format!("$JS.ACK.{stream}.{durable}.>"),
             format!("{RUNNER_JOBS_NAMESPACE}.dlq"),
             format!("$JS.API.STREAM.INFO.{RUNNER_JOBS_NAMESPACE}_dlq"),
-            format!("$JS.API.STREAM.CREATE.{RUNNER_JOBS_NAMESPACE}_dlq"),
             "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
             "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
         ] {
             assert!(pub_allow.contains(&want), "missing pub grant: {want}");
         }
+
+        // Consumer-only: a scoped runner must NOT be able to create/reconfigure
+        // the fleet-shared DLQ stream — mekhan pre-creates it cluster-side.
+        let dlq_create = format!("$JS.API.STREAM.CREATE.{RUNNER_JOBS_NAMESPACE}_dlq");
+        assert!(
+            !pub_allow.contains(&dlq_create),
+            "runner must NOT be granted STREAM.CREATE on the shared DLQ"
+        );
     }
 
     #[test]

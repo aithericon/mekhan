@@ -48,6 +48,15 @@ async fn main() -> anyhow::Result<()> {
         .ensure_silent_drops_stream()
         .await
         .expect("failed to create MEKHAN_SILENT_DROPS stream");
+
+    // Lab-runner-fleet dead-letter stream is cluster-owned: create it here so an
+    // enrolled (consumer-only) runner never has to — its scoped JWT stays
+    // STREAM.INFO-only on the shared `runner-jobs_dlq`. Non-fatal: a runner
+    // re-mint can still self-heal if this races a cold NATS, and the in-cluster
+    // worker path is unaffected.
+    if let Err(e) = mekhan_nats.ensure_runner_jobs_dlq_stream().await {
+        tracing::warn!(error = %e, "could not ensure runner-jobs_dlq stream at startup");
+    }
     if let Some(drain_rx) = mekhan_service::observability::install_drainer() {
         let drain_nats = mekhan_nats.clone();
         tokio::spawn(async move {
