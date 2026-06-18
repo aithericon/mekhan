@@ -242,9 +242,11 @@ impl RunnerNatsSigner {
     /// runner-supplied `user_public_key`. Signed by the account keypair.
     ///
     /// Scope (subject taxonomy, docs/21 §4.5):
-    ///   PUBLISH allow: `executor.status.{id}.>`, `executor.events.{id}.>`,
-    ///   `runner.{id}.presence`, and `{pool}.claim` (only when pooled).
-    ///   SUBSCRIBE allow: `runner.{id}.>`.
+    ///   PUBLISH allow: `executor.status.*.>`, `executor.events.*.>` (keyed by
+    ///   EXECUTION id, not the runner id), `runner.{id}.presence`, and
+    ///   `{pool}.claim` (only when pooled), plus the JetStream pull + shared
+    ///   stream API (see the helpers below).
+    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`.
     ///   Plus a ResponsePermission so async-nats request/reply works.
     /// The JWT carries no expiry (long-lived; rotation = re-mint).
     pub fn mint_runner_jwt(
@@ -260,8 +262,16 @@ impl RunnerNatsSigner {
         }
 
         let mut pub_allow = vec![
-            format!("executor.status.{runner_id}.>"),
-            format!("executor.events.{runner_id}.>"),
+            // Status/events subjects are keyed by EXECUTION id
+            // (`executor.status.mekhan-{ws}-{inst}-{node}.{status}`), NOT the
+            // runner id — a runner reports on whatever execution it currently
+            // drains. The earlier `{runner_id}` scoping never matched a real
+            // subject, so every status/event publish was denied and its
+            // JetStream ack timed out. `*` spans the exec id (same as the worker
+            // mint). Job delivery is partition-isolated at the consumer, so this
+            // wildcard publish doesn't widen what a runner can actually drain.
+            "executor.status.*.>".to_string(),
+            "executor.events.*.>".to_string(),
             format!("runner.{runner_id}.presence"),
         ];
         if let Some(pool) = pool {
@@ -697,8 +707,9 @@ mod tests {
         assert_eq!(claims["sub"], user_pub);
 
         let pub_allow = allow_list(&claims, "pub");
-        assert!(pub_allow.contains(&format!("executor.status.{id}.>")));
-        assert!(pub_allow.contains(&format!("executor.events.{id}.>")));
+        // Status/events keyed by exec id, not runner id → wildcard span.
+        assert!(pub_allow.contains(&"executor.status.*.>".to_string()));
+        assert!(pub_allow.contains(&"executor.events.*.>".to_string()));
         assert!(pub_allow.contains(&format!("runner.{id}.presence")));
         assert!(pub_allow.contains(&format!("{pool}.claim")));
 
