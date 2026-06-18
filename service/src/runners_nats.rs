@@ -41,6 +41,22 @@ const VAULT_SEED_FIELD: &str = "seed";
 /// Local file (under `data_dir`) holding the account signing seed.
 const SEED_FILE_NAME: &str = "runners_account_signing.nk";
 
+/// Shared apalis stream-family key for lab-runner-fleet job delivery. Mirrors
+/// `aithericon_executor_worker::config::RUNNER_JOBS_NAMESPACE` (`"runner-jobs"`);
+/// re-stated here to build the `$JS.API.*` pull allow-list for a runner's
+/// partition-keyed consumer without depending on the executor crate.
+const RUNNER_JOBS_NAMESPACE: &str = "runner-jobs";
+
+/// The three apalis priority lanes (apalis-nats `storage.rs`). Each maps to a
+/// per-priority stream `{namespace}_{prio}` + a partition-keyed durable.
+const PRIORITIES: [&str; 3] = ["high", "medium", "low"];
+
+/// The shared JetStream streams every executor daemon (runner OR worker) ensures
+/// at boot, before draining any job: the status/events fan-in + the chunked-data
+/// transport stream. A scoped JWT must be allowed `STREAM.INFO/CREATE/UPDATE` on
+/// these or it fails at startup before it can drain.
+const SHARED_STREAMS: [&str; 3] = ["EXECUTOR_STATUS", "EXECUTOR_EVENTS", "EXECUTOR_DATASTREAM"];
+
 /// Errors raised while minting a runner user JWT.
 #[derive(Debug, thiserror::Error)]
 pub enum MintError {
@@ -256,13 +272,29 @@ impl RunnerNatsSigner {
                 pub_allow.push(format!("{pool}.claim"));
             }
         }
-        // Control/presence-adjacent subjects for this runner. Job delivery is
-        // NOT a core-NATS subscribe: presence-pool grants land on the SHARED
-        // `runner-jobs` JetStream stream, drained via a partition-filtered pull
-        // consumer (`runner-jobs.{prio}.{runner_id}.>`). Scoping that pull
-        // (JetStream `$JS.API.*` perms for the shared stream + this runner's
-        // durable) is a separate prod-hardening concern; dev NATS is open.
-        let sub_allow = vec![format!("runner.{runner_id}.>")];
+        // Job delivery is NOT a core-NATS subscribe: presence-pool grants land on
+        // the SHARED `runner-jobs` JetStream stream-set, drained via a
+        // partition-keyed pull consumer per priority
+        // (`runner-jobs_{prio}_{runner_id}_consumer`). Grant exactly the
+        // `$JS.API.*` ops that consumer needs (STREAM.INFO + CONSUMER
+        // CREATE/INFO/MSG.NEXT), its `$JS.ACK.>` reply subjects, and the
+        // `runner-jobs.dlq` publish — scoped to THIS runner's durable so it can
+        // bind and drain its lane but touch no other partition.
+        pub_allow.extend(jetstream_pull_pub_allow(
+            RUNNER_JOBS_NAMESPACE,
+            &runner_id.to_string(),
+        ));
+        // The shared status/events/datastream streams the daemon ensures at boot
+        // (STREAM.INFO/CREATE/UPDATE) + the chunked-data publish subject.
+        pub_allow.extend(jetstream_shared_stream_pub_allow());
+
+        // This runner's own control subject PLUS the request/reply mux inbox.
+        // async-nats subscribes ONCE to `_INBOX.>` (default prefix) and ALL
+        // JetStream pull deliveries and `$JS.API.*` replies arrive there. Without
+        // this the inbox subscribe is denied and draining silently dies — the
+        // `resp` ResponsePermission only lets a RESPONDER publish to learned
+        // reply subjects, NOT a requester subscribe to its own inbox.
+        let sub_allow = vec![format!("runner.{runner_id}.>"), "_INBOX.>".to_string()];
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -332,7 +364,10 @@ impl RunnerNatsSigner {
             )));
         }
 
-        let mut sub_allow = vec![format!("worker.{worker_id}.>")];
+        // Own control subject + the request/reply mux inbox — same reason as the
+        // runner mint: all JetStream pull deliveries + `$JS.API.*` replies land
+        // on the default-prefix `_INBOX.>`, so without it draining silently dies.
+        let mut sub_allow = vec![format!("worker.{worker_id}.>"), "_INBOX.>".to_string()];
         if let Some(group) = group {
             if !group.is_empty() {
                 // Defense in depth: `group` is validated at the registration-token
@@ -365,11 +400,29 @@ impl RunnerNatsSigner {
         // A worker publishes its presence heartbeat and the per-job status/events
         // it drains. No `.claim` — that is the presence-push admission grant a
         // worker never participates in (it competes on a pull queue).
-        let pub_allow = vec![
+        let mut pub_allow = vec![
             format!("worker.{worker_id}.presence"),
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
         ];
+
+        // JetStream pull scope, one stream-family per advertised backend wire. A
+        // grouped worker is a competing pull consumer on the PARALLEL
+        // `executor-<wire>-grp` stream-set, keyed on its group's routing
+        // partition. Only meaningful when grouped (an ungrouped worker has no
+        // partition to bind a durable on, mirroring the subscribe-filter
+        // omission above).
+        if let Some(group) = group {
+            if !group.is_empty() {
+                for wire in backends {
+                    let ns = format!("{}-grp", aithericon_backends::executor_pool_namespace(wire));
+                    pub_allow.extend(jetstream_pull_pub_allow(&ns, group));
+                }
+            }
+        }
+        // The shared status/events/datastream streams every worker ensures at
+        // boot (the StatusReporter runs regardless of grouping).
+        pub_allow.extend(jetstream_shared_stream_pub_allow());
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -504,6 +557,66 @@ fn vault_write_seed(seed: &str) {
     }
 }
 
+/// Build the `$JS.API.*` + ACK + DLQ **publish** allow-list a partition-keyed
+/// pull consumer needs to bind and drain one apalis stream-family.
+///
+/// `namespace` is the apalis stream-family key (`runner-jobs` for a runner,
+/// `executor-<wire>-grp` for a worker); `partition` is the durable's partition
+/// token (the runner_id UUID, or the worker group's routing-partition UUID). For
+/// each priority lane apalis `NatsStorage` creates a `{namespace}_{prio}` stream
+/// and a durable `{namespace}_{prio}_{partition}_consumer`; a pull consumer
+/// drives `STREAM.INFO` → `CONSUMER.CREATE` (CreateOrUpdate on every reconnect)
+/// → `CONSUMER.INFO` → `CONSUMER.MSG.NEXT`, and acks land on a server-assigned
+/// `$JS.ACK.{stream}.{consumer}.…` reply subject. All entries are PUBLISH
+/// subjects (the `$JS.API.*` reply rides the `_INBOX.>` subscribe). Both the
+/// 2-token and 3-token filtered consumer-create forms are granted (async-nats
+/// 0.42 sends the filtered variant for a single-filter pull consumer), plus the
+/// legacy `DURABLE.CREATE`. No `STREAM.CREATE/UPDATE` (job streams are
+/// pre-created in-cluster) and no `CONSUMER.DELETE` — keeping it tight.
+fn jetstream_pull_pub_allow(namespace: &str, partition: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(PRIORITIES.len() * 7 + 1);
+    for prio in PRIORITIES {
+        let stream = format!("{namespace}_{prio}");
+        let durable = format!("{stream}_{partition}_consumer");
+        out.push(format!("$JS.API.STREAM.INFO.{stream}"));
+        out.push(format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}"));
+        out.push(format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}.>"));
+        out.push(format!(
+            "$JS.API.CONSUMER.DURABLE.CREATE.{stream}.{durable}"
+        ));
+        out.push(format!("$JS.API.CONSUMER.INFO.{stream}.{durable}"));
+        out.push(format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"));
+        // Server-assigned ack reply subject tail → wildcard, scoped per
+        // (stream, durable) so an identity can only ack its own deliveries.
+        out.push(format!("$JS.ACK.{stream}.{durable}.>"));
+    }
+    // The apalis ack path publishes to `{namespace}.dlq` on terminal failure.
+    out.push(format!("{namespace}.dlq"));
+    out
+}
+
+/// Build the `$JS.API.STREAM.*` management + datastream publish allow-list for
+/// the [`SHARED_STREAMS`] every executor daemon ensures at boot.
+///
+/// Before draining, a runner/worker calls `StatusReporter::new`
+/// (→ `get_or_create_stream` on `EXECUTOR_STATUS` + `EXECUTOR_EVENTS`) and
+/// ensures `EXECUTOR_DATASTREAM`. `get_or_create_stream` issues
+/// `$JS.API.STREAM.INFO.{name}` and, when absent, `STREAM.CREATE`/`UPDATE` — so
+/// a scoped JWT lacking these fails at startup. The status/events PUBLISH
+/// subjects are granted at the call site; this adds the stream-management API
+/// plus the chunked-data publish subject. No `STREAM.DELETE/PURGE` — these are
+/// shared streams a scoped identity must never tear down.
+fn jetstream_shared_stream_pub_allow() -> Vec<String> {
+    let mut out = Vec::with_capacity(SHARED_STREAMS.len() * 3 + 1);
+    for stream in SHARED_STREAMS {
+        out.push(format!("$JS.API.STREAM.INFO.{stream}"));
+        out.push(format!("$JS.API.STREAM.CREATE.{stream}"));
+        out.push(format!("$JS.API.STREAM.UPDATE.{stream}"));
+    }
+    out.push("executor.datastream.*.>".to_string());
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +701,41 @@ mod tests {
             decode_claims(&wjwt)["nats"]["issuer_account"],
             account_identity
         );
+    }
+
+    #[test]
+    fn runner_jwt_grants_jetstream_pull_and_inbox_scope() {
+        // Regression: a runner connecting to a real (auth-enabled) NATS needs
+        // `_INBOX.>` (sub) + `$JS.API.*`/`$JS.ACK.>` (pub) or it fails with
+        // `Permissions Violation` at consumer-bind / stream-ensure and never
+        // drains. Lock the exact subjects the apalis pull consumer drives.
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account());
+        let id = Uuid::new_v4();
+        let jwt = signer
+            .mint_runner_jwt(&KeyPair::new_user().public_key(), id, Some("lab"))
+            .expect("mint should succeed");
+        let claims = decode_claims(&jwt);
+
+        let sub = allow_list(&claims, "sub");
+        assert!(
+            sub.contains(&"_INBOX.>".to_string()),
+            "needs _INBOX.> subscribe"
+        );
+
+        let pub_allow = allow_list(&claims, "pub");
+        let stream = format!("{RUNNER_JOBS_NAMESPACE}_high");
+        let durable = format!("{stream}_{id}_consumer");
+        for want in [
+            format!("$JS.API.STREAM.INFO.{stream}"),
+            format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}.>"),
+            format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"),
+            format!("$JS.ACK.{stream}.{durable}.>"),
+            format!("{RUNNER_JOBS_NAMESPACE}.dlq"),
+            "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
+            "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
+        ] {
+            assert!(pub_allow.contains(&want), "missing pub grant: {want}");
+        }
     }
 
     #[test]
