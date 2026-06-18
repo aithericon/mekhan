@@ -29,8 +29,15 @@
 
 use std::path::PathBuf;
 
+use aithericon_executor_domain::{INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 use nats_io_jwt::{KeyPair, Permission, ResponsePermission, StringList, Token, User};
 use uuid::Uuid;
+
+/// Core-NATS subject the executor's cancel listener subscribes to
+/// (`executor.cancel.{execution_id}`, wildcarded). A runner/worker must receive
+/// cancellations for the executions it drains; mirror
+/// `aithericon_executor_domain::cancel_subject_filter(None)`.
+const EXECUTOR_CANCEL_FILTER: &str = "executor.cancel.*";
 
 /// Vault KV-v2 path (under the default `secret` mount) for the persisted
 /// account signing seed — resolves to
@@ -294,7 +301,12 @@ impl RunnerNatsSigner {
         // this the inbox subscribe is denied and draining silently dies — the
         // `resp` ResponsePermission only lets a RESPONDER publish to learned
         // reply subjects, NOT a requester subscribe to its own inbox.
-        let sub_allow = vec![format!("runner.{runner_id}.>"), "_INBOX.>".to_string()];
+        let sub_allow = vec![
+            format!("runner.{runner_id}.>"),
+            "_INBOX.>".to_string(),
+            // Receive cancellations for executions this runner drains.
+            EXECUTOR_CANCEL_FILTER.to_string(),
+        ];
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -367,7 +379,12 @@ impl RunnerNatsSigner {
         // Own control subject + the request/reply mux inbox — same reason as the
         // runner mint: all JetStream pull deliveries + `$JS.API.*` replies land
         // on the default-prefix `_INBOX.>`, so without it draining silently dies.
-        let mut sub_allow = vec![format!("worker.{worker_id}.>"), "_INBOX.>".to_string()];
+        let mut sub_allow = vec![
+            format!("worker.{worker_id}.>"),
+            "_INBOX.>".to_string(),
+            // Receive cancellations for executions this worker drains.
+            EXECUTOR_CANCEL_FILTER.to_string(),
+        ];
         if let Some(group) = group {
             if !group.is_empty() {
                 // Defense in depth: `group` is validated at the registration-token
@@ -624,6 +641,15 @@ fn jetstream_shared_stream_pub_allow() -> Vec<String> {
         out.push(format!("$JS.API.STREAM.UPDATE.{stream}"));
     }
     out.push("executor.datastream.*.>".to_string());
+
+    // The executor's `FoldSink` (docs/32 batch-fold transport) resolves the
+    // `INVENTORY_FOLD` stream at boot and publishes `FoldBatch`es to
+    // `inventory.fold.batch.>`. That stream is CLUSTER-OWNED — mekhan's
+    // inventory-fold ingest consumer creates it at startup (always before a
+    // runner connects) — so the runner only needs INFO (to resolve it) + the
+    // batch publish subject, never STREAM.CREATE.
+    out.push(format!("$JS.API.STREAM.INFO.{INVENTORY_FOLD_STREAM}"));
+    out.push(format!("{INVENTORY_FOLD_SUBJECT}.>"));
     out
 }
 
@@ -731,6 +757,10 @@ mod tests {
             sub.contains(&"_INBOX.>".to_string()),
             "needs _INBOX.> subscribe"
         );
+        assert!(
+            sub.contains(&EXECUTOR_CANCEL_FILTER.to_string()),
+            "needs executor.cancel.* subscribe for the cancel listener"
+        );
 
         let pub_allow = allow_list(&claims, "pub");
         let stream = format!("{RUNNER_JOBS_NAMESPACE}_high");
@@ -741,6 +771,9 @@ mod tests {
             format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"),
             format!("$JS.ACK.{stream}.{durable}.>"),
             format!("{RUNNER_JOBS_NAMESPACE}.dlq"),
+            // INVENTORY_FOLD (FoldSink): cluster-created → INFO + publish only.
+            format!("$JS.API.STREAM.INFO.{INVENTORY_FOLD_STREAM}"),
+            format!("{INVENTORY_FOLD_SUBJECT}.>"),
             format!("$JS.API.STREAM.INFO.{RUNNER_JOBS_NAMESPACE}_dlq"),
             "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
             "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
