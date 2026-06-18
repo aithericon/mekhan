@@ -19,12 +19,17 @@
 	import {
 		createTemplateTest,
 		updateTemplateTest,
+		getTemplateRequirements,
 		type TemplateTest,
 		type Assertion,
 		type AssertOp
 	} from '$lib/api/client';
+	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import type { components } from '$lib/api/schema';
 	import RefPicker from '$lib/components/editor/panels/property-sections/RefPicker.svelte';
 	import type { ScopeEntry } from '$lib/editor/guard-scope';
+
+	type RequirementSlot = components['schemas']['RequirementSlot'];
 
 	type Props = {
 		templateId: string;
@@ -64,6 +69,21 @@
 	let error = $state<string | null>(null);
 	let scopeOpen = $state(true);
 
+	// ── Resource bindings ──────────────────────────────────────────────────────
+	// A test can pin which concrete resource each of the template's auto-derived
+	// requirement slots resolves to (highest-precedence binding tier — see
+	// `CreateInstanceRequest.bindings`). Mirrors the `start_tokens` flow: seeded
+	// from `test.bindings` on open, persisted into the create/update payload.
+	//   slot_key -> resource_id ('' = leave unbound, resolved by the lower tiers)
+	let bindingsBySlot = $state<Record<string, string>>({});
+	// The template's requirement slots (loaded once per dialog open).
+	let slots = $state<RequirementSlot[]>([]);
+	let slotsLoaded = $state(false);
+	// Per resource_type → the workspace's resources of that type (loaded lazily,
+	// once per distinct type the slots reference). Reuses the DeploymentSection
+	// data flow (`listResources({ resource_type })`).
+	let resourcesByType = $state<Record<string, ResourceSummary[]>>({});
+
 	$effect(() => {
 		if (!open) {
 			error = null;
@@ -88,6 +108,10 @@
 			assertions = Array.isArray(test.assertions)
 				? (JSON.parse(JSON.stringify(test.assertions)) as Assertion[])
 				: [];
+			// `test.bindings` is a `{ slot_key: resource_id }` object; copy into
+			// plain mutable string state (resource ids are uuid strings).
+			const storedBindings = (test.bindings ?? {}) as Record<string, string>;
+			bindingsBySlot = { ...storedBindings };
 		} else {
 			name = '';
 			enabled = true;
@@ -98,8 +122,62 @@
 			}
 			humanAnswersBySlug = seeded;
 			assertions = [];
+			bindingsBySlot = {};
 		}
 	});
+
+	// Load the template's requirement slots once per dialog open. Empty for a
+	// template with no resource/pool refs → the bindings section hides itself.
+	$effect(() => {
+		if (!open || slotsLoaded) return;
+		slotsLoaded = true;
+		getTemplateRequirements(templateId)
+			.then((r) => {
+				slots = r.slots ?? [];
+			})
+			.catch(() => {
+				/* leave empty — the bindings section simply doesn't render */
+			});
+	});
+	$effect(() => {
+		if (!open) {
+			// Reset the one-shot load gate so reopening re-fetches (slots can
+			// change after a republish).
+			slotsLoaded = false;
+		}
+	});
+
+	// Lazily load the resource list for each distinct slot resource_type so each
+	// per-slot picker has options. Same data flow as DeploymentSection.
+	$effect(() => {
+		const types = new Set(slots.map((s) => s.resource_type));
+		for (const t of types) {
+			if (t in resourcesByType) continue;
+			// Mark as in-flight immediately to dedupe concurrent loads.
+			resourcesByType = { ...resourcesByType, [t]: [] };
+			listResources({ resource_type: t, perPage: 200 })
+				.then((p) => {
+					resourcesByType = { ...resourcesByType, [t]: p.items };
+				})
+				.catch(() => {
+					/* leave empty — picker shows the empty hint */
+				});
+		}
+	});
+
+	function setBinding(slotKey: string, resourceId: string) {
+		const next = { ...bindingsBySlot };
+		if (resourceId) next[slotKey] = resourceId;
+		else delete next[slotKey];
+		bindingsBySlot = next;
+	}
+
+	function bindingLabel(slot: RequirementSlot): string {
+		const id = bindingsBySlot[slot.key];
+		if (!id) return 'Use workspace default…';
+		const found = (resourcesByType[slot.resource_type] ?? []).find((r) => r.id === id);
+		return found ? `${found.path} — ${found.display_name}` : id;
+	}
 
 	const OPS: AssertOp[] = [
 		'eq',
@@ -164,13 +242,21 @@
 				...a,
 				value: valueNeedsRhs(a.op) ? parseRhs(a.value) : null
 			}));
+			// Drop empty selections — an unbound slot resolves through the lower
+			// binding tiers (workspace default / platform / baseline), same as
+			// omitting it from `CreateInstanceRequest.bindings`.
+			const bindings: Record<string, string> = {};
+			for (const [slotKey, resourceId] of Object.entries(bindingsBySlot)) {
+				if (resourceId) bindings[slotKey] = resourceId;
+			}
 			if (test) {
 				await updateTemplateTest(templateId, test.id, {
 					name,
 					enabled,
 					start_tokens: startTokens,
 					human_answers: humanAnswers,
-					assertions: cleanedAssertions
+					assertions: cleanedAssertions,
+					bindings
 				});
 			} else {
 				await createTemplateTest(templateId, {
@@ -178,7 +264,8 @@
 					enabled,
 					start_tokens: startTokens,
 					human_answers: humanAnswers,
-					assertions: cleanedAssertions
+					assertions: cleanedAssertions,
+					bindings
 				});
 			}
 			onsaved();
@@ -283,6 +370,50 @@
 						<code>CreateInstanceRequest.start_tokens</code>.
 					</p>
 				</div>
+
+				{#if slots.length > 0}
+					<div class="space-y-2">
+						<Label>Resource bindings</Label>
+						<p class="text-xs text-muted-foreground">
+							Pin which concrete resource each requirement slot resolves to for this
+							test's run. Leave a slot on <em>Use workspace default</em> to resolve it
+							through the normal precedence (per-workspace default → platform →
+							baseline) — same as <code>CreateInstanceRequest.bindings</code>.
+						</p>
+						{#each slots as slot (slot.key)}
+							{@const list = resourcesByType[slot.resource_type] ?? []}
+							<div class="space-y-1">
+								<Label for={`bind-${slot.key}`} class="font-mono text-xs">
+									{slot.key}
+									<span class="font-normal text-muted-foreground">
+										— {slot.resource_type}{slot.required ? ' (required)' : ''}
+									</span>
+								</Label>
+								<Select.Root
+									type="single"
+									value={bindingsBySlot[slot.key] ?? ''}
+									onValueChange={(v) => setBinding(slot.key, v ?? '')}
+								>
+									<Select.Trigger id={`bind-${slot.key}`} data-testid={`select-binding-${slot.key}`}>
+										<span class="truncate text-sm">{bindingLabel(slot)}</span>
+									</Select.Trigger>
+									<Select.Content>
+										<Select.Item value="" label="Use workspace default…" />
+										{#each list as r (r.id)}
+											<Select.Item value={r.id} label={`${r.path} — ${r.display_name}`} />
+										{/each}
+									</Select.Content>
+								</Select.Root>
+								{#if list.length === 0 && slot.resource_type in resourcesByType}
+									<p class="text-xs italic text-muted-foreground">
+										No <code class="font-mono">{slot.resource_type}</code> resources in this
+										workspace.
+									</p>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{/if}
 
 				{#if humanTaskSlugs.length > 0}
 					<div class="space-y-2">

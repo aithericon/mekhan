@@ -61,6 +61,14 @@ export type DiscardDraftResponse = components['schemas']['DiscardDraftResponse']
 export type PaginatedTemplateResponse =
 	components['schemas']['Paginated_WorkflowTemplateSummary'];
 
+// ─── Resource/pool requirement bindings (Phase E) ────────────────────────────
+export type RequirementSlot = components['schemas']['RequirementSlot'];
+export type SlotReadiness = components['schemas']['SlotReadiness'];
+export type SlotRole = components['schemas']['SlotRole'];
+export type BindingTier = components['schemas']['BindingTier'];
+export type TemplateRequirementsResponse =
+	components['schemas']['TemplateRequirementsResponse'];
+
 // ─── Library-node governance (Phase 4) ───────────────────────────────────────
 export type Presentation = components['schemas']['Presentation'];
 export type PromoteTemplateRequest = components['schemas']['PromoteTemplateRequest'];
@@ -310,6 +318,24 @@ export async function getTemplateIoContract(
 
 export async function createTemplate(data: CreateTemplateRequest): Promise<Template> {
 	return unwrap(await client.POST('/api/v1/templates', { body: data }));
+}
+
+/**
+ * The template's auto-derived resource/pool requirement manifest plus
+ * per-current-workspace readiness. Each slot resolves through the launch-time
+ * precedence chain (per-instance override → per-workspace default → platform
+ * auto-bind → home baseline); `readiness[i].satisfied` / `.tier` say whether
+ * and how a slot is already bound for the caller's active workspace. The
+ * CreateInstance dialog reads this to render the per-slot picker and gate the
+ * Run button. Resolves against the active workspace (the binding surface is
+ * per-workspace). A template with no resource/pool refs returns empty slots.
+ */
+export async function getTemplateRequirements(
+	id: string
+): Promise<TemplateRequirementsResponse> {
+	return unwrap(
+		await client.GET('/api/v1/templates/{id}/requirements', { params: { path: { id } } })
+	);
 }
 
 export async function updateTemplate(id: string, data: UpdateTemplateRequest): Promise<Template> {

@@ -264,6 +264,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::templates::get_template_bundle))
         .routes(routes!(handlers::templates::get_io_contract))
+        .routes(routes!(handlers::templates::get_template_requirements))
+        .routes(routes!(handlers::templates::put_template_bindings))
         .routes(routes!(handlers::templates::publish_template))
         .routes(routes!(handlers::templates::new_version))
         .routes(routes!(handlers::governance::promote_template))

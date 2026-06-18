@@ -185,6 +185,15 @@ pub struct CreateInstanceRequest {
     /// the test runner — callers requesting it directly are rejected.
     #[serde(default)]
     pub mode: Option<String>,
+    /// Per-instance resource/pool bindings: `slot_key -> resource_id` (Phase
+    /// C). The HIGHEST-precedence binding tier — overrides the per-workspace
+    /// default, platform auto-bind, and home-workspace baseline for any slot in
+    /// the template's auto-derived requirements manifest. Slot keys are the
+    /// binding aliases surfaced by `GET /templates/{id}/requirements`. Omitted /
+    /// `None` ⇒ every slot resolves through the lower tiers (a template with no
+    /// requirements manifest ignores this entirely and launches as today).
+    #[serde(default)]
+    pub bindings: Option<std::collections::HashMap<String, Uuid>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema, utoipa::IntoParams)]

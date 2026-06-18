@@ -496,6 +496,15 @@ async fn main() -> anyhow::Result<()> {
         user_provisioner,
     };
 
+    // Close the dispatcher's forward reference to `AppState` (the dispatcher was
+    // built before `AppState`, which holds `Arc<TriggerDispatcher>`). This lets
+    // trigger-fired launches route through the binding-aware launcher
+    // (`prepare_air_with_bindings`) — per-workspace defaults / platform auto-bind
+    // / the run-gate — exactly like the user POST path. `AppState` is cheap to
+    // clone (every field is Arc/handle-shaped); the resulting reference cycle is
+    // intentional and benign for this boot-lifetime singleton.
+    state.triggers.set_app_state(state.clone());
+
     // Unified worker dispatch: the SINGLE platform-tier "default" worker group (a
     // `capacity` resource, `worker` preset, owned by PLATFORM_SCOPE_ID) so a step
     // / worker that names no group routes through the shared competing-consumer

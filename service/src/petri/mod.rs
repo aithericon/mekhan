@@ -1,4 +1,5 @@
 pub mod asset_resolver;
+pub mod binding;
 pub mod client;
 pub mod events;
 pub mod instance;

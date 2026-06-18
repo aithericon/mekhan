@@ -4284,6 +4284,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/{id}/bindings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * PUT /api/v1/templates/{id}/bindings
+         * @description Upsert the calling workspace's DEFAULT bindings for one or more requirement
+         *     slots of this template family. Keyed by `(chain_root_id, workspace_id,
+         *     slot_key)` so a default survives version bumps. These sit at precedence tier
+         *     2 (below a per-instance override, above platform auto-bind / home baseline).
+         *     Requires Editor on the template.
+         */
+        put: operations["put_template_bindings"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/{id}/bundle": {
         parameters: {
             query?: never;
@@ -4629,6 +4653,30 @@ export interface paths {
         put?: never;
         /** POST /api/v1/templates/{id}/publish */
         post: operations["publish_template"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/templates/{id}/requirements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/templates/{id}/requirements
+         * @description Return the template's auto-derived resource/pool requirement manifest plus
+         *     per-current-workspace readiness: for each slot, whether it is satisfied and
+         *     by which binding tier (per-workspace default / platform auto-bind / home
+         *     baseline). The binding UI (Phase E) reads this to render the per-slot picker
+         *     and gate the launch button. Read access requires the template's read gate.
+         */
+        get: operations["get_template_requirements"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -6275,6 +6323,13 @@ export interface components {
              */
             ids: string[];
         };
+        /**
+         * @description Which precedence tier satisfied a slot. Surfaced on the readiness endpoint
+         *     so the binding UI can show WHY a slot is bound (and let the operator decide
+         *     whether to override).
+         * @enum {string}
+         */
+        BindingTier: "instance_override" | "workspace_default" | "platform_auto_bind" | "home_baseline";
         BranchCondition: {
             edgeId: string;
             guard: string;
@@ -7258,6 +7313,18 @@ export interface components {
         };
         CreateInstanceRequest: {
             /**
+             * @description Per-instance resource/pool bindings: `slot_key -> resource_id` (Phase
+             *     C). The HIGHEST-precedence binding tier — overrides the per-workspace
+             *     default, platform auto-bind, and home-workspace baseline for any slot in
+             *     the template's auto-derived requirements manifest. Slot keys are the
+             *     binding aliases surfaced by `GET /templates/{id}/requirements`. Omitted /
+             *     `None` ⇒ every slot resolves through the lower tiers (a template with no
+             *     requirements manifest ignores this entirely and launches as today).
+             */
+            bindings?: {
+                [key: string]: string;
+            } | null;
+            /**
              * @description Free-form audit metadata stored on the instance row. Unlike pre-typed-ports
              *     behavior, this is NOT merged into initial Petri tokens — token shape is
              *     driven solely by `start_tokens`.
@@ -7422,6 +7489,16 @@ export interface components {
         };
         CreateTemplateTestRequest: {
             assertions?: components["schemas"]["Assertion"][];
+            /**
+             * @description Per-test resource/pool bindings (`slot_key -> resource_id`) — same shape
+             *     and precedence as `CreateInstanceRequest.bindings`. Forwarded into the
+             *     launched `test_run` instance so a test can pin concrete resources for the
+             *     template's requirement slots. Omitted ⇒ no per-test override (slots
+             *     resolve through the lower binding tiers).
+             */
+            bindings?: {
+                [key: string]: string;
+            };
             enabled?: boolean;
             /**
              * @description Map of `<node_slug>` → form data captured by the human-task UI.
@@ -11651,6 +11728,14 @@ export interface components {
              */
             total_messages: number;
         };
+        /** @description PUT body for `PUT /templates/{id}/bindings`. */
+        PutBindingsRequest: {
+            /**
+             * @description The per-workspace default bindings to upsert. Each is keyed by
+             *     `(chain_root, current_workspace, slot_key)` so it survives version bumps.
+             */
+            bindings: components["schemas"]["SlotBindingInput"][];
+        };
         /** @description `PUT .../grants/{user_id}` body. */
         PutGrantRequest: {
             /** @description One of `owner|admin|editor|viewer`. */
@@ -11795,6 +11880,58 @@ export interface components {
              *     `fields_json` via `Port::json_schema`.
              */
             records: unknown[];
+        };
+        /**
+         * @description One auto-derived requirement slot: a distinct resource/pool reference the
+         *     template needs bound at instance-creation time.
+         *
+         *     `key` is the binding ALIAS (the workspace-relative resource name) — the same
+         *     string the author typed and the same key the `__resources` splice is indexed
+         *     by. It dedupes references: two surfaces naming the same alias collapse to one
+         *     slot whose [`used_by`](Self::used_by) lists every referencing node.
+         */
+        RequirementSlot: {
+            /**
+             * @description Stable slot key = the binding alias (workspace resource name). Unique
+             *     within a manifest; the per-instance/per-workspace binding maps key →
+             *     `resource_id` against it.
+             */
+            key: string;
+            /**
+             * @description The validated `request`/claim params (pool bindings) or `None`
+             *     (`DataResource`). Surfaced so the binding UI (Phase E) can show what the
+             *     slot expects, and so a substitute pool can be validated against the same
+             *     claim shape.
+             */
+            request_shape?: unknown;
+            /**
+             * @description Whether the launch run-gate must reject if this slot is unbound. Pool
+             *     bindings (`ExecutorCapacity` / `LeaseHolder` / `SchedulerLease`) are
+             *     always required — an unbound pool has no backing net to dispatch against.
+             *     `DataResource` slots are required too (a missing secret envelope would
+             *     crash the step at run time), so today every derived slot is required;
+             *     the field exists so a future "optional resource" surface can opt out.
+             */
+            required: boolean;
+            /**
+             * @description Resolved resource type name (`postgres`, `openai`, a `capacity` /
+             *     `datacenter` kind, …) of the resource the home-workspace baseline bound.
+             *     The effective-binding resolution (Phase C) only accepts a substitute of a
+             *     matching type.
+             */
+            resource_type: string;
+            /**
+             * @description Which binding surface introduced this slot. When the same alias is
+             *     referenced through multiple roles (rare — e.g. a pool also read as a
+             *     `<path>.<field>` constant), the FIRST-derived role wins and a pool role
+             *     always beats `DataResource` (see [`derive_requirements`]).
+             */
+            role: components["schemas"]["SlotRole"];
+            /**
+             * @description Node ids that reference this slot. Merged across every surface naming the
+             *     same alias. Sorted + deduped for stable serialization.
+             */
+            used_by: string[];
         };
         /**
          * @description Phase 4 — placement Requirements authored on a PRESENCE-pooled
@@ -12681,6 +12818,55 @@ export interface components {
             total_since_boot: number;
         };
         /**
+         * @description One per-workspace default binding upsert: `slot_key -> resource_id`
+         *     (+ optional pinned version).
+         */
+        SlotBindingInput: {
+            /**
+             * Format: uuid
+             * @description The resource to bind as this workspace's default for the slot.
+             */
+            resource_id: string;
+            /**
+             * Format: int32
+             * @description Optional version pin; omitted ⇒ the resource's `latest_version` at
+             *     launch.
+             */
+            resource_version?: number | null;
+            /** @description The requirement slot key (binding alias) from the manifest. */
+            slot_key: string;
+        };
+        /**
+         * @description Readiness of ONE slot for a given workspace — the projection the
+         *     `GET /templates/{id}/requirements` endpoint returns per slot.
+         */
+        SlotReadiness: {
+            /**
+             * Format: uuid
+             * @description The effective resource id (tiers 1–3) when known. `None` for a
+             *     baseline-satisfied slot (its resource is baked in the AIR, not surfaced
+             *     here) or an unbound slot.
+             */
+            resource_id?: string | null;
+            /**
+             * @description `true` when the slot resolves by some tier (override/default/platform/
+             *     baseline) for the current workspace.
+             */
+            satisfied: boolean;
+            /** @description The requirement slot. */
+            slot: components["schemas"]["RequirementSlot"];
+            tier?: null | components["schemas"]["BindingTier"];
+        };
+        /**
+         * @description What kind of binding surface introduced a requirement slot. Mirrors the
+         *     compiler's [`crate::compiler::lower::automated_step::DeploymentRole`] plus a
+         *     fourth `DataResource` variant for the `<path>.<field>` envelope/credential
+         *     refs (which carry no [`DeploymentRole`] — they're plain resource reads, not
+         *     pool bindings).
+         * @enum {string}
+         */
+        SlotRole: "executor_capacity" | "lease_holder" | "scheduler_lease" | "data_resource";
+        /**
          * @description Configuration for the SMTP backend.
          *
          *     The backend receives this via `ExecutionSpec.config`. Recipient strings,
@@ -13362,6 +13548,28 @@ export interface components {
             version: number;
         };
         /**
+         * @description Response of `GET /templates/{id}/requirements`: the auto-derived requirement
+         *     manifest paired with per-CURRENT-workspace readiness (which slots resolve, by
+         *     which tier, and to which resource).
+         */
+        TemplateRequirementsResponse: {
+            /**
+             * @description `true` when every required slot is satisfied for the current workspace —
+             *     a launch would pass the run-gate.
+             */
+            launchable: boolean;
+            /**
+             * @description One readiness entry per slot, resolved for the caller's active
+             *     workspace through the launch-time precedence chain.
+             */
+            readiness: components["schemas"]["SlotReadiness"][];
+            /**
+             * @description The template's auto-derived slots (empty for a template with no
+             *     resource/pool refs or a pre-feature row).
+             */
+            slots: components["schemas"]["RequirementSlot"][];
+        };
+        /**
          * @description One point of `GET /api/v1/templates/{id}/analytics/timeseries` — a single
          *     `(bucket, outcome)` cell, mirroring the inference-timeseries point shape.
          */
@@ -13420,6 +13628,15 @@ export interface components {
          */
         TemplateTest: {
             assertions: unknown;
+            /**
+             * @description Per-test resource/pool bindings (`slot_key -> resource_id`), the same
+             *     shape as `CreateInstanceRequest.bindings`. Carried into the launched
+             *     `test_run` instance as the HIGHEST-precedence binding tier so a test can
+             *     pin which concrete resource each requirement slot resolves to. Stored as
+             *     a JSON object (`{}` when none); decoded into a typed
+             *     `HashMap<String, Uuid>` at run time by the runner.
+             */
+            bindings?: unknown;
             /** Format: date-time */
             created_at: string;
             /** Format: uuid */
@@ -13810,6 +14027,14 @@ export interface components {
         };
         UpdateTemplateTestRequest: {
             assertions?: components["schemas"]["Assertion"][] | null;
+            /**
+             * @description Per-test resource/pool bindings (`slot_key -> resource_id`). `None` keeps
+             *     the existing bindings (COALESCE partial-update). Send an empty map to
+             *     clear all per-test bindings.
+             */
+            bindings?: {
+                [key: string]: string;
+            } | null;
             enabled?: boolean | null;
             human_answers?: unknown;
             name?: string | null;
@@ -14791,6 +15016,7 @@ export interface components {
             published_at?: string | null;
             /** Format: uuid */
             published_by?: string | null;
+            requirements_json?: unknown;
             source_ref?: unknown;
             /** @description Successor `vendor/slug` coordinate for a deprecated/retired node. */
             superseded_by?: string | null;
@@ -24356,6 +24582,51 @@ export interface operations {
             };
         };
     };
+    put_template_bindings: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version row) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PutBindingsRequest"];
+            };
+        };
+        responses: {
+            /** @description Bindings upserted */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateRequirementsResponse"];
+                };
+            };
+            /** @description Editor role required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     get_template_bundle: {
         parameters: {
             query?: never;
@@ -25289,6 +25560,38 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_template_requirements: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Template id (any version row) */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Requirement manifest + readiness */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TemplateRequirementsResponse"];
+                };
+            };
+            /** @description Template not found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

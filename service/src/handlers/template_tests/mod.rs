@@ -127,12 +127,14 @@ pub async fn create_test(
         serde_json::to_value(&req.start_tokens).map_err(|e| ApiError::internal(e.to_string()))?;
     let assertions =
         serde_json::to_value(&req.assertions).map_err(|e| ApiError::internal(e.to_string()))?;
+    let bindings =
+        serde_json::to_value(&req.bindings).map_err(|e| ApiError::internal(e.to_string()))?;
 
     let row = sqlx::query_as::<_, TemplateTest>(
         r#"
         INSERT INTO template_tests
-            (template_id, name, enabled, start_tokens, human_answers, assertions, created_by)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+            (template_id, name, enabled, start_tokens, human_answers, assertions, bindings, created_by)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         "#,
     )
@@ -142,6 +144,7 @@ pub async fn create_test(
     .bind(&start_tokens)
     .bind(&req.human_answers)
     .bind(&assertions)
+    .bind(&bindings)
     .bind(user.subject_as_uuid())
     .fetch_one(&state.db)
     .await
@@ -192,6 +195,12 @@ pub async fn update_test(
         .map(serde_json::to_value)
         .transpose()
         .map_err(|e| ApiError::internal(e.to_string()))?;
+    let bindings_val = req
+        .bindings
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| ApiError::internal(e.to_string()))?;
 
     let updated = sqlx::query_as::<_, TemplateTest>(
         r#"
@@ -201,6 +210,7 @@ pub async fn update_test(
             start_tokens = COALESCE($5, start_tokens),
             human_answers = COALESCE($6, human_answers),
             assertions = COALESCE($7, assertions),
+            bindings = COALESCE($8, bindings),
             updated_at = NOW()
         WHERE id = $1 AND template_id = $2
         RETURNING *
@@ -213,6 +223,7 @@ pub async fn update_test(
     .bind(&start_tokens_val)
     .bind(&req.human_answers)
     .bind(&assertions_val)
+    .bind(&bindings_val)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::not_found("test not found"))?;

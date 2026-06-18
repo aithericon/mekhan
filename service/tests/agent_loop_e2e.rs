@@ -1434,6 +1434,7 @@ fn compile_with_sub_air(
         air,
         interfaces,
         node_configs,
+        ..
     } = compile_to_air_with_options(
         graph,
         "t",

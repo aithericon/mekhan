@@ -253,6 +253,34 @@ pub async fn create_instance(
     let net_id = format!("mekhan-{workspace_id}-{instance_id}");
     let metadata = req.metadata.clone().unwrap_or(json!({}));
 
+    // Binding-aware AIR preparation (Phase C). Resolve an effective resource for
+    // every auto-derived requirement slot (per-instance override → per-workspace
+    // default → platform auto-bind → home baseline), run-gate any unbound
+    // required slot, and rewrite the AIR (`pool-{old}`→`pool-{new}` + re-splice
+    // `__resources`) for slots that differ from the baked baseline. A template
+    // with NULL/empty `requirements_json` returns the AIR byte-for-byte
+    // unchanged — the legacy launch path. The draft dev-run path compiles
+    // per-run from a not-yet-published row, so `requirements_json` is absent and
+    // this is a no-op there too.
+    let overrides = req.bindings.clone().unwrap_or_default();
+    let air_json = crate::petri::launcher::prepare_air_with_bindings(
+        &state,
+        &template,
+        workspace_id,
+        created_by,
+        &overrides,
+        air_json,
+    )
+    .await
+    .map_err(|e| match e {
+        crate::petri::launcher::PrepareBindingsError::Unbound(_) => {
+            ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string())
+        }
+        crate::petri::launcher::PrepareBindingsError::Binding(_) => {
+            ApiError::bad_request(e.to_string())
+        }
+    })?;
+
     // Parameterize → insert row (before deploy, for the lifecycle listener) →
     // deploy → roll back the row on deploy failure. The launcher owns that
     // sequence; here we only translate its failures to HTTP statuses:
