@@ -12,6 +12,7 @@ pub mod named_global;
 pub(crate) mod placeholder_refs;
 mod pyio;
 pub(crate) mod python_refs;
+pub mod requirements;
 pub(crate) mod resource_binding;
 pub mod resource_refs;
 pub(crate) mod rhai_gen;
@@ -29,6 +30,9 @@ pub use compile::{
     CompileOptions, CompilerContainerSpec, ResolvedChild, SubWorkflowAir,
 };
 pub use error::{CompileError, CompileErrorView};
+pub use requirements::{
+    RequirementSlot, RequirementsManifest, SlotAirAddresses, SlotRole,
+};
 pub use interface::{InterfaceRegistry, NodeInterface, NodeKind, OutputKey};
 pub use lower::{
     node_files_draft_run_path, node_files_inline, node_files_storage_path, ConfigStorage,

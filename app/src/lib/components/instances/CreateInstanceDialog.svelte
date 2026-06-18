@@ -10,7 +10,15 @@
 	import * as FileDropZone from '$lib/components/ui/file-drop-zone';
 	import X from '@lucide/svelte/icons/x';
 	import { untrack } from 'svelte';
-	import { getTemplate, createInstance, uploadFile, CompileApiError } from '$lib/api/client';
+	import {
+		getTemplate,
+		getTemplateRequirements,
+		createInstance,
+		uploadFile,
+		CompileApiError,
+		type SlotReadiness
+	} from '$lib/api/client';
+	import { listResources, type ResourceSummary } from '$lib/api/resources';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import { fromPortFieldKind } from '$lib/fields/adapters';
@@ -90,11 +98,102 @@
 	let asDraft = $state(false);
 	const effectiveDraft = $derived(lockMode === 'draft' || asDraft);
 
+	// ── Resource bindings ──────────────────────────────────────────────────────
+	// Auto-derived requirement slots (one per distinct resource/pool reference)
+	// plus per-current-workspace readiness. Each REQUIRED slot becomes a
+	// run-time binding the launcher resolves; slots already satisfied by a
+	// per-workspace default / platform auto-bind / home baseline are pre-filled.
+	// Platform-auto-bound slots are locked (the platform tier resolves them).
+	let slotReadiness = $state<SlotReadiness[]>([]);
+	let loadingRequirements = $state(false);
+	// Chosen per-instance override: slot_key → resource_id. Seeded from the
+	// readiness (workspace_default / platform_auto_bind / home_baseline) so an
+	// unchanged dialog launches with the same effective bindings the run-gate
+	// would pick anyway. Only entries the user touched (or pre-filled) are sent.
+	let bindings = $state<Record<string, string>>({});
+	// Per resource_type list of candidate resources, loaded lazily per slot type.
+	let resourcesByType = $state<Record<string, ResourceSummary[]>>({});
+	let resourceTypeLoaded = $state<Record<string, boolean>>({});
+
+	/** A platform-auto-bound slot is resolved by the platform tier — its
+	 *  resource is fixed and not workspace-pickable, so we lock it. */
+	function isPlatformBound(r: SlotReadiness): boolean {
+		return r.satisfied && r.tier === 'platform_auto_bind';
+	}
+
+	/** A required slot the operator must bind here: required, not satisfied by a
+	 *  lower tier the operator can't change (platform). Home-baseline / workspace
+	 *  default slots are pre-filled + editable but don't BLOCK launch. */
+	function needsChoice(r: SlotReadiness): boolean {
+		return r.slot.required && !r.satisfied;
+	}
+
+	/** Required, non-platform slots that still have no chosen resource — these
+	 *  gate the Run button. */
+	const unboundSlots = $derived(
+		slotReadiness.filter(
+			(r) => r.slot.required && !isPlatformBound(r) && !bindings[r.slot.key]
+		)
+	);
+
+	async function loadResourcesForType(resourceType: string) {
+		if (!resourceType || resourceTypeLoaded[resourceType]) return;
+		resourceTypeLoaded = { ...resourceTypeLoaded, [resourceType]: true };
+		try {
+			const page = await listResources({ resource_type: resourceType, perPage: 200 });
+			resourcesByType = { ...resourcesByType, [resourceType]: page.items };
+		} catch {
+			// Leave empty — the picker shows the empty hint.
+			resourcesByType = { ...resourcesByType, [resourceType]: [] };
+		}
+	}
+
+	async function loadRequirements(id: string) {
+		loadingRequirements = true;
+		try {
+			const resp = await getTemplateRequirements(id);
+			slotReadiness = resp.readiness ?? [];
+			// Seed the override map from readiness: a slot already resolved to a
+			// concrete resource (workspace default / platform) carries it on
+			// `resource_id`; pre-fill it so the picker shows the current choice.
+			const seed: Record<string, string> = {};
+			for (const r of slotReadiness) {
+				if (r.resource_id) seed[r.slot.key] = r.resource_id;
+			}
+			bindings = seed;
+			// Eagerly load the candidate list for each distinct slot type so the
+			// pickers render without a per-open click.
+			const types = new Set(slotReadiness.map((r) => r.slot.resource_type).filter(Boolean));
+			await Promise.all([...types].map((t) => loadResourcesForType(t)));
+		} catch {
+			// A requirements-fetch failure must not block the dialog (templates
+			// without a manifest, or a transient error) — fall back to no slots.
+			slotReadiness = [];
+			bindings = {};
+		} finally {
+			loadingRequirements = false;
+		}
+	}
+
+	function setBinding(slotKey: string, resourceId: string) {
+		bindings = { ...bindings, [slotKey]: resourceId };
+	}
+
+	function resourceLabel(r: SlotReadiness): string {
+		const chosen = bindings[r.slot.key];
+		if (!chosen) return 'Select a resource…';
+		const list = resourcesByType[r.slot.resource_type] ?? [];
+		const found = list.find((x) => x.id === chosen);
+		return found ? `${found.path} — ${found.display_name}` : chosen;
+	}
+
 	$effect(() => {
 		if (!open || !templateId) {
 			starts = [];
 			values = {};
 			error = null;
+			slotReadiness = [];
+			bindings = {};
 			return;
 		}
 		const id = templateId;
@@ -142,9 +241,20 @@
 			starts = startNodes;
 			values = seed;
 
-			// No Start has typed fields → skip dialog entirely.
+			// Fetch the resource/pool requirements + per-workspace readiness in
+			// parallel-ish (awaited so the no-fields fast path can see whether a
+			// binding is still needed before auto-submitting). For the editor's
+			// draft dev-run (a live graph override, no persisted template id row)
+			// there are no requirements to fetch against an unsaved template, but
+			// `id` is still the template id so the call is safe.
+			await loadRequirements(id);
+
+			// No Start has typed fields AND every required slot is already bound
+			// (workspace default / platform / home baseline) → skip dialog
+			// entirely. If a required slot still needs a choice, keep the dialog
+			// open so the operator can pick a resource.
 			const anyFields = startNodes.some((s) => (s.initial.fields ?? []).length > 0);
-			if (!anyFields) {
+			if (!anyFields && unboundSlots.length === 0) {
 				await submitDirect();
 			}
 		} catch (e) {
@@ -262,10 +372,23 @@
 		submitting = true;
 		error = null;
 		try {
+			// Send the operator's chosen / pre-filled bindings as per-instance
+			// overrides. Platform-auto-bound slots are excluded — they're locked
+			// in the UI and the launcher's platform tier resolves them, so there's
+			// no override to send. An empty map is omitted so a template with no
+			// requirements launches byte-for-byte as before.
+			const platformKeys = new Set(
+				slotReadiness.filter((r) => isPlatformBound(r)).map((r) => r.slot.key)
+			);
+			const chosenBindings = Object.fromEntries(
+				Object.entries(bindings).filter(([k, v]) => !!v && !platformKeys.has(k))
+			);
 			const instance = await createInstance({
 				template_id: templateId,
 				start_tokens: buildStartTokens(),
-				mode: effectiveDraft ? 'draft' : undefined
+				mode: effectiveDraft ? 'draft' : undefined,
+				bindings:
+					Object.keys(chosenBindings).length > 0 ? chosenBindings : undefined
 			});
 			oncreated(instance.id);
 		} catch (e) {
@@ -307,10 +430,13 @@
 				<p class="text-sm text-muted-foreground">Loading template…</p>
 			{:else if error}
 				<p class="text-sm text-destructive">{error}</p>
-			{:else if starts.length === 0}
-				<p class="text-sm text-muted-foreground">No Start blocks found in this template.</p>
 			{:else}
 				<div class="space-y-5">
+					{#if starts.length === 0}
+						<p class="text-sm text-muted-foreground">
+							No Start blocks found in this template.
+						</p>
+					{/if}
 					{#each starts as start (start.id)}
 						<div class="rounded-md border border-border/50 p-3">
 							<h3 class="mb-2 text-sm font-medium">{start.label}</h3>
@@ -446,6 +572,80 @@
 							{/if}
 						</div>
 					{/each}
+
+					<!-- Resource bindings: one picker per REQUIRED requirement slot.
+					     Slots auto-bound by the platform tier render resolved + locked
+					     with a "platform" badge; the rest are pickers pre-filled from
+					     the per-workspace default / home baseline. -->
+					{#if loadingRequirements}
+						<p class="text-sm text-muted-foreground">Loading resource requirements…</p>
+					{:else if slotReadiness.some((r) => r.slot.required)}
+						<div class="rounded-md border border-border/50 p-3">
+							<h3 class="mb-1 text-sm font-medium">Resource bindings</h3>
+							<p class="mb-3 text-xs text-muted-foreground">
+								Choose the resources this run binds to. Defaults are pre-filled from
+								this workspace.
+							</p>
+							<div class="space-y-3">
+								{#each slotReadiness.filter((r) => r.slot.required) as r (r.slot.key)}
+									{@const list = resourcesByType[r.slot.resource_type] ?? []}
+									{@const platform = isPlatformBound(r)}
+									<FormField
+										label={`${r.slot.key} *`}
+										description={`${r.slot.resource_type} · used by ${r.slot.used_by.length} node${r.slot.used_by.length === 1 ? '' : 's'}`}
+									>
+										{#if platform}
+											<div
+												class="flex items-center gap-2 rounded-md border border-border/50 bg-muted/40 px-3 py-2 text-sm"
+												data-testid={`binding-platform-${r.slot.key}`}
+											>
+												<span class="truncate text-muted-foreground">
+													{resourceLabel(r)}
+												</span>
+												<span
+													class="ml-auto shrink-0 rounded bg-primary/10 px-1.5 py-0.5 text-xs font-medium text-primary"
+												>
+													platform
+												</span>
+											</div>
+										{:else}
+											<Select.Root
+												type="single"
+												value={bindings[r.slot.key] ?? ''}
+												onValueChange={(v) => setBinding(r.slot.key, v ?? '')}
+											>
+												<Select.Trigger
+													class="w-full"
+													data-testid={`select-binding-${r.slot.key}`}
+												>
+													<span class="truncate text-sm">{resourceLabel(r)}</span>
+												</Select.Trigger>
+												<Select.Content>
+													{#each list as res (res.id)}
+														<Select.Item
+															value={res.id}
+															label={`${res.path} — ${res.display_name}`}
+														/>
+													{/each}
+												</Select.Content>
+											</Select.Root>
+											{#if list.length === 0 && resourceTypeLoaded[r.slot.resource_type]}
+												<p class="mt-1 text-xs italic text-muted-foreground">
+													No <code class="font-mono">{r.slot.resource_type}</code>
+													resources in this workspace. Add one under
+													<code class="font-mono">/resources</code> first.
+												</p>
+											{:else if needsChoice(r) && !bindings[r.slot.key]}
+												<p class="mt-1 text-xs text-destructive">
+													Select a resource — this slot must be bound to launch.
+												</p>
+											{/if}
+										{/if}
+									</FormField>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				</div>
 			{/if}
 		</div>
@@ -476,11 +676,19 @@
 					<span class="text-xs text-muted-foreground">
 						Required: {missingRequired.join(', ')}
 					</span>
+				{:else if unboundSlots.length > 0}
+					<span class="text-xs text-muted-foreground">
+						Bind: {unboundSlots.map((r) => r.slot.key).join(', ')}
+					</span>
 				{/if}
 				<Button variant="outline" onclick={close}>Cancel</Button>
 				<Button
 					onclick={submit}
-					disabled={submitting || loadingTemplate || missingRequired.length > 0}
+					disabled={submitting ||
+						loadingTemplate ||
+						loadingRequirements ||
+						missingRequired.length > 0 ||
+						unboundSlots.length > 0}
 				>
 					{submitting ? 'Creating…' : effectiveDraft ? 'Create draft' : 'Create instance'}
 				</Button>

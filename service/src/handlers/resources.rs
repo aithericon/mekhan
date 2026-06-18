@@ -1455,6 +1455,96 @@ async fn ensure_pool_net_for_resource(
     }
 }
 
+/// Phase C platform-rebind hook: (re)deploy a resource's pool net `pool-<id>`
+/// stamped with an EXPLICIT `tenant_workspace` instead of the resource's own
+/// scope workspace. Loads the resource row + its `latest_version` public_config
+/// and delegates to [`ensure_pool_net_for_resource`] with the override.
+///
+/// Why this exists: a `scope_kind = 'platform'` pool resource's net is normally
+/// deployed under `PLATFORM_SCOPE_ID`. The engine rejects a tenant instance net
+/// bridging to a platform pool net at the to-Running gate (strict
+/// `source_ws == target_ws` compare; no platform special-case), and the NATS
+/// bridge subjects (`petri.{ws}.{net}.bridge.*`) wouldn't line up either. When
+/// the launcher auto-binds a slot to a platform pool, it calls this to
+/// materialize `pool-{resource_id}` under the consuming TENANT's workspace, so
+/// both the gate (source == target == T) and subject routing align — the
+/// minimal no-engine-change fix (Option c). Idempotent + engine-down-tolerant
+/// (same posture as the create/update path). A non-pool resource is a no-op.
+pub(crate) async fn redeploy_pool_net_for_workspace(
+    state: &AppState,
+    resource_id: Uuid,
+    tenant_workspace: Uuid,
+) {
+    // Load the resource (type + latest_version + scope) regardless of workspace
+    // — the caller has already authorized the binding.
+    let row: Option<(String, i32, String)> = match sqlx::query_as(
+        "SELECT resource_type, latest_version, scope_kind FROM resources \
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(resource_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%resource_id, %e, "platform-rebind: resource load failed; skipping");
+            return;
+        }
+    };
+    let Some((resource_type, version, scope_kind)) = row else {
+        return;
+    };
+
+    // Defensive scope guard: this fn materializes `pool-{id}` under an ARBITRARY
+    // tenant `tenant_workspace`. That is only legitimate for a `scope_kind =
+    // 'platform'` resource (globally runnable, owned by no tenant — the
+    // intra-workspace-bridge fix). A tenant-scoped resource must NEVER be
+    // re-deployed under a different workspace, so a future caller can't
+    // materialize one tenant's pool net under another. Today this is only
+    // reached for platform bindings (already visibility-gated upstream); the
+    // guard makes the invariant self-enforcing here.
+    if scope_kind != "platform" {
+        tracing::warn!(
+            %resource_id,
+            scope_kind,
+            %tenant_workspace,
+            "platform-rebind: refusing to re-deploy a non-platform resource's pool net under \
+             an arbitrary workspace; skipping"
+        );
+        return;
+    }
+
+    let public_config: Option<Value> = match sqlx::query_scalar(
+        "SELECT public_config FROM resource_versions WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%resource_id, %e, "platform-rebind: version load failed; skipping");
+            return;
+        }
+    };
+    let public = public_config
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    ensure_pool_net_for_resource(
+        state,
+        &resource_type,
+        tenant_workspace,
+        resource_id,
+        version,
+        &public,
+    )
+    .await;
+}
+
 /// Pull the `__kv_keys` array out of a `public_config` blob. Returns
 /// `None` for typed resources (no sentinel present); `Some(...)` for
 /// `kv` resources. Shared by every handler that emits a fresh

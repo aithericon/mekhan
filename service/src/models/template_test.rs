@@ -19,6 +19,14 @@ pub struct TemplateTest {
     pub start_tokens: serde_json::Value,
     pub human_answers: serde_json::Value,
     pub assertions: serde_json::Value,
+    /// Per-test resource/pool bindings (`slot_key -> resource_id`), the same
+    /// shape as `CreateInstanceRequest.bindings`. Carried into the launched
+    /// `test_run` instance as the HIGHEST-precedence binding tier so a test can
+    /// pin which concrete resource each requirement slot resolves to. Stored as
+    /// a JSON object (`{}` when none); decoded into a typed
+    /// `HashMap<String, Uuid>` at run time by the runner.
+    #[serde(default)]
+    pub bindings: serde_json::Value,
     pub last_run_at: Option<DateTime<Utc>>,
     pub last_run_against_version: Option<i32>,
     pub last_run_passed: Option<bool>,
@@ -115,6 +123,13 @@ pub struct CreateTemplateTestRequest {
     pub human_answers: serde_json::Value,
     #[serde(default)]
     pub assertions: Vec<Assertion>,
+    /// Per-test resource/pool bindings (`slot_key -> resource_id`) — same shape
+    /// and precedence as `CreateInstanceRequest.bindings`. Forwarded into the
+    /// launched `test_run` instance so a test can pin concrete resources for the
+    /// template's requirement slots. Omitted ⇒ no per-test override (slots
+    /// resolve through the lower binding tiers).
+    #[serde(default)]
+    pub bindings: std::collections::HashMap<String, Uuid>,
 }
 
 fn default_true() -> bool {
@@ -133,6 +148,11 @@ pub struct UpdateTemplateTestRequest {
     pub human_answers: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assertions: Option<Vec<Assertion>>,
+    /// Per-test resource/pool bindings (`slot_key -> resource_id`). `None` keeps
+    /// the existing bindings (COALESCE partial-update). Send an empty map to
+    /// clear all per-test bindings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bindings: Option<std::collections::HashMap<String, Uuid>>,
 }
 
 /// Aggregate result for `run-all` (also returned to the publication gate).

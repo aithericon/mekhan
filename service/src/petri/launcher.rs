@@ -26,18 +26,22 @@
 //! it is now populated lazily by replay/debug tooling, not by the launcher
 //! (which has no map to write).
 
+use std::collections::HashMap;
+
 use petri_api_types::DispatchOptions;
 use serde_json::Value;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::models::instance::{StartToken, WorkflowInstance};
-use crate::models::template::WorkflowGraph;
+use crate::models::template::{WorkflowGraph, WorkflowTemplate};
+use crate::petri::binding::{resolve_effective_bindings, BindingError, BoundSlot};
 use crate::petri::client::PetriClient;
 use crate::petri::instance::{
     deploy_instance, parameterize_air, parameterize_for_place, ParameterizeError,
     ParameterizeForPlaceError,
 };
+use crate::AppState;
 
 /// Why a launch failed. Each caller maps these to its own surface:
 /// `create_instance` turns [`LaunchError::Parameterize`] into a 400 and
@@ -349,5 +353,477 @@ impl<'a> InstanceLauncher<'a> {
         }
 
         Ok(instance)
+    }
+}
+
+/// Why binding-aware AIR preparation failed. Mapped by `create_instance` to a
+/// 400 (bad override / type mismatch) or 422 (run-gate: required slot unbound).
+#[derive(Debug, thiserror::Error)]
+pub enum PrepareBindingsError {
+    /// One or more REQUIRED requirement slots resolved by no binding tier. The
+    /// caller must supply a binding (per-instance, per-workspace default, or a
+    /// platform/home resource of the matching type). Carries the actionable
+    /// `(slot_key, resource_type)` list.
+    #[error("{} required resource binding(s) are unbound: {}", .0.len(), describe_unbound(.0))]
+    Unbound(Vec<(String, String)>),
+
+    /// An offered/auto-bound resource doesn't exist, isn't visible, or its type
+    /// doesn't match the slot — surfaced verbatim from the binding resolver.
+    #[error(transparent)]
+    Binding(#[from] BindingError),
+}
+
+fn describe_unbound(slots: &[(String, String)]) -> String {
+    slots
+        .iter()
+        .map(|(k, ty)| format!("'{k}' (type '{ty}')"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// Binding-aware AIR preparation — the launcher's run-time resource/pool
+/// parameterization (Phase C).
+///
+/// ## Back-compat contract
+///
+/// A template whose `requirements_json` is NULL/empty has NO derived slots:
+/// [`resolve_effective_bindings`] returns an empty result and this function
+/// returns the AIR **byte-for-byte unchanged**. Such templates launch exactly
+/// as they did before this feature — the caller can pass the persisted baseline
+/// `air_json` straight through.
+///
+/// For a template WITH a manifest, this:
+/// 1. Resolves an effective binding per slot (precedence: per-instance override
+///    → per-workspace default → platform auto-bind → home-workspace baseline).
+/// 2. RUN-GATEs: if any REQUIRED slot is unbound, returns
+///    [`PrepareBindingsError::Unbound`] (the caller maps it to 422) — nothing
+///    is deployed.
+/// 3. For each slot whose effective resource DIFFERS from the baked baseline
+///    (tiers 1–3), rewrites the AIR using the manifest's recorded addresses:
+///    every `pool-{old_id}` net id → `pool-{new_id}` (from
+///    `SlotAirAddresses::net_ids`), and re-resolves + re-splices the
+///    `__resources` envelope under `SlotAirAddresses::resource_keys`.
+/// 4. When the effective resource is a `scope_kind = 'platform'` pool, FIRST
+///    re-deploys that resource's pool net `pool-{resource_id}` stamped with the
+///    TENANT `workspace_id` (not `PLATFORM_SCOPE_ID`) so the engine's
+///    intra-workspace bridge gate + NATS subjects line up (the no-engine-change
+///    platform-bridge fix; see
+///    [`crate::handlers::resources::redeploy_pool_net_for_workspace`]).
+///
+/// Returns the (possibly rewritten) AIR ready for the launcher's parameterize +
+/// deploy. `workspace_id` is the LAUNCHING tenant (the template's workspace for
+/// a user launch). `overrides` is the caller's per-instance `slot_key ->
+/// resource_id` map (empty when none supplied).
+pub async fn prepare_air_with_bindings(
+    state: &AppState,
+    template: &WorkflowTemplate,
+    workspace_id: Uuid,
+    principal: Uuid,
+    overrides: &HashMap<String, Uuid>,
+    air: Value,
+) -> Result<Value, PrepareBindingsError> {
+    let resolved =
+        resolve_effective_bindings(state, template, workspace_id, principal, overrides).await?;
+
+    // Run-gate: a required slot with no binding tier blocks the launch.
+    if !resolved.is_launchable() {
+        let slots = resolved
+            .unbound_required
+            .iter()
+            .map(|s| (s.key.clone(), s.resource_type.clone()))
+            .collect();
+        return Err(PrepareBindingsError::Unbound(slots));
+    }
+
+    // No tier-1–3 substitution → byte-identical baseline AIR (the common
+    // case: every slot satisfied by the home-workspace baseline already baked).
+    if resolved.substitutions.is_empty() {
+        return Ok(air);
+    }
+
+    // Parse the manifest once for the per-slot AIR addresses. (The resolver
+    // already validated it decodes; a None here means it changed under us — be
+    // defensive and skip substitution rather than launch a half-rewritten AIR.)
+    let Some(manifest) = template
+        .requirements_json
+        .as_ref()
+        .and_then(|raw| serde_json::from_value::<crate::compiler::RequirementsManifest>(raw.clone()).ok())
+    else {
+        return Ok(air);
+    };
+
+    let mut air = air;
+    for (slot_key, bound) in &resolved.substitutions {
+        let Some(addresses) = manifest.air_addresses.get(slot_key) else {
+            continue;
+        };
+
+        // Platform pool rebind (no-engine-change bridge fix): materialize the
+        // platform pool net under the tenant workspace BEFORE we point the
+        // instance net's bridge at `pool-{new_id}`.
+        if bound.is_platform && !addresses.net_ids.is_empty() {
+            crate::handlers::resources::redeploy_pool_net_for_workspace(
+                state,
+                bound.resource_id,
+                workspace_id,
+            )
+            .await;
+        }
+
+        // (a) Rewrite every baked `pool-{old_id}` net id → `pool-{new_id}`.
+        air = rewrite_pool_net_ids(air, &addresses.net_ids, bound.resource_id);
+
+        // (b) Re-resolve the effective resource and INJECT a per-key override
+        //     reassignment into the marker-anchored baseline `__resources`
+        //     declaration (NOT a re-splice — the baseline `let` already exists).
+        if !addresses.resource_keys.is_empty() {
+            air = inject_resource_overrides(
+                state,
+                workspace_id,
+                principal,
+                bound,
+                &addresses.resource_keys,
+                air,
+            )
+            .await?;
+        }
+    }
+
+    Ok(air)
+}
+
+/// Rewrite every occurrence of the baked `pool-{old_id}` net ids to
+/// `pool-{new_id}` across the whole AIR (bridge subjects, spawn refs, backing
+/// references). Walks the JSON string-replacing on the deterministic id form,
+/// so any field carrying the net id — wherever it appears — is updated in one
+/// pass. The new id is `pool-{effective_resource_id}`.
+fn rewrite_pool_net_ids(air: Value, old_net_ids: &[String], new_resource_id: Uuid) -> Value {
+    use crate::compiler::well_known::pool_net_id;
+    let new_id = pool_net_id(new_resource_id);
+    // Serialize → string-replace each old id → deserialize. The ids are
+    // `pool-{uuid}` (no substring-collision risk: a UUID can't be a prefix of
+    // another id form), so a literal replace is safe and covers every field.
+    let Ok(mut s) = serde_json::to_string(&air) else {
+        return air;
+    };
+    for old in old_net_ids {
+        if old == &new_id {
+            continue;
+        }
+        s = s.replace(old, &new_id);
+    }
+    serde_json::from_str(&s).unwrap_or(air)
+}
+
+/// Re-resolve the effective resource and INJECT a per-key override reassignment
+/// into every prepare transition's marker-anchored baseline `__resources`
+/// declaration.
+///
+/// The baseline AIR carries (for templates published after the marker change) a
+///
+/// ```text
+/// //__AITH_RES_BEGIN__
+/// let __resources = #{ "<key>": #{ ...home-baseline... }, ... };
+/// //__AITH_RES_END__
+/// ...reads of __resources["<key>"]...
+/// ```
+///
+/// block per prepare transition. For each affected key we resolve the EFFECTIVE
+/// resource's envelope and insert, immediately BEFORE [`RES_END_MARKER`], one
+///
+/// ```text
+/// __resources["<key>"] = #{ ...effective... };
+/// ```
+///
+/// statement. Rhai executes top-to-bottom, so the reassignment runs after the
+/// `let __resources = …;` and before the reads that follow the end marker,
+/// overriding exactly that key with the effective resource's public values +
+/// secret templates while leaving every other key's baseline entry intact.
+///
+/// A transition with no end marker (a pre-marker / NULL-manifest template) is
+/// never reached here: such templates have no `requirements_json` and so never
+/// resolve a substitution. We still guard defensively (skip transitions lacking
+/// the marker or not referencing the key) so a partial/legacy AIR is left
+/// byte-for-byte unchanged rather than half-rewritten.
+async fn inject_resource_overrides(
+    state: &AppState,
+    workspace_id: Uuid,
+    principal: Uuid,
+    bound: &BoundSlot,
+    resource_keys: &[String],
+    air: Value,
+) -> Result<Value, PrepareBindingsError> {
+    use crate::compiler::resource_refs::{KnownResource, KnownResources};
+    use crate::petri::resource_resolver::build_one_resource_literal;
+
+    // Resolve the effective resource's envelope under the slot's key(s).
+    let mut known: KnownResources = KnownResources::new();
+    for key in resource_keys {
+        known.insert(
+            key.clone(),
+            KnownResource {
+                id: bound.resource_id,
+                type_name: bound.resource_type.clone(),
+                latest_version: bound.version,
+                public_config: serde_json::Value::Null,
+            },
+        );
+    }
+    let envelope = state
+        .resource_resolver
+        .resolve_known(workspace_id, principal, &known, None)
+        .await
+        .map_err(|e| PrepareBindingsError::Binding(BindingError::Db(e.to_string())))?;
+
+    // Pre-build the per-key reassignment literals from the effective envelope.
+    // A key with no envelope subtree (resolver dropped it) contributes nothing.
+    let mut overrides: Vec<(String, String)> = Vec::with_capacity(resource_keys.len());
+    for key in resource_keys {
+        if let Some(literal) = build_one_resource_literal(&envelope, key) {
+            overrides.push((key.clone(), literal));
+        }
+    }
+    if overrides.is_empty() {
+        return Ok(air);
+    }
+
+    Ok(splice_overrides_into_air(air, &overrides))
+}
+
+/// Pure (DB-free) AIR rewrite: insert a `__resources["<key>"] = <literal>;`
+/// reassignment immediately BEFORE the [`RES_END_MARKER`] in every prepare
+/// transition whose marker-anchored source references that key. `overrides` is
+/// the pre-resolved `(key, rhai_map_literal)` list. Transitions without the end
+/// marker (pre-marker / NULL-manifest AIR) are left byte-for-byte unchanged.
+///
+/// Split out from [`inject_resource_overrides`] so the string-level rewrite is
+/// unit-testable without an `AppState`/DB (the envelope is stubbed by building
+/// the literal directly via `build_one_resource_literal`).
+fn splice_overrides_into_air(air: Value, overrides: &[(String, String)]) -> Value {
+    use crate::petri::resource_resolver::RES_END_MARKER;
+
+    let mut air = air;
+    let Some(transitions) = air.get_mut("transitions").and_then(|t| t.as_array_mut()) else {
+        return air;
+    };
+
+    for t in transitions {
+        let Some(t_obj) = t.as_object_mut() else {
+            continue;
+        };
+        // Same prepare-transition detection splice_resources_into_air uses.
+        let is_prepare = t_obj
+            .get("id")
+            .and_then(Value::as_str)
+            .map(crate::compiler::borrow::apply::has_prepare_transition_suffix)
+            .unwrap_or(false);
+        if !is_prepare {
+            continue;
+        }
+        let Some(logic_obj) = t_obj.get_mut("logic").and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let Some(source) = logic_obj.get("source").and_then(Value::as_str) else {
+            continue;
+        };
+        // Only marker-anchored sources can take an override injection.
+        if !source.contains(RES_END_MARKER) {
+            continue;
+        }
+
+        // Build the reassignment block for the keys this transition references.
+        let mut block = String::new();
+        for (key, literal) in overrides {
+            let references = source.contains(&format!("__resources[\"{key}\"]"))
+                || source.contains(&format!("__resources['{key}']"));
+            if !references {
+                continue;
+            }
+            block.push_str(&format!("__resources[\"{key}\"] = {literal};\n"));
+        }
+        if block.is_empty() {
+            continue;
+        }
+
+        // Insert the block immediately BEFORE the end marker (after the baseline
+        // `let __resources = …;`). Replace only the FIRST occurrence so a body
+        // that happens to contain the marker literal later isn't disturbed.
+        let new_source = source.replacen(RES_END_MARKER, &format!("{block}{RES_END_MARKER}"), 1);
+        logic_obj.insert("source".to_string(), Value::String(new_source));
+    }
+
+    air
+}
+
+#[cfg(test)]
+mod tests {
+    //! Pure-logic tests for the launcher's binding-aware AIR rewrite. The full
+    //! `prepare_air_with_bindings` run-gate + re-splice needs an `AppState` + a
+    //! live Postgres and is exercised in
+    //! `service/tests/resource_bindings_e2e.rs`; here we cover the deterministic
+    //! `pool-{old}` → `pool-{new}` rewrite and the unbound-slot error message.
+
+    use super::*;
+    use crate::compiler::well_known::pool_net_id;
+
+    #[test]
+    fn rewrite_pool_net_ids_substitutes_old_to_new_everywhere() {
+        let old_id = Uuid::new_v4();
+        let new_id = Uuid::new_v4();
+        let old_net = pool_net_id(old_id);
+        let new_net = pool_net_id(new_id);
+
+        // The baked net id appears in several AIR fields the launcher must rewrite.
+        let air = serde_json::json!({
+            "places": [
+                {
+                    "id": "p_step_claim_out",
+                    "bridge_out": { "target_net_id": old_net, "target_place_name": "claim_inbox" }
+                }
+            ],
+            "transitions": [
+                { "id": "t_x", "spawn_ref": old_net }
+            ],
+            "unrelated": "pool-not-a-uuid-keepme"
+        });
+
+        let rewritten = rewrite_pool_net_ids(air, std::slice::from_ref(&old_net), new_id);
+
+        assert_eq!(
+            rewritten["places"][0]["bridge_out"]["target_net_id"], new_net,
+            "bridge target net id rewritten"
+        );
+        assert_eq!(
+            rewritten["transitions"][0]["spawn_ref"], new_net,
+            "spawn ref rewritten"
+        );
+        assert_eq!(
+            rewritten["unrelated"], "pool-not-a-uuid-keepme",
+            "non-matching strings untouched"
+        );
+        // No occurrence of the old id survives anywhere.
+        let serialized = serde_json::to_string(&rewritten).unwrap();
+        assert!(
+            !serialized.contains(&old_net),
+            "no old pool net id should remain"
+        );
+    }
+
+    #[test]
+    fn rewrite_pool_net_ids_noop_when_old_equals_new() {
+        let id = Uuid::new_v4();
+        let net = pool_net_id(id);
+        let air = serde_json::json!({ "t": { "target_net_id": net } });
+        let before = air.clone();
+        let after = rewrite_pool_net_ids(air, std::slice::from_ref(&net), id);
+        assert_eq!(after, before, "rewriting to the same id is a no-op");
+    }
+
+    #[test]
+    fn rewrite_pool_net_ids_empty_address_list_is_noop() {
+        let new_id = Uuid::new_v4();
+        let air = serde_json::json!({ "x": "pool-abc" });
+        let before = air.clone();
+        let after = rewrite_pool_net_ids(air, &[], new_id);
+        assert_eq!(after, before);
+    }
+
+    #[test]
+    fn override_injection_replaces_baseline_key_before_end_marker() {
+        use crate::petri::resource_resolver::{
+            build_one_resource_literal, RES_BEGIN_MARKER, RES_END_MARKER,
+        };
+
+        // A prepare transition carrying a marker-wrapped baseline `let
+        // __resources` decl (the OLD dsn) plus a read of `__resources["main_db"]`.
+        let baseline_source = format!(
+            "{begin}\nlet __resources = #{{ \"main_db\": #{{ \"dsn\": \"OLD\" }} }};\n{end}\n\
+             job_inputs.push(__resources[\"main_db\"]);",
+            begin = RES_BEGIN_MARKER,
+            end = RES_END_MARKER,
+        );
+        let air = serde_json::json!({
+            "transitions": [
+                {
+                    "id": "t_step_prepare",
+                    "logic": { "type": "Rhai", "source": baseline_source }
+                }
+            ]
+        });
+
+        // Stub the EFFECTIVE envelope (a NEW dsn) and build the override literal
+        // via the (b) helper directly — no DB needed.
+        let envelope = serde_json::json!({ "main_db": { "dsn": "NEW" } });
+        let literal =
+            build_one_resource_literal(&envelope, "main_db").expect("literal builds");
+        let overrides = vec![("main_db".to_string(), literal)];
+
+        let rewritten = splice_overrides_into_air(air, &overrides);
+        let src = rewritten["transitions"][0]["logic"]["source"]
+            .as_str()
+            .unwrap();
+
+        // The OLD baseline decl is still present (the `let` is untouched)...
+        assert!(
+            src.contains("\"dsn\": \"OLD\""),
+            "baseline decl preserved: {src}"
+        );
+        // ...but an override reassignment with the NEW value is injected.
+        assert!(
+            src.contains("__resources[\"main_db\"] = #{ \"dsn\": \"NEW\" };"),
+            "override reassignment injected: {src}"
+        );
+        // The override lands BEFORE the end marker (so it runs before the reads
+        // that follow it), and after the baseline `let`.
+        let assign_at = src
+            .find("__resources[\"main_db\"] = #{")
+            .expect("assignment present");
+        let end_at = src.find(RES_END_MARKER).expect("end marker present");
+        let let_at = src.find("let __resources").expect("baseline let present");
+        assert!(let_at < assign_at, "override after baseline let");
+        assert!(assign_at < end_at, "override before end marker");
+    }
+
+    #[test]
+    fn override_injection_noop_without_end_marker() {
+        // A pre-marker / NULL-manifest prepare transition (no end marker) is left
+        // byte-for-byte unchanged — back-compat is sacred.
+        let air = serde_json::json!({
+            "transitions": [
+                {
+                    "id": "t_step_prepare",
+                    "logic": {
+                        "type": "Rhai",
+                        "source": "let __resources = #{ \"main_db\": #{ \"dsn\": \"OLD\" } };\n\
+                                   job_inputs.push(__resources[\"main_db\"]);"
+                    }
+                }
+            ]
+        });
+        let before = air.clone();
+        let overrides = vec![("main_db".to_string(), "#{ \"dsn\": \"NEW\" }".to_string())];
+        let after = splice_overrides_into_air(air, &overrides);
+        assert_eq!(after, before, "no end marker → no rewrite");
+    }
+
+    #[test]
+    fn describe_unbound_lists_slot_keys_and_types() {
+        let msg = describe_unbound(&[
+            ("prod_gpu".to_string(), "capacity".to_string()),
+            ("main_db".to_string(), "postgres".to_string()),
+        ]);
+        assert!(msg.contains("'prod_gpu' (type 'capacity')"));
+        assert!(msg.contains("'main_db' (type 'postgres')"));
+    }
+
+    #[test]
+    fn unbound_error_display_counts_and_describes() {
+        let err = PrepareBindingsError::Unbound(vec![(
+            "prod_gpu".to_string(),
+            "capacity".to_string(),
+        )]);
+        let s = err.to_string();
+        assert!(s.contains("1 required resource binding(s) are unbound"), "got: {s}");
+        assert!(s.contains("'prod_gpu' (type 'capacity')"), "got: {s}");
     }
 }

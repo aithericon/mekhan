@@ -712,6 +712,25 @@ pub enum CompileError {
         message: String,
     },
 
+    /// A resource/pool requirement SLOT (auto-derived per distinct binding alias;
+    /// see [`crate::compiler::requirements`]) was offered an effective resource
+    /// whose `resource_type` does not match the type the slot was derived for.
+    /// The launch-time binding resolution (Phase C) only accepts a substitute of
+    /// the SAME type as the home-workspace baseline baked — a `postgres` slot
+    /// can't be bound to an `openai` resource, a token-pool capacity can't be
+    /// swapped for a datacenter, etc. `slot_key` is the binding alias; `node_id`
+    /// is one node that references the slot (for the editor to ring).
+    #[error(
+        "node '{node_id}': requirement slot '{slot_key}' expects a resource of type \
+         '{expected_type}' but the bound resource is type '{found_type}'"
+    )]
+    SlotTypeMismatch {
+        node_id: String,
+        slot_key: String,
+        expected_type: String,
+        found_type: String,
+    },
+
     // --- Repeater block validation (Feature B). A HumanTask
     //     `TaskBlockConfig::Repeater` carries a structured `<slug>.<field>[*]…`
     //     reference into an upstream array. The compiler validates the ref
@@ -949,6 +968,7 @@ impl CompileError {
             Self::UndefinedRequirementCapability { .. } => "undefined_requirement_capability",
             Self::UnknownRequirementField { .. } => "unknown_requirement_field",
             Self::RequirementTypeMismatch { .. } => "requirement_type_mismatch",
+            Self::SlotTypeMismatch { .. } => "slot_type_mismatch",
             Self::RepeaterRefMalformed { .. } => "repeater_ref_malformed",
             Self::RepeaterRefUnresolved { .. } => "repeater_ref_unresolved",
             Self::RepeaterItemsRefNotArray { .. } => "repeater_items_ref_not_array",
@@ -1023,6 +1043,7 @@ impl CompileError {
             | Self::UndefinedRequirementCapability { node_id, .. }
             | Self::UnknownRequirementField { node_id, .. }
             | Self::RequirementTypeMismatch { node_id, .. }
+            | Self::SlotTypeMismatch { node_id, .. }
             | Self::RepeaterRefMalformed { node_id, .. }
             | Self::RepeaterRefUnresolved { node_id, .. }
             | Self::RepeaterItemsRefNotArray { node_id, .. }

@@ -476,15 +476,33 @@ impl ResourceResolver {
     }
 }
 
+/// Sentinel comment markers wrapping the publish-time `let __resources = …;`
+/// declaration in a prepare transition's Rhai source. The launcher anchors to
+/// these at launch time to inject per-key override reassignments (tier-1–3
+/// bindings) *between* the baseline `let` and the reads that follow — Rhai
+/// executes top-to-bottom, so a reassignment placed before
+/// [`RES_END_MARKER`] overrides exactly that key's baseline entry.
+///
+/// Defined here so the launcher reuses the SAME literals — no drift. Only
+/// templates published AFTER this change carry the markers; older templates
+/// have a NULL `requirements_json` and are never re-spliced, so back-compat
+/// holds.
+pub(crate) const RES_BEGIN_MARKER: &str = "//__AITH_RES_BEGIN__";
+pub(crate) const RES_END_MARKER: &str = "//__AITH_RES_END__";
+
 /// Splice `let __resources = #{ ... };` at the top of every prepare
 /// transition whose Rhai logic references any of the workspace resource
 /// names. One declaration per transition with **all** referenced names
 /// inside it — never a duplicate.
 ///
+/// The declaration is wrapped in [`RES_BEGIN_MARKER`] / [`RES_END_MARKER`]
+/// sentinel comments so the launch-time binding path can anchor per-key
+/// override reassignments to it (see `launcher::inject_resource_overrides`).
+///
 /// Called at publish time (not launch) so the AIR persisted in
 /// `workflow_template_versions.air_json` already carries the spliced
-/// envelope. Idempotent against a repeat call — a `let __resources`
-/// declaration already present in `logic.source` short-circuits the splice.
+/// envelope. Idempotent against a repeat call — a [`RES_BEGIN_MARKER`]
+/// already present in `logic.source` short-circuits the splice.
 pub fn splice_resources_into_air(
     mut air: JsonValue,
     envelope: &JsonValue,
@@ -538,12 +556,15 @@ pub fn splice_resources_into_air(
             continue;
         }
 
-        // Idempotent guard.
-        if source.contains("let __resources") {
+        // Idempotent guard — anchor on the BEGIN marker (not `let __resources`)
+        // so launch-time override injection (which only inserts reassignment
+        // statements, not a fresh `let`) does not trip a re-splice.
+        if source.contains(RES_BEGIN_MARKER) {
             continue;
         }
 
-        let new_source = format!("{rhai_decl}\n{source}", source = source);
+        let new_source =
+            format!("{RES_BEGIN_MARKER}\n{rhai_decl}\n{RES_END_MARKER}\n{source}", source = source);
         logic_obj.insert("source".to_string(), JsonValue::String(new_source));
     }
 
@@ -562,43 +583,51 @@ pub fn splice_resources_into_air(
 /// `skip_serializing_if` semantics) and emit Rhai's unit `()` in array
 /// positions where null can't simply be removed without shifting indices.
 fn build_resources_decl(envelope: &JsonValue, names: &[&str]) -> String {
-    let JsonValue::Object(top) = envelope else {
+    if !envelope.is_object() {
         return String::new();
-    };
+    }
     let mut entries: Vec<String> = Vec::with_capacity(names.len());
     for name in names {
-        let Some(subtree) = top.get(*name) else {
+        let Some(literal) = build_one_resource_literal(envelope, name) else {
             continue;
         };
-        let Some(subtree_obj) = subtree.as_object() else {
-            continue;
-        };
-        let mut field_entries: Vec<String> = Vec::with_capacity(subtree_obj.len());
-        for (k, v) in subtree_obj {
-            if v.is_null() {
-                // Drop unset optional fields. Downstream readers (LLM
-                // overlay_resource, Python AccessibleDict) treat missing
-                // and null identically; emitting them as a Rhai literal
-                // would crash the prepare transition with "'null' is a
-                // reserved keyword" at parse time.
-                continue;
-            }
-            field_entries.push(format!(
-                "\"{}\": {}",
-                escape_rhai_key(k),
-                json_to_rhai_literal(v),
-            ));
-        }
-        entries.push(format!(
-            "\"{name}\": #{{ {body} }}",
-            name = escape_rhai_key(name),
-            body = field_entries.join(", "),
-        ));
+        entries.push(format!("\"{name}\": {literal}", name = escape_rhai_key(name)));
     }
     if entries.is_empty() {
         return String::new();
     }
     format!("let __resources = #{{ {} }};", entries.join(", "))
+}
+
+/// Build the single-key Rhai map literal (`#{ ... }`) for ONE resource named
+/// `name` out of the resolver's JSON `envelope`. Returns `None` when the
+/// envelope carries no object subtree for that name (so the caller can skip
+/// it). Null object fields are dropped identically to [`build_resources_decl`]
+/// — Rhai has no `null` keyword (see that function's doc).
+///
+/// Shared by [`build_resources_decl`] (publish-time `let __resources = …;`) and
+/// the launcher's per-key override injection (launch-time
+/// `__resources["<key>"] = <literal>;`) so both emit the SAME envelope shape.
+pub(crate) fn build_one_resource_literal(envelope: &JsonValue, name: &str) -> Option<String> {
+    let top = envelope.as_object()?;
+    let subtree_obj = top.get(name)?.as_object()?;
+    let mut field_entries: Vec<String> = Vec::with_capacity(subtree_obj.len());
+    for (k, v) in subtree_obj {
+        if v.is_null() {
+            // Drop unset optional fields. Downstream readers (LLM
+            // overlay_resource, Python AccessibleDict) treat missing and null
+            // identically; emitting them as a Rhai literal would crash the
+            // prepare transition with "'null' is a reserved keyword" at parse
+            // time.
+            continue;
+        }
+        field_entries.push(format!(
+            "\"{}\": {}",
+            escape_rhai_key(k),
+            json_to_rhai_literal(v),
+        ));
+    }
+    Some(format!("#{{ {} }}", field_entries.join(", ")))
 }
 
 /// Render a `JsonValue` as a Rhai-parseable literal.

@@ -576,10 +576,10 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 /// Everything the pooled lowering needs once `Inline.capacity.alias` has been
 /// resolved to a net-backed `capacity` (or `datacenter`) resource and its
 /// dispatch backend.
-pub(super) struct PoolBinding {
+pub(crate) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
-    pub(super) backing_net_id: String,
+    pub(crate) backing_net_id: String,
     /// `Lease__<backend>` — the AIR definition name for the typed grant/lease.
     pub(super) lease_def_name: String,
     /// The backend's lease JSON Schema, registered into `scenario.definitions`.
@@ -604,7 +604,7 @@ pub(super) struct PoolBinding {
 /// caller names its role and [`resolve_binding`] checks the alias's resolved
 /// [`CapacityBackend`] is one the role accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeploymentRole {
+pub(crate) enum DeploymentRole {
     /// `Executor { capacity: { alias } }` — accepts `Tokens` or `Presence`
     /// (platform-owned in-net admission pools).
     ExecutorCapacity,
@@ -651,7 +651,7 @@ pub(super) enum DeploymentRole {
 ///   the right deployment model.
 /// - `request` fails validation against the backend's claim schema →
 ///   `ResourcePoolRequestInvalid`.
-pub(super) fn resolve_binding(
+pub(crate) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,
