@@ -200,6 +200,7 @@ EOH
         data        = <<-EOH
 {{- with secret "secret/data/${nats_account_kv_path}" }}
 RUNNERS_NATS_SIGNING_SEED={{ .Data.data.signing_seed }}
+RUNNERS_NATS_ACCOUNT_ID={{ .Data.data.public_key }}
 {{- end }}
 EOH
       }

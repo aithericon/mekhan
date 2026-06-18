@@ -63,6 +63,14 @@ pub enum MintError {
 pub struct RunnerNatsSigner {
     account_kp: KeyPair,
     account_public_key: String,
+    /// The account *identity* public key, when `account_kp` is an account
+    /// **signing key** rather than the account identity itself. Set as the
+    /// minted user JWT's `issuer_account` claim so the NATS resolver can map the
+    /// signing-key issuer back to its account; required by NATS whenever a user
+    /// JWT is signed by a signing key. `None` when `account_kp` IS the account
+    /// identity (the standalone/dev auto-generate case) — then `iss` already is
+    /// the account and no `issuer_account` is needed.
+    issuer_account: Option<String>,
 }
 
 impl std::fmt::Debug for RunnerNatsSigner {
@@ -89,12 +97,35 @@ impl RunnerNatsSigner {
         Self {
             account_kp,
             account_public_key,
+            issuer_account: None,
         }
     }
 
-    /// Resolve the account signing keypair using the documented precedence.
-    /// Never fails: falls through to generate-and-persist on any miss.
+    /// Set the account identity public key for signing-key mode. When `account`
+    /// is non-empty AND differs from this signer's own public key (i.e.
+    /// `account_kp` is a signing key, not the account identity), it becomes the
+    /// `issuer_account` claim on every minted user JWT. A value equal to the
+    /// signer's own key — or empty — leaves `issuer_account` unset (the signer
+    /// already IS the account).
+    pub fn with_issuer_account(mut self, account: Option<String>) -> Self {
+        self.issuer_account = account
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty() && a != &self.account_public_key);
+        self
+    }
+
+    /// Resolve the runner-signing signer: the keypair (by the documented seed
+    /// precedence) plus, when that keypair is an account **signing key**, the
+    /// account identity from `RUNNERS_NATS_ACCOUNT_ID` to stamp as
+    /// `issuer_account`. Never fails — falls through to generate-and-persist on
+    /// any miss.
     pub fn resolve() -> Self {
+        Self::from_keypair(Self::resolve_account_kp())
+            .with_issuer_account(std::env::var("RUNNERS_NATS_ACCOUNT_ID").ok())
+    }
+
+    /// Resolve just the account signing keypair using the documented precedence.
+    fn resolve_account_kp() -> KeyPair {
         // 1. Explicit seed from env always wins.
         if let Ok(seed) = std::env::var("RUNNERS_NATS_SIGNING_SEED") {
             let seed = seed.trim();
@@ -105,7 +136,7 @@ impl RunnerNatsSigner {
                             account = %kp.public_key(),
                             "runner NATS signing account: from RUNNERS_NATS_SIGNING_SEED"
                         );
-                        return Self::from_keypair(kp);
+                        return kp;
                     }
                     Err(e) => tracing::warn!(
                         error = %e,
@@ -128,7 +159,7 @@ impl RunnerNatsSigner {
                         path = %seed_file.display(),
                         "runner NATS signing account: from local seed file"
                     );
-                    return Self::from_keypair(kp);
+                    return kp;
                 }
                 Err(e) => tracing::warn!(
                     error = %e,
@@ -148,7 +179,7 @@ impl RunnerNatsSigner {
                     );
                     // Mirror it to the local file so it survives Vault wipes.
                     persist_seed_to_file(&data_dir, &seed_file, &seed);
-                    return Self::from_keypair(kp);
+                    return kp;
                 }
                 Err(e) => tracing::warn!(
                     error = %e,
@@ -175,7 +206,7 @@ impl RunnerNatsSigner {
             path = %seed_file.display(),
             "runner NATS signing account: generated a fresh account key (dev)"
         );
-        Self::from_keypair(kp)
+        kp
     }
 
     /// The account signing key's PUBLIC key (`A…`) — the issuer of every minted
@@ -252,6 +283,9 @@ impl RunnerNatsSigner {
             .pub_(Some(pub_perm))
             .sub(Some(sub_perm))
             .resp(Some(resp_perm))
+            // When signing with an account signing key, the resolver needs the
+            // account identity here to map `iss` (the signing key) → account.
+            .issuer_account(self.issuer_account.clone())
             .try_into()
             .map_err(|e| MintError::BuildClaims(format!("user claims: {e}")))?;
 
@@ -356,6 +390,8 @@ impl RunnerNatsSigner {
             .pub_(Some(pub_perm))
             .sub(Some(sub_perm))
             .resp(Some(resp_perm))
+            // Account identity for the resolver when signing with a signing key.
+            .issuer_account(self.issuer_account.clone())
             .try_into()
             .map_err(|e| MintError::BuildClaims(format!("user claims: {e}")))?;
 
@@ -522,6 +558,54 @@ mod tests {
 
         // ResponsePermission present so request/reply works.
         assert!(claims["nats"]["resp"].is_object());
+    }
+
+    #[test]
+    fn signing_key_mode_sets_issuer_account() {
+        // Signer keypair is an account *signing key*; a distinct account
+        // identity is supplied → every minted JWT must stamp it as
+        // `issuer_account` so the resolver can map `iss` (the signing key) back
+        // to the account. Without this NATS rejects with `authorization
+        // violation`.
+        let account_identity = KeyPair::new_account().public_key();
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account())
+            .with_issuer_account(Some(account_identity.clone()));
+
+        let user_pub = KeyPair::new_user().public_key();
+        let jwt = signer
+            .mint_runner_jwt(&user_pub, Uuid::new_v4(), Some("lab"))
+            .expect("mint should succeed");
+        let claims = decode_claims(&jwt);
+
+        assert_eq!(claims["iss"], signer.account_public_key());
+        assert_eq!(claims["nats"]["issuer_account"], account_identity);
+
+        // Workers ride the same signer → same issuer_account stamping.
+        let wjwt = signer
+            .mint_worker_jwt(&user_pub, Uuid::new_v4(), Some("grp"), &["python".into()])
+            .expect("worker mint should succeed");
+        assert_eq!(
+            decode_claims(&wjwt)["nats"]["issuer_account"],
+            account_identity
+        );
+    }
+
+    #[test]
+    fn identity_signer_omits_issuer_account() {
+        // When the signer IS the account identity (issuer == own key, or empty),
+        // no issuer_account is stamped — `iss` already is the account.
+        let kp = KeyPair::new_account();
+        let own = kp.public_key();
+        let signer = RunnerNatsSigner::from_keypair(kp).with_issuer_account(Some(own));
+
+        let user_pub = KeyPair::new_user().public_key();
+        let jwt = signer
+            .mint_runner_jwt(&user_pub, Uuid::new_v4(), None)
+            .expect("mint should succeed");
+        assert!(
+            decode_claims(&jwt)["nats"]["issuer_account"].is_null(),
+            "issuer_account must be absent when the signer is the account identity"
+        );
     }
 
     #[test]
