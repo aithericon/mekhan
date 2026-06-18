@@ -41,12 +41,44 @@ pub enum BridgeInjectError {
     Other(String),
 }
 
+/// Why a [`BridgeResolver`] could not return a target. The variant drives the
+/// message loop's retry decision: a [`NotReady`](BridgeResolveError::NotReady)
+/// net is NACKed for redelivery (it may appear momentarily — e.g. a spawn race),
+/// whereas a [`Terminal`](BridgeResolveError::Terminal) net (Completed/Cancelled)
+/// will NEVER accept the token, so the bridge message is dead-lettered instead of
+/// redelivered forever.
+#[derive(Debug, thiserror::Error)]
+pub enum BridgeResolveError {
+    /// Net is not (yet) resolvable but might become so — unknown/not-created-yet
+    /// or a transient metadata-store hiccup. Retry (NACK for redelivery).
+    #[error("{0}")]
+    NotReady(String),
+    /// Net is in a terminal state (Completed/Cancelled) and can never accept the
+    /// token. Do NOT retry — dead-letter it.
+    #[error("{0}")]
+    Terminal(String),
+}
+
+/// Map a bridge-resolve failure to the message-loop retry policy: NotReady →
+/// [`ProcessError::Transient`] (NACK + redeliver, the net may appear), Terminal →
+/// [`ProcessError::Business`] (dead-letter — a completed/cancelled net will never
+/// accept the token, so redelivering forever only spams the loop).
+fn classify_resolve_error(e: BridgeResolveError) -> ProcessError {
+    match e {
+        BridgeResolveError::NotReady(m) => ProcessError::Transient(m),
+        BridgeResolveError::Terminal(m) => ProcessError::Business(m),
+    }
+}
+
 /// Trait for resolving a net instance by ID for bridge token injection.
 #[async_trait::async_trait]
 pub trait BridgeResolver: Send + Sync {
     /// Ensure the net is loaded and return a handle for bridge token injection.
-    /// If the net is hibernated, wake it first. May reject completed/cancelled nets.
-    async fn resolve_net(&self, net_id: &str) -> Result<Arc<dyn BridgeTarget>, String>;
+    /// If the net is hibernated, wake it first. Rejects completed/cancelled nets
+    /// with [`BridgeResolveError::Terminal`] (so the caller dead-letters rather
+    /// than retries) and not-yet-present nets with [`BridgeResolveError::NotReady`].
+    async fn resolve_net(&self, net_id: &str)
+        -> Result<Arc<dyn BridgeTarget>, BridgeResolveError>;
 }
 
 /// Trait for injecting bridge tokens into a resolved net instance.
@@ -198,13 +230,15 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
             serde_json::from_slice(&msg.payload).map_err(|e| ProcessError::Parse(e.to_string()))?;
 
         // Resolve the net (may wake from hibernation, rejects completed/cancelled nets).
-        // Use Transient so that if the net doesn't exist yet (e.g., spawn race),
-        // the message is NACKed and redelivered instead of being lost.
+        // NotReady (e.g. spawn race / not-created-yet) → Transient so the message is
+        // NACKed and redelivered instead of lost. Terminal (Completed/Cancelled) →
+        // Business so it is dead-lettered: a terminal net will NEVER accept the token,
+        // and NACKing it forever otherwise spams the bridge loop indefinitely.
         let target = self
             .resolver
             .resolve_net(net_id)
             .await
-            .map_err(ProcessError::Transient)?;
+            .map_err(classify_resolve_error)?;
 
         // Convert JSON to TokenColor
         let color = json_to_token_color(&transfer.token_color);
@@ -270,5 +304,37 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
         target.notify_eval();
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::message_loop::ProcessError;
+
+    #[test]
+    fn terminal_net_dead_letters_not_retries() {
+        // A bridge token to a Completed/Cancelled net must NOT be NACKed forever
+        // (the spam bug): it maps to Business so the loop dead-letters it.
+        let err = classify_resolve_error(BridgeResolveError::Terminal(
+            "Net 'x' is Cancelled — cannot accept bridge tokens".into(),
+        ));
+        assert!(
+            matches!(err, ProcessError::Business(_)),
+            "terminal net must dead-letter, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn not_ready_net_retries() {
+        // An unknown/not-yet-created net (spawn race) stays Transient so the token
+        // is redelivered until the net appears.
+        let err = classify_resolve_error(BridgeResolveError::NotReady(
+            "Net 'x' unknown — no metadata entry found".into(),
+        ));
+        assert!(
+            matches!(err, ProcessError::Transient(_)),
+            "not-ready net must retry, got {err:?}"
+        );
     }
 }

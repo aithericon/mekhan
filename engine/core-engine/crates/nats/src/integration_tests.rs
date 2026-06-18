@@ -2331,7 +2331,7 @@ async fn test_event_consumer_concurrent_nets_no_conflict() {
 async fn test_global_bridge_listener_no_message_gap_on_restart() {
     use crate::cross_net_bridge::CrossNetTokenTransfer;
     use crate::global_bridge_listener::{
-        BridgeInjectError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
+        BridgeInjectError, BridgeResolveError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
     };
     use crate::subjects::Subjects;
     use petri_domain::{ReplyRouting, TokenColor};
@@ -2389,7 +2389,10 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
 
     #[async_trait::async_trait]
     impl BridgeResolver for MockBridgeResolver {
-        async fn resolve_net(&self, _net_id: &str) -> Result<Arc<dyn BridgeTarget>, String> {
+        async fn resolve_net(
+            &self,
+            _net_id: &str,
+        ) -> Result<Arc<dyn BridgeTarget>, BridgeResolveError> {
             Ok(self.target.clone())
         }
     }
@@ -2545,7 +2548,7 @@ async fn test_global_bridge_listener_no_message_gap_on_restart() {
 #[tokio::test]
 async fn test_global_bridge_listener_idempotent_consumer_creation() {
     use crate::global_bridge_listener::{
-        BridgeInjectError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
+        BridgeInjectError, BridgeResolveError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
     };
     use petri_domain::{ReplyRouting, TokenColor};
     use std::sync::Arc;
@@ -2601,7 +2604,10 @@ async fn test_global_bridge_listener_idempotent_consumer_creation() {
 
     #[async_trait::async_trait]
     impl BridgeResolver for MockResolver {
-        async fn resolve_net(&self, _net_id: &str) -> Result<Arc<dyn BridgeTarget>, String> {
+        async fn resolve_net(
+            &self,
+            _net_id: &str,
+        ) -> Result<Arc<dyn BridgeTarget>, BridgeResolveError> {
             Ok(self.target.clone())
         }
     }
