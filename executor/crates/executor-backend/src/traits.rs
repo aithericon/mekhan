@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 
 use aithericon_executor_domain::{
     ExecutionJob, ExecutionResult, ExecutionSpec, ExecutionStatus, ExecutorError, FoldBatch,
-    LlmStopReason, LlmToolCall, LlmUsage, LogLevel, RunContext,
+    LlmStopReason, LlmToolCall, LlmUsage, LogLevel, MetricPoint, RunContext,
 };
 
 /// Callback invoked by backends to report mid-execution status updates.
@@ -60,6 +60,16 @@ pub trait EventStream: Send + Sync {
     /// sidecar). Default no-op so non-streaming in-process backends (LLM,
     /// HTTP, …) are unaffected; gated on `"output"` ∈ `stream_events`.
     async fn output(&self, _name: String, _value: Value) {}
+
+    /// Emit a batch of mid-execution metric points — the in-process equivalent
+    /// of a child process's SDK `log_metric(...)` calls (which reach the metric
+    /// sink through the IPC sidecar). The implementation forwards them to the
+    /// same [`MetricSink`](aithericon_executor_metrics::MetricSink) pipeline,
+    /// so an in-process backend's metrics land wherever child-process metrics
+    /// do (NATS/Loki → dashboards). Default no-op so backends with no metrics
+    /// (and any mock `EventStream`) are unaffected; the file-ops `crawl` op
+    /// calls this periodically with `crawl/files_per_second` + `crawl/files_total`.
+    async fn metric(&self, _points: Vec<MetricPoint>) {}
 
     /// Emit one streaming-channel `item` control token (docs/25, consumer-join) —
     /// the in-process equivalent of the Python SDK's per-element emit (which

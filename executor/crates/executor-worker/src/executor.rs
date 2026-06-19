@@ -229,6 +229,7 @@ impl JobExecutor {
                 metadata: job.metadata.clone(),
                 transports: self.transports.clone(),
                 channels: job.channels.clone(),
+                metric_sink: self.metric_sink.clone(),
             }))
         } else {
             None

@@ -8,9 +8,10 @@ use tracing::{debug, error};
 
 use aithericon_executor_domain::{
     ChannelManifestEntry, ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel,
-    StatusDetail,
+    MetricPoint, StatusDetail,
 };
 use aithericon_executor_ipc::proto::ChunkMessage;
+use aithericon_executor_metrics::MetricSink;
 use serde_json::json;
 
 use aithericon_executor_backend::traits::EventStream;
@@ -178,6 +179,12 @@ pub struct StreamContext {
     /// The job's declared streaming-channel manifest, used to resolve a `data`
     /// emit's transport tag (and to ignore an emit naming an undeclared channel).
     pub channels: Vec<ChannelManifestEntry>,
+    /// Metric pipeline for in-process backends that emit metric points via
+    /// [`EventStream::metric`] (the file-ops crawl's files/sec progress). Cloned
+    /// from the worker's `JobExecutor`; the SAME sink the IPC sidecar forwards
+    /// child-process SDK metrics to. `None` when the worker has no metric sink
+    /// configured — `metric()` is then a no-op.
+    pub metric_sink: Option<Arc<dyn MetricSink>>,
 }
 
 impl StreamContext {
@@ -277,6 +284,17 @@ impl EventStream for StreamContext {
             StatusDetail::OutputSet { name, value },
         )
         .await;
+    }
+
+    async fn metric(&self, points: Vec<MetricPoint>) {
+        // Forward to the same sink the IPC sidecar uses for child-process
+        // metrics — NOT category-gated (metrics have no `EventCategory`); a
+        // worker with no sink configured drops them silently.
+        if let Some(sink) = &self.metric_sink {
+            if let Err(e) = sink.record(&self.execution_id, &points).await {
+                debug!(execution_id = %self.execution_id, error = %e, "metric record failed");
+            }
+        }
     }
 
     async fn item(
