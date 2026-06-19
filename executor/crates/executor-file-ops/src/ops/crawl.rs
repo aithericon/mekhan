@@ -32,15 +32,69 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use futures::StreamExt;
 use opendal::Operator;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use aithericon_executor_backend::traits::{BatchSink, EventStream};
-use aithericon_executor_domain::{FoldBatch, FoldItem, FoldMode};
+use aithericon_executor_domain::{FoldBatch, FoldItem, FoldMode, MetricPoint, MetricType};
+
+/// How often the crawl emits a files/sec progress sample — both a `MetricPoint`
+/// batch (when the worker has a metric sink) and an `info!` log line (always).
+/// A long walk is otherwise silent; this gives live throughput without spamming.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Emit one crawl progress sample: `crawl/files_per_second` (gauge over the
+/// window since the last sample) + `crawl/files_total` (cumulative gauge), plus
+/// an always-on `info!` line. Metrics ride [`EventStream::metric`] → the same
+/// sink child-process SDK metrics use, so they surface wherever `train/loss`
+/// does. A no-op metric sink still leaves the log line.
+async fn emit_crawl_progress(
+    event_stream: &Option<Arc<dyn EventStream>>,
+    file_server: Option<&str>,
+    total: u64,
+    window_files: u64,
+    window: Duration,
+) {
+    let secs = window.as_secs_f64();
+    let files_per_sec = if secs > 0.0 {
+        window_files as f64 / secs
+    } else {
+        0.0
+    };
+    info!(total, files_per_sec = format!("{files_per_sec:.1}"), "crawl: progress");
+    let Some(es) = event_stream else { return };
+    let mut labels = HashMap::new();
+    labels.insert("op".to_string(), "crawl".to_string());
+    if let Some(fs) = file_server {
+        labels.insert("file_server".to_string(), fs.to_string());
+    }
+    let ts = Utc::now();
+    es.metric(vec![
+        MetricPoint {
+            name: "crawl/files_per_second".to_string(),
+            value: files_per_sec,
+            step: None,
+            timestamp: ts,
+            metric_type: MetricType::Gauge,
+            labels: labels.clone(),
+        },
+        MetricPoint {
+            name: "crawl/files_total".to_string(),
+            value: total as f64,
+            step: None,
+            timestamp: ts,
+            metric_type: MetricType::Gauge,
+            labels,
+        },
+    ])
+    .await;
+}
 
 use crate::config::CrawlConfig;
 
@@ -389,6 +443,12 @@ pub async fn execute(
     let mut stopped_by_max = false;
     let mut probe_errors: u64 = 0;
 
+    // Live throughput sampling — see `emit_crawl_progress`. `file_server` labels
+    // the metric in sink mode (the only mode with a server identity).
+    let file_server = config.sink.as_ref().map(|sc| sc.file_server_id.as_str());
+    let mut last_sample_at = Instant::now();
+    let mut last_sample_total: u64 = 0;
+
     while let Some(entry) = lister.next().await {
         let entry = entry?;
         let path = entry.path().to_string();
@@ -464,6 +524,16 @@ pub async fn execute(
         total += 1;
         last_path = Some(user_path);
 
+        // Time-based throughput sample (cheap `Instant::now()` per file; the
+        // emit branch only fires every `PROGRESS_INTERVAL`).
+        if last_sample_at.elapsed() >= PROGRESS_INTERVAL {
+            let window = last_sample_at.elapsed();
+            emit_crawl_progress(&event_stream, file_server, total, total - last_sample_total, window)
+                .await;
+            last_sample_at = Instant::now();
+            last_sample_total = total;
+        }
+
         if batch.len() >= batch_cap {
             emitter
                 .emit(
@@ -527,6 +597,20 @@ pub async fn execute(
     if let Emitter::Events(Some(ref es)) = emitter {
         es.close(CRAWL_CHANNEL.to_string(), episode_uid.clone(), batch_idx)
             .await;
+    }
+
+    // Final throughput sample for the trailing window (and the only sample for a
+    // sub-`PROGRESS_INTERVAL` crawl), so every walk reports at least once.
+    if total > last_sample_total {
+        let window = last_sample_at.elapsed();
+        emit_crawl_progress(
+            &event_stream,
+            file_server,
+            total,
+            total - last_sample_total,
+            window,
+        )
+        .await;
     }
 
     let exhausted = !cancelled && !stopped_by_max;
