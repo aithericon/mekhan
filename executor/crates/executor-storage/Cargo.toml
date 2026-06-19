@@ -20,6 +20,12 @@ chrono = { workspace = true }
 
 aithericon-file-metadata = { workspace = true }
 
+# Brokered artifact store — proxies blob I/O through the mekhan blob endpoint
+# (zero-secret runner storage). reqwest for the GET/PUT, urlencoding for the
+# `?key=` query param.
+reqwest = { workspace = true }
+urlencoding = "2"
+
 # Optional: OpenDAL multi-backend storage
 opendal = { workspace = true, optional = true }
 

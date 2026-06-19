@@ -476,12 +476,14 @@ dependencies = [
  "chrono",
  "fmeta",
  "opendal",
+ "reqwest 0.12.28",
  "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
  "toml 0.8.23",
  "tracing",
+ "urlencoding",
 ]
 
 [[package]]

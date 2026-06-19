@@ -185,6 +185,7 @@ pub fn test_config() -> AppConfig {
         nats_url: nats_url(),
         nats_creds: None,
         runner_nats_public_url: None,
+        runner_storage_broker_url: None,
         cleanup: CleanupConfig::default(),
         analytics: Default::default(),
         wait_timeout_secs: 30,

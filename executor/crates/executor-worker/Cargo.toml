@@ -37,7 +37,10 @@ uuid = { workspace = true }
 config = { version = "0.14", default-features = false, features = ["toml"] }
 sysinfo = "0.34"
 aithericon-secrets = { workspace = true }
-reqwest = { workspace = true, optional = true }
+# Non-optional: the brokered secret-unwrap path (`PlanSecretsHook`, zero-secret
+# runner) POSTs to mekhan over plain HTTP and is NOT feature-gated. The
+# `url-inputs` feature also uses reqwest for URL input staging.
+reqwest = { workspace = true }
 opendal = { workspace = true, optional = true }
 # LiveKit egress transport (`transport: "livekit"`): publish JPEG frames as a
 # WebRTC VP8 video track. Versions/features are PROVEN to compile against
@@ -50,7 +53,7 @@ image = { version = "0.25", optional = true }
 default = []
 vault = ["aithericon-secrets/vault"]
 opendal = ["dep:opendal", "aithericon-executor-storage/opendal"]
-url-inputs = ["dep:reqwest"]
+url-inputs = []
 livekit = ["dep:livekit", "dep:livekit-api", "dep:image"]
 
 [dev-dependencies]

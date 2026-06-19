@@ -146,6 +146,11 @@ use utoipa::OpenApi;
             crate::models::runner::EnrollRequest,
             crate::models::runner::EnrolledRunner,
             crate::models::runner::RunnerNatsCreds,
+            // Phase B (zero-secret broker) — secret-unwrap proxy DTOs. The
+            // handler's request/response bodies; register them explicitly for
+            // frontend codegen.
+            crate::handlers::runners::UnwrapSecretRequest,
+            crate::handlers::runners::UnwrapSecretResponse,
             crate::models::runner::CreateRegistrationTokenRequest,
             crate::models::runner::CreatedRegistrationToken,
             crate::models::runner::RegistrationTokenSummary,

@@ -145,7 +145,7 @@
 	}
 
 	/** Build the CLI enroll line shown in the reveal sheet. */
-	function cliLine(token: string, unitName: string, unitGroup: string): string {
+	function cliLine(token: string, unitName: string): string {
 		const origin = typeof window !== 'undefined' ? window.location.origin : '';
 		if (isWorker) {
 			// Workers self-enroll on boot: the executor daemon reads its `wt_`
@@ -156,9 +156,10 @@
 			cmd += ' aithericon-executor';
 			return cmd;
 		}
+		// The runner's group is inherited from the registration token (minted scoped
+		// to it) — the `register` CLI has no `--group` flag, so don't emit one.
 		let cmd = `aithericon-executor register --url ${origin} --token ${token}`;
 		if (unitName) cmd += ` --name ${unitName}`;
-		if (unitGroup) cmd += ` --group ${unitGroup}`;
 		return cmd;
 	}
 </script>
@@ -362,9 +363,9 @@
 					</p>
 					<div class="flex items-start gap-2">
 						<code class="flex-1 break-all rounded bg-muted px-2 py-1.5 font-mono text-sm text-foreground">
-							{cliLine(revealed.token, revealed.name, revealed.group)}
+							{cliLine(revealed.token, revealed.name)}
 						</code>
-						<CopyButton text={cliLine(revealed.token, revealed.name, revealed.group)} />
+						<CopyButton text={cliLine(revealed.token, revealed.name)} />
 					</div>
 				</div>
 			{/if}
