@@ -79,7 +79,14 @@ tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7" }
 
 # NATS
-async-nats = "0.42"
+# `websockets` enables the `ws://` / `wss://` transport so an enrolled external
+# runner can reach the cluster's NATS through the Traefik HTTP ingress (TLS
+# terminated at the edge, plaintext ws on the private data-plane net) instead of
+# exposing a raw NATS port. The feature is pure-Rust (tokio-websockets + the
+# ring/rustls stack async-nats already pulls), so it adds no native deps and the
+# in-cluster musl cross-build is unaffected. In-cluster components keep their
+# plaintext mesh `nats://` URL — only the runner picks the `wss://` scheme.
+async-nats = { version = "0.42", features = ["websockets"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

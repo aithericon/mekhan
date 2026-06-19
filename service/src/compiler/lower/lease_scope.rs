@@ -419,6 +419,57 @@ mod presence_lease_tests {
         );
     }
 
+    /// Pre-acquire twin of the release finalizer: a presence-backed lease also
+    /// emits a WITHDRAW finalizer (`t_<id>_withdraw_finally`) that consumes the
+    /// pending token and bridges a `{ grant_id }` to the pool's `withdraw_inbox`,
+    /// so a lease cancelled / failed BEFORE its grant arrives drops its queued
+    /// claim instead of being granted a runner unit it can never use.
+    #[test]
+    fn presence_lease_emits_withdraw_finalizer() {
+        let air = compile(&presence_lease_graph());
+
+        let t = air
+            .get("transitions")
+            .and_then(|t| t.as_array())
+            .expect("transitions array")
+            .iter()
+            .find(|t| t.get("id").and_then(|v| v.as_str()) == Some("t_lease_withdraw_finally"))
+            .expect("presence lease must emit a t_<id>_withdraw_finally finalizer");
+
+        assert_eq!(
+            t.get("finalizer").and_then(|v| v.as_bool()),
+            Some(true),
+            "t_lease_withdraw_finally must carry finalizer: true; got:\n{t:#}"
+        );
+
+        // Consumes the single pending token (mutually exclusive with t_lease_enter
+        // / t_lease_claim_abort).
+        let pending_arc = t
+            .get("inputs")
+            .and_then(|a| a.as_array())
+            .expect("inputs array")
+            .iter()
+            .find(|a| a.get("place").and_then(|v| v.as_str()) == Some("p_lease_pending"))
+            .expect("finalizer must consume p_lease_pending");
+        assert_ne!(
+            pending_arc.get("read").and_then(|v| v.as_bool()),
+            Some(true),
+            "the finalizer must CONSUME the pending token, not read it"
+        );
+
+        // Routes the withdrawal to the pool's withdraw bridge.
+        let withdraw_arc = t
+            .get("outputs")
+            .and_then(|a| a.as_array())
+            .expect("outputs array")
+            .iter()
+            .find(|a| a.get("place").and_then(|v| v.as_str()) == Some("p_lease_withdraw_out"));
+        assert!(
+            withdraw_arc.is_some(),
+            "finalizer must route its withdrawal to the pool withdraw bridge"
+        );
+    }
+
     fn transition_ids(air: &serde_json::Value) -> Vec<String> {
         air.get("transitions")
             .and_then(|t| t.as_array())

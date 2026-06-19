@@ -48,6 +48,15 @@ async fn main() -> anyhow::Result<()> {
         .ensure_silent_drops_stream()
         .await
         .expect("failed to create MEKHAN_SILENT_DROPS stream");
+
+    // Lab-runner-fleet dead-letter stream is cluster-owned: create it here so an
+    // enrolled (consumer-only) runner never has to — its scoped JWT stays
+    // STREAM.INFO-only on the shared `runner-jobs_dlq`. Non-fatal: a runner
+    // re-mint can still self-heal if this races a cold NATS, and the in-cluster
+    // worker path is unaffected.
+    if let Err(e) = mekhan_nats.ensure_runner_jobs_dlq_stream().await {
+        tracing::warn!(error = %e, "could not ensure runner-jobs_dlq stream at startup");
+    }
     if let Some(drain_rx) = mekhan_service::observability::install_drainer() {
         let drain_nats = mekhan_nats.clone();
         tokio::spawn(async move {
@@ -495,6 +504,15 @@ async fn main() -> anyhow::Result<()> {
         email,
         user_provisioner,
     };
+
+    // Close the dispatcher's forward reference to `AppState` (the dispatcher was
+    // built before `AppState`, which holds `Arc<TriggerDispatcher>`). This lets
+    // trigger-fired launches route through the binding-aware launcher
+    // (`prepare_air_with_bindings`) — per-workspace defaults / platform auto-bind
+    // / the run-gate — exactly like the user POST path. `AppState` is cheap to
+    // clone (every field is Arc/handle-shaped); the resulting reference cycle is
+    // intentional and benign for this boot-lifetime singleton.
+    state.triggers.set_app_state(state.clone());
 
     // Unified worker dispatch: the SINGLE platform-tier "default" worker group (a
     // `capacity` resource, `worker` preset, owned by PLATFORM_SCOPE_ID) so a step

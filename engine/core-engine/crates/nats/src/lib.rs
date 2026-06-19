@@ -84,7 +84,7 @@ pub use dlq::{dlq_stream_config, DlqEntry, DlqErrorClass, DlqPublisher};
 pub use event_consumer::EventConsumer;
 pub use event_store::NatsEventStore;
 pub use global_bridge_listener::{
-    BridgeInjectError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
+    BridgeInjectError, BridgeResolveError, BridgeResolver, BridgeTarget, GlobalBridgeListener,
 };
 pub use global_human_result_listener::GlobalHumanResultListener;
 pub use global_signal_listener::{

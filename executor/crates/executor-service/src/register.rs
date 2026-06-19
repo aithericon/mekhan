@@ -89,6 +89,12 @@ struct EnrolledRunner {
     /// later via `aithericon-executor refresh-creds`.
     #[serde(default)]
     nats_jwt: Option<String>,
+    /// Public NATS connect URL mekhan brokers (the Traefik WebSocket front door,
+    /// e.g. `wss://nats.aithericon.eu`). Persisted into `identity.json` so a bare
+    /// daemon defaults its NATS URL here and needs no `EXECUTOR_NATS_URL`. `None`
+    /// when mekhan has no public URL configured.
+    #[serde(default)]
+    nats_url: Option<String>,
 }
 
 /// Response body of `POST /api/v1/runners/{id}/nats-creds` — shared wire
@@ -102,6 +108,11 @@ struct RunnerNatsCreds {
     /// for diagnostics; the JWT itself already embeds it as `iss`.
     #[allow(dead_code)]
     account_public_key: String,
+    /// Public NATS connect URL mekhan brokers (the Traefik WebSocket front
+    /// door). Folded into `identity.json` so a runner enrolled before brokering
+    /// picks it up on its next `refresh-creds`. `None` when unconfigured.
+    #[serde(default)]
+    nats_url: Option<String>,
 }
 
 /// On-disk identity as read back by `refresh-creds` (owned, deserializing
@@ -143,6 +154,11 @@ struct RunnerIdentity<'a> {
     runner_id: &'a str,
     pool: Option<&'a str>,
     workspace_id: &'a str,
+    /// Brokered public NATS connect URL (the Traefik WebSocket front door). The
+    /// daemon reads this back in `ExecutorConfig::normalize()` to default its
+    /// `nats_url`. Omitted from the JSON when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    nats_url: Option<&'a str>,
 }
 
 /// Entry point for the `register` subcommand. Reads `std::env::args()` and
@@ -212,6 +228,7 @@ pub async fn register() -> Result<(), BoxErr> {
         runner_id: &enrolled.id,
         pool: enrolled.pool.as_deref(),
         workspace_id: &enrolled.workspace_id,
+        nats_url: enrolled.nats_url.as_deref(),
     };
     let identity_path = runner_dir.join("identity.json");
     let identity_json = serde_json::to_vec_pretty(&identity)
@@ -256,6 +273,9 @@ pub async fn register() -> Result<(), BoxErr> {
     println!("  identity     : {}", identity_path.display());
     println!("  token        : {} (mode 0600)", token_path.display());
     println!("  nats nkey    : {} (mode 0600)", nk_path.display());
+    if let Some(url) = enrolled.nats_url.as_deref() {
+        println!("  nats url     : {url}");
+    }
     if creds_written {
         println!("  nats creds   : {} (mode 0600)", creds_path.display());
     }
@@ -369,6 +389,31 @@ pub async fn refresh_creds() -> Result<(), BoxErr> {
     let creds = assemble_creds(&minted.nats_jwt, seed);
     let creds_path = runner_dir.join("runner.creds");
     write_secret(&creds_path, creds.as_bytes())?;
+
+    // Best-effort: fold the brokered public NATS URL into identity.json so a
+    // runner enrolled before brokering existed defaults its `nats_url` to the
+    // ws front door on next boot. Non-fatal — a parse/write failure just leaves
+    // the existing identity untouched.
+    if let Some(url) = minted
+        .nats_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+    {
+        if let Ok(bytes) = std::fs::read(&identity_path) {
+            if let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+                if let Some(obj) = v.as_object_mut() {
+                    obj.insert(
+                        "nats_url".into(),
+                        serde_json::Value::String(url.to_string()),
+                    );
+                    if let Ok(out) = serde_json::to_vec_pretty(&v) {
+                        let _ = std::fs::write(&identity_path, out);
+                    }
+                }
+            }
+        }
+    }
 
     info!(
         runner_id = %identity.runner_id,

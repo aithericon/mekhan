@@ -23,53 +23,58 @@ pub async fn write_snapshot(pool: &PgPool) -> Result<SnapshotResult, sqlx::Error
     let mut tx = pool.begin().await?;
     let mut rows_written: i64 = 0;
 
-    // dim 'total' — one row per server (key '').
+    // Every dim carries `workspace_id` (grouped alongside `file_server_id`) so
+    // the timeseries reader can scope per tenant — a capture aggregates EVERY
+    // workspace's inventory, but each snapshot row stays attributed to the
+    // workspace its files belong to.
+
+    // dim 'total' — one row per (workspace, server) (key '').
     rows_written += sqlx::query(
         "INSERT INTO inventory_snapshots \
-            (snapped_at, file_server_id, dim, key, file_count, total_bytes) \
-         SELECT $1, file_server_id, 'total', '', \
+            (snapped_at, workspace_id, file_server_id, dim, key, file_count, total_bytes) \
+         SELECT $1, workspace_id, file_server_id, 'total', '', \
                 count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint \
-         FROM file_inventory GROUP BY file_server_id",
+         FROM file_inventory GROUP BY workspace_id, file_server_id",
     )
     .bind(snapped_at)
     .execute(&mut *tx)
     .await?
     .rows_affected() as i64;
 
-    // dim 'extension' — per server per (generated) extension.
+    // dim 'extension' — per (workspace, server) per (generated) extension.
     rows_written += sqlx::query(
         "INSERT INTO inventory_snapshots \
-            (snapped_at, file_server_id, dim, key, file_count, total_bytes) \
-         SELECT $1, file_server_id, 'extension', coalesce(extension, 'none'), \
+            (snapped_at, workspace_id, file_server_id, dim, key, file_count, total_bytes) \
+         SELECT $1, workspace_id, file_server_id, 'extension', coalesce(extension, 'none'), \
                 count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint \
-         FROM file_inventory GROUP BY file_server_id, coalesce(extension, 'none')",
+         FROM file_inventory GROUP BY workspace_id, file_server_id, coalesce(extension, 'none')",
     )
     .bind(snapped_at)
     .execute(&mut *tx)
     .await?
     .rows_affected() as i64;
 
-    // dim 'top_dir' — per server per first path component (a root-level file's
-    // component is its own name; harmless at snapshot granularity).
+    // dim 'top_dir' — per (workspace, server) per first path component (a
+    // root-level file's component is its own name; harmless at this granularity).
     rows_written += sqlx::query(
         "INSERT INTO inventory_snapshots \
-            (snapped_at, file_server_id, dim, key, file_count, total_bytes) \
-         SELECT $1, file_server_id, 'top_dir', split_part(ltrim(path, '/'), '/', 1), \
+            (snapped_at, workspace_id, file_server_id, dim, key, file_count, total_bytes) \
+         SELECT $1, workspace_id, file_server_id, 'top_dir', split_part(ltrim(path, '/'), '/', 1), \
                 count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint \
-         FROM file_inventory GROUP BY file_server_id, split_part(ltrim(path, '/'), '/', 1)",
+         FROM file_inventory GROUP BY workspace_id, file_server_id, split_part(ltrim(path, '/'), '/', 1)",
     )
     .bind(snapped_at)
     .execute(&mut *tx)
     .await?
     .rows_affected() as i64;
 
-    // dim 'status' — per server per inventory status.
+    // dim 'status' — per (workspace, server) per inventory status.
     rows_written += sqlx::query(
         "INSERT INTO inventory_snapshots \
-            (snapped_at, file_server_id, dim, key, file_count, total_bytes) \
-         SELECT $1, file_server_id, 'status', status, \
+            (snapped_at, workspace_id, file_server_id, dim, key, file_count, total_bytes) \
+         SELECT $1, workspace_id, file_server_id, 'status', status, \
                 count(*)::bigint, coalesce(sum(size_bytes), 0)::bigint \
-         FROM file_inventory GROUP BY file_server_id, status",
+         FROM file_inventory GROUP BY workspace_id, file_server_id, status",
     )
     .bind(snapped_at)
     .execute(&mut *tx)

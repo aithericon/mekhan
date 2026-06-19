@@ -276,4 +276,37 @@ impl MekhanNats {
             .await?;
         Ok(())
     }
+
+    /// Ensure the shared lab-runner-fleet **dead-letter** stream
+    /// (`runner-jobs_dlq`) exists — a CLUSTER-OWNED concern, created here at
+    /// mekhan startup with mekhan's broad account creds rather than by an
+    /// enrolled runner.
+    ///
+    /// apalis-nats `NatsStorage` ensures its DLQ stream at init via
+    /// `get_or_create_stream`. The per-priority job streams (`runner-jobs_*`)
+    /// are created cluster-side by the engine producer when it first dispatches
+    /// to a runner, but nothing creates the DLQ — so without this a scoped
+    /// (consumer-only, `STREAM.INFO`-only) runner would have to create it
+    /// itself, which it must not be allowed to do on a fleet-shared stream.
+    /// Pre-creating it here lets the runner JWT stay read-only: its
+    /// `get_or_create` resolves via INFO and never attempts a create.
+    ///
+    /// Config mirrors apalis-nats' DLQ (`apalis-nats/src/storage.rs`): subject
+    /// `runner-jobs.dlq`, 30-day Limits retention, file storage — so the
+    /// runner's `get_or_create` sees a compatible existing stream.
+    pub async fn ensure_runner_jobs_dlq_stream(&self) -> Result<(), async_nats::Error> {
+        // Keep in sync with `runners_nats::RUNNER_JOBS_NAMESPACE` ("runner-jobs")
+        // and apalis-nats' `{namespace}_dlq` / `{namespace}.dlq` naming.
+        self.jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: "runner-jobs_dlq".into(),
+                subjects: vec!["runner-jobs.dlq".into()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: std::time::Duration::from_secs(30 * 24 * 60 * 60), // 30 days
+                storage: jetstream::stream::StorageType::File,
+                ..Default::default()
+            })
+            .await?;
+        Ok(())
+    }
 }

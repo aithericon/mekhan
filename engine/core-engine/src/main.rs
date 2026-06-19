@@ -957,8 +957,12 @@ struct RegistryBridgeResolver {
 
 #[async_trait::async_trait]
 impl petri_nats::BridgeResolver for RegistryBridgeResolver {
-    async fn resolve_net(&self, net_id: &str) -> Result<Arc<dyn petri_nats::BridgeTarget>, String> {
-        // Metadata gate: reject bridge tokens to unknown, completed, or cancelled nets
+    async fn resolve_net(
+        &self,
+        net_id: &str,
+    ) -> Result<Arc<dyn petri_nats::BridgeTarget>, petri_nats::BridgeResolveError> {
+        use petri_nats::BridgeResolveError;
+        // Metadata gate: reject bridge tokens to unknown, completed, or cancelled nets.
         if let Some(ref kv) = self.metadata_kv {
             match kv.get(net_id).await {
                 Ok(Some(entry)) => {
@@ -966,21 +970,30 @@ impl petri_nats::BridgeResolver for RegistryBridgeResolver {
                         if meta.status == petri_nats::NetStatus::Completed
                             || meta.status == petri_nats::NetStatus::Cancelled
                         {
-                            return Err(format!(
+                            // TERMINAL: a completed/cancelled net will never accept the
+                            // token. Signal Terminal so the loop dead-letters it instead
+                            // of NACKing forever (which otherwise spams the bridge loop).
+                            return Err(BridgeResolveError::Terminal(format!(
                                 "Net '{}' is {:?} — cannot accept bridge tokens",
                                 net_id, meta.status
-                            ));
+                            )));
                         }
                     }
                 }
                 Ok(None) => {
-                    return Err(format!(
+                    // NOT-READY: the net may simply not have been created yet (spawn
+                    // race). Retry via redelivery.
+                    return Err(BridgeResolveError::NotReady(format!(
                         "Net '{}' unknown — no metadata entry found",
                         net_id
-                    ));
+                    )));
                 }
                 Err(e) => {
-                    return Err(format!("Net '{}' metadata lookup failed: {}", net_id, e));
+                    // Transient KV hiccup — retry.
+                    return Err(BridgeResolveError::NotReady(format!(
+                        "Net '{}' metadata lookup failed: {}",
+                        net_id, e
+                    )));
                 }
             }
         }

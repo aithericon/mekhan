@@ -11,6 +11,11 @@
 	import PublishGateModal from '$lib/components/templates/PublishGateModal.svelte';
 	import ShareDialog from '$lib/components/iam/ShareDialog.svelte';
 	import PromoteLibraryDialog from '$lib/components/editor/PromoteLibraryDialog.svelte';
+	import ConfigureResourcesPanel from '$lib/components/templates/ConfigureResourcesPanel.svelte';
+	import {
+		getTemplateRequirements,
+		type TemplateRequirementsResponse
+	} from '$lib/api/template-bindings';
 	import { roleAtLeast } from '$lib/api/iam';
 	import { PageShell } from '$lib/components/shell';
 	import { Sheet, SheetContent, SheetTitle } from '$lib/components/ui/sheet';
@@ -95,6 +100,18 @@
 	let rebaseHint = $state<UpgradePreview | null>(null);
 	let rebaseDismissed = $state(false);
 
+	// Resource-binding readiness (Phase E): a template's auto-derived requirement
+	// slots are bound per-workspace; surface a banner when required slots are
+	// unbound in the current workspace so the user knows a run can't launch yet.
+	// Refreshed on load (and after the Configure panel saves).
+	let requirements = $state<TemplateRequirementsResponse | null>(null);
+	let configureResourcesOpen = $state(false);
+	const unboundSlotCount = $derived(
+		requirements
+			? requirements.readiness.filter((r) => r.slot.required && !r.satisfied).length
+			: 0
+	);
+
 	// Object-Admins can manage sharing. `my_effective_role` rides the template
 	// DTO (Phase 3) and is re-fetched on a grant change so the Share button +
 	// (future) edit gates never show a stale role.
@@ -177,6 +194,15 @@
 					})
 					.catch(() => {});
 			}
+			// Resource-binding readiness for the current workspace. Best-effort +
+			// non-blocking; a pre-feature row / no-resource template yields an empty
+			// manifest (no banner).
+			requirements = null;
+			getTemplateRequirements(templateId)
+				.then((r) => {
+					requirements = r;
+				})
+				.catch(() => {});
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to load template';
 		} finally {
@@ -686,6 +712,27 @@
 				</div>
 			{/if}
 
+			{#if unboundSlotCount > 0}
+				<div
+					class="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200"
+					data-testid="binding-readiness-banner"
+				>
+					<span class="flex-1">
+						{template?.forked_from ? 'Forked — ' : ''}{unboundSlotCount} resource
+						slot{unboundSlotCount === 1 ? '' : 's'} need{unboundSlotCount === 1 ? 's' : ''}
+						binding in this workspace before you can run.
+					</span>
+					<Button
+						size="sm"
+						variant="outline"
+						onclick={() => (configureResourcesOpen = true)}
+						data-testid="open-configure-resources"
+					>
+						Configure resources
+					</Button>
+				</div>
+			{/if}
+
 			<div class="relative flex flex-1 overflow-hidden">
 				<WorkflowCanvas
 					bind:this={canvasRef}
@@ -802,6 +849,15 @@
 	graph={runDraftLocked ? binding.graph : null}
 	oncompileerror={onRunCompileError}
 />
+
+{#if template}
+	<ConfigureResourcesPanel
+		open={configureResourcesOpen}
+		templateId={template.id}
+		onclose={() => (configureResourcesOpen = false)}
+		onsaved={(next) => (requirements = next)}
+	/>
+{/if}
 
 <Dialog.Root bind:open={discardConfirmOpen}>
 	<Dialog.Content class="sm:max-w-md">

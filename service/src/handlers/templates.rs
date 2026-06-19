@@ -1132,6 +1132,7 @@ pub async fn publish_template(
         air_json,
         graph_json,
         interface_json,
+        requirements_json,
         node_configs,
         metrics,
     } = publisher
@@ -1214,6 +1215,7 @@ pub async fn publish_template(
         &interface_json,
         &metrics,
         None,
+        requirements_json.as_ref(),
         user.subject_as_uuid(),
     )
     .await?;
@@ -1229,6 +1231,159 @@ pub async fn publish_template(
     }
 
     Ok(Json(template))
+}
+
+// ── Requirements + per-workspace bindings (Phase C) ───────────────────────────
+
+/// Response of `GET /templates/{id}/requirements`: the auto-derived requirement
+/// manifest paired with per-CURRENT-workspace readiness (which slots resolve, by
+/// which tier, and to which resource).
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct TemplateRequirementsResponse {
+    /// The template's auto-derived slots (empty for a template with no
+    /// resource/pool refs or a pre-feature row).
+    pub slots: Vec<crate::compiler::RequirementSlot>,
+    /// One readiness entry per slot, resolved for the caller's active
+    /// workspace through the launch-time precedence chain.
+    pub readiness: Vec<crate::petri::binding::SlotReadiness>,
+    /// `true` when every required slot is satisfied for the current workspace —
+    /// a launch would pass the run-gate.
+    pub launchable: bool,
+}
+
+/// GET /api/v1/templates/{id}/requirements
+///
+/// Return the template's auto-derived resource/pool requirement manifest plus
+/// per-current-workspace readiness: for each slot, whether it is satisfied and
+/// by which binding tier (per-workspace default / platform auto-bind / home
+/// baseline). The binding UI (Phase E) reads this to render the per-slot picker
+/// and gate the launch button. Read access requires the template's read gate.
+#[utoipa::path(
+    get,
+    path = "/api/v1/templates/{id}/requirements",
+    params(("id" = Uuid, Path, description = "Template id (any version row)")),
+    responses(
+        (status = 200, description = "Requirement manifest + readiness", body = TemplateRequirementsResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn get_template_requirements(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<TemplateRequirementsResponse>, ApiError> {
+    let template = require_template(&state.db, id).await?;
+    gate_template_read(&state, &user, &template).await?;
+
+    // Readiness resolves against the caller's active workspace (the binding
+    // surface is per-workspace), falling back to the template's own workspace
+    // when no active workspace is set (e.g. dev_noop single-tenant).
+    let workspace_id = user.require_workspace().unwrap_or(template.workspace_id);
+    let principal = user.subject_as_uuid();
+
+    // ONE readiness implementation, shared with the launcher run-gate and the
+    // fork path-match remap (see `petri::binding::compute_readiness`) — so the
+    // "is this slot satisfied?" rule can never drift across those surfaces.
+    let readiness = crate::petri::binding::compute_readiness(
+        &state,
+        &template,
+        workspace_id,
+        principal,
+    )
+    .await
+    .map_err(|e| ApiError::internal(format!("binding resolution failed: {e}")))?;
+
+    Ok(Json(TemplateRequirementsResponse {
+        slots: readiness.slots.iter().map(|r| r.slot.clone()).collect(),
+        readiness: readiness.slots,
+        launchable: readiness.launchable,
+    }))
+}
+
+/// One per-workspace default binding upsert: `slot_key -> resource_id`
+/// (+ optional pinned version).
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct SlotBindingInput {
+    /// The requirement slot key (binding alias) from the manifest.
+    pub slot_key: String,
+    /// The resource to bind as this workspace's default for the slot.
+    pub resource_id: Uuid,
+    /// Optional version pin; omitted ⇒ the resource's `latest_version` at
+    /// launch.
+    #[serde(default)]
+    pub resource_version: Option<i32>,
+}
+
+/// PUT body for `PUT /templates/{id}/bindings`.
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct PutBindingsRequest {
+    /// The per-workspace default bindings to upsert. Each is keyed by
+    /// `(chain_root, current_workspace, slot_key)` so it survives version bumps.
+    pub bindings: Vec<SlotBindingInput>,
+}
+
+/// PUT /api/v1/templates/{id}/bindings
+///
+/// Upsert the calling workspace's DEFAULT bindings for one or more requirement
+/// slots of this template family. Keyed by `(chain_root_id, workspace_id,
+/// slot_key)` so a default survives version bumps. These sit at precedence tier
+/// 2 (below a per-instance override, above platform auto-bind / home baseline).
+/// Requires Editor on the template.
+#[utoipa::path(
+    put,
+    path = "/api/v1/templates/{id}/bindings",
+    params(("id" = Uuid, Path, description = "Template id (any version row)")),
+    request_body = PutBindingsRequest,
+    responses(
+        (status = 200, description = "Bindings upserted", body = TemplateRequirementsResponse),
+        (status = 403, description = "Editor role required", body = ErrorResponse),
+        (status = 404, description = "Template not found", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn put_template_bindings(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<PutBindingsRequest>,
+) -> Result<Json<TemplateRequirementsResponse>, ApiError> {
+    let template = require_template(&state.db, id).await?;
+    gate_template_write(&state, &user, &template).await?;
+
+    let workspace_id = user.require_workspace().unwrap_or(template.workspace_id);
+    let principal = user.subject_as_uuid();
+    let chain_root_id = template.chain_root_id();
+
+    // Upsert each default in one transaction. The UNIQUE(chain_root_id,
+    // workspace_id, slot_key) index makes ON CONFLICT refresh the existing row.
+    let mut tx = state.db.begin().await?;
+    for b in &req.bindings {
+        sqlx::query(
+            "INSERT INTO template_resource_bindings \
+                (chain_root_id, workspace_id, slot_key, resource_id, resource_version, \
+                 created_by, updated_by) \
+             VALUES ($1, $2, $3, $4, $5, $6, $6) \
+             ON CONFLICT (chain_root_id, workspace_id, slot_key) \
+             DO UPDATE SET resource_id = EXCLUDED.resource_id, \
+                           resource_version = EXCLUDED.resource_version, \
+                           updated_by = EXCLUDED.updated_by, \
+                           updated_at = NOW()",
+        )
+        .bind(chain_root_id)
+        .bind(workspace_id)
+        .bind(&b.slot_key)
+        .bind(b.resource_id)
+        .bind(b.resource_version)
+        .bind(principal)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::internal(format!("upsert binding '{}': {e}", b.slot_key)))?;
+    }
+    tx.commit().await?;
+
+    // Return the refreshed readiness so the caller sees the effect immediately.
+    get_template_requirements(State(state), user, Path(id)).await
 }
 
 /// Try to reconstruct a WorkflowGraph and file contents from the Y.Doc stored for this template.
@@ -1375,6 +1530,7 @@ async fn finalize_publish_row<'e, E>(
     interface_json: &serde_json::Value,
     metrics: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
+    requirements_json: Option<&serde_json::Value>,
     updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -1385,7 +1541,7 @@ where
         UPDATE workflow_templates
         SET published = TRUE, published_at = NOW(), air_json = $2, graph = $3,
             interface_json = $4, source_ref = $5, updated_at = NOW(), updated_by = $6,
-            metrics = $7
+            metrics = $7, requirements_json = $8
         WHERE id = $1
         RETURNING *
         "#,
@@ -1397,6 +1553,7 @@ where
     .bind(source_ref)
     .bind(updated_by)
     .bind(metrics)
+    .bind(requirements_json)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1421,6 +1578,7 @@ async fn insert_published_version<'e, E>(
     interface_json: &serde_json::Value,
     metrics: &serde_json::Value,
     source_ref: Option<&serde_json::Value>,
+    requirements_json: Option<&serde_json::Value>,
     updated_by: Uuid,
 ) -> Result<WorkflowTemplate, ApiError>
 where
@@ -1433,8 +1591,9 @@ where
             (id, name, description, base_template_id, parent_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, source_ref, author_id,
-             workspace_id, visibility, owner_template_id, updated_by, metrics)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+             workspace_id, visibility, owner_template_id, updated_by, metrics,
+             requirements_json)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
         RETURNING *
         "#,
     )
@@ -1454,6 +1613,7 @@ where
     .bind(src.owner_template_id)
     .bind(updated_by)
     .bind(metrics)
+    .bind(requirements_json)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1658,6 +1818,7 @@ pub async fn apply_template(
         air_json,
         graph_json,
         interface_json,
+        requirements_json,
         node_configs,
         metrics,
     } = publisher
@@ -1721,6 +1882,7 @@ pub async fn apply_template(
                 &interface_json,
                 &metrics,
                 source_ref_json.as_ref(),
+                requirements_json.as_ref(),
                 user.subject_as_uuid(),
             )
             .await?
@@ -1737,6 +1899,7 @@ pub async fn apply_template(
                 &interface_json,
                 &metrics,
                 source_ref_json.as_ref(),
+                requirements_json.as_ref(),
                 user.subject_as_uuid(),
             )
             .await?
@@ -2475,6 +2638,10 @@ async fn run_publish_gate(
         air_json: air_json.clone(),
         graph: graph.clone(),
         created_by,
+        // Publish-gate runs validate the about-to-publish AIR; its requirements
+        // manifest is not yet persisted, so per-test bindings are not applied
+        // here — the gate exercises the baked baseline (back-compat-safe).
+        template: None,
     };
 
     let mut failing = Vec::new();
@@ -2524,6 +2691,7 @@ mod apply_mode_tests {
             graph: serde_json::json!({}),
             air_json: None,
             interface_json: None,
+            requirements_json: None,
             source_ref: None,
             author_id: Uuid::new_v4(),
             updated_by: None,

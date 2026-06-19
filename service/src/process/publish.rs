@@ -41,6 +41,12 @@ pub struct CompiledArtifacts {
     pub air_json: serde_json::Value,
     pub graph_json: serde_json::Value,
     pub interface_json: serde_json::Value,
+    /// Serialized [`crate::compiler::RequirementsManifest`] (Phase B/C): the
+    /// auto-derived resource/pool requirement slots + per-slot baked AIR
+    /// addresses. `None` for a graph with no slots — the launcher then
+    /// fast-paths the instance byte-for-byte (no binding-aware substitution).
+    /// Persisted into `workflow_templates.requirements_json`.
+    pub requirements_json: Option<serde_json::Value>,
     /// Resolved (`$ref`-inlined, backend-validated) configs keyed by node
     /// id. Empty for graphs with no `AutomatedStep` nodes. Each entry is
     /// uploaded by [`PublishService::upload_node_configs`] to the
@@ -346,6 +352,11 @@ impl<'a> PublishService<'a> {
             air: mut air_json,
             interfaces: interface_json,
             node_configs,
+            // Phase C: capture the auto-derived requirements manifest so it is
+            // persisted into `workflow_templates.requirements_json`. An empty
+            // manifest (no resource/pool slots) is stored as NULL so the
+            // launcher fast-paths the instance byte-for-byte (legacy path).
+            requirements,
         } = compile_to_air_with_options(
             &compiled_graph,
             name,
@@ -458,10 +469,22 @@ impl<'a> PublishService<'a> {
         let metrics = serde_json::to_value(compute_template_metrics(graph, &registry))
             .map_err(|e| ApiError::internal(format!("serialize metrics: {e}")))?;
 
+        // Serialize the manifest only when it carries slots — a slotless
+        // template stores NULL `requirements_json` so the launcher's NULL
+        // fast-path (byte-identical legacy launch) covers it.
+        let requirements_json = if requirements.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_value(&requirements).map_err(|e| {
+                ApiError::internal(format!("serialize requirements manifest: {e}"))
+            })?)
+        };
+
         Ok(CompiledArtifacts {
             air_json,
             graph_json,
             interface_json,
+            requirements_json,
             node_configs,
             metrics,
         })

@@ -5070,6 +5070,124 @@ fn automated_step_scheduled_emits_pooled_topology() {
         !has_transition(&air, "auto/prepare"),
         "scheduled step must NOT emit inline lifecycle"
     );
+
+    // The SCHEDULER backend bridges to the datacenter lease ADAPTER net, which
+    // has no `withdraw_inbox` (its in-flight claim needs allocator-side
+    // cancellation). So the pooled lowering must emit NO withdraw bridge here —
+    // a dangling bridge_out to a non-existent inbox would otherwise dead-letter
+    // on cancel. (The held-release finalizer IS emitted — release_inbox exists
+    // on every pool net.)
+    assert!(
+        !has_place(&air, "p_auto_withdraw_out"),
+        "scheduler backend must NOT emit a withdraw bridge (adapter has no withdraw_inbox)"
+    );
+    assert!(
+        !has_transition(&air, "t_auto_withdraw_finally"),
+        "scheduler backend must NOT emit a withdraw finalizer"
+    );
+    assert!(
+        has_transition(&air, "t_auto_release_finally"),
+        "every pooled backend gets a held-release teardown finalizer"
+    );
+}
+
+/// A token/presence-backed pooled step emits BOTH teardown finalizers — a
+/// withdraw (for an un-granted queued claim) and a release (for a held unit) —
+/// so an external cancel / permanent failure never strands pool capacity. This
+/// is the instance-side half of the cancel-doesn't-release-claim fix; the pool's
+/// `t_withdraw` consuming the bridged withdrawal is asserted in `pool_net.rs`.
+#[test]
+fn automated_step_token_capacity_emits_teardown_finalizers() {
+    let mut known = KnownResources::new();
+    let cap_id = uuid::Uuid::new_v4();
+    known.insert(
+        "prod_gpu".to_string(),
+        KnownResource {
+            id: cap_id,
+            type_name: "capacity".to_string(),
+            latest_version: 1,
+            // seeded + auto ⇒ Tokens backend (build_pool_net, has withdraw_inbox).
+            public_config: serde_json::json!({
+                "liveness": "seeded",
+                "acceptance": "auto",
+                "capacity_kind": "fixed",
+                "capacity_amount": 4,
+                "eligibility": "partition",
+            }),
+        },
+    );
+
+    let graph = WorkflowGraph {
+        nodes: vec![
+            start_node("s"),
+            automated_node_with_deployment(
+                "auto",
+                DeploymentModel::Executor {
+                    capacity: Some(mekhan_service::models::template::CapacityBinding {
+                        alias: "prod_gpu".to_string(),
+                        request: None,
+                    }),
+                    group: None,
+                },
+            ),
+            end_node("e"),
+        ],
+        edges: vec![edge("e1", "s", "auto"), edge("e2", "auto", "e")],
+        viewport: None,
+        instance_concurrency: Default::default(),
+        definitions: Default::default(),
+        default_scheduler: None,
+    };
+    let known_globals = mekhan_service::compiler::named_global::globals_from_resources(&known);
+    let air = compile_to_air_with_options(
+        &graph,
+        "t",
+        "",
+        &std::collections::HashMap::new(),
+        CompileOptions {
+            known_globals: &known_globals,
+            ..Default::default()
+        },
+    )
+    .expect("token-capacity step should compile")
+    .air;
+
+    // Withdraw bridge_out targets the pool's withdraw_inbox.
+    let wd_out = places(&air)
+        .iter()
+        .find(|p| p["id"] == "p_auto_withdraw_out")
+        .expect("expected withdraw bridge_out place");
+    assert_eq!(wd_out["type"], "bridge_out");
+    assert_eq!(wd_out["bridge_out"]["target_net_id"], format!("pool-{cap_id}"));
+    assert_eq!(wd_out["bridge_out"]["target_place_name"], "withdraw_inbox");
+
+    // Both finalizers exist, are flagged `finalizer: true` (never selected in
+    // normal evaluation — only on the post-failure / pre-cancel drain), and
+    // consume the right parked token.
+    for (t_id, input_place) in [
+        ("t_auto_withdraw_finally", "p_auto_pending"),
+        ("t_auto_release_finally", "p_auto_held"),
+    ] {
+        let t = transitions(&air)
+            .iter()
+            .find(|t| t["id"] == t_id)
+            .unwrap_or_else(|| panic!("missing finalizer {t_id}"));
+        assert_eq!(
+            t["finalizer"].as_bool(),
+            Some(true),
+            "{t_id} must be finalizer: true; got {t}"
+        );
+        let ins: Vec<&str> = t["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| i["place"].as_str().unwrap())
+            .collect();
+        assert!(
+            ins.contains(&input_place),
+            "{t_id} must consume {input_place}; got {ins:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------

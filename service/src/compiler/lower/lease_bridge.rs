@@ -358,6 +358,40 @@ pub(super) fn emit_lease_bridge(
     .logic_rhai("#{ release: #{ grant_id: held.grant_id } }")
     .done();
 
+    // ── Failure-path claim WITHDRAWAL (engine FINALIZER), presence pools only ─
+    // The release finalizer above frees a HELD lease on teardown. Its pre-acquire
+    // twin: when the scope is cancelled / fails permanently while still parked at
+    // `p_{id}_pending` (the claim is queued in the pool's `claim_inbox`, no grant
+    // yet), the orphaned claim would otherwise be granted to this dead net the
+    // instant a runner checks in — stranding the unit and bouncing the grant
+    // reply against a terminal net. This finalizer consumes the SAME single
+    // `p_pending` token `t_{id}_enter` / `t_{id}_claim_abort` consume on the live
+    // paths (so it is mutually exclusive with both) and bridges a `{ grant_id }`
+    // to the presence pool's `withdraw_inbox`, where `t_withdraw` drops the claim.
+    //
+    // PRESENCE pools only: a datacenter lease bridges its claim to the separate
+    // `build_datacenter_lease_adapter_net`, which has no `withdraw_inbox` (its
+    // request→allocator→grant topology needs allocator-side cancellation, a
+    // distinct change). Datacenter leases therefore keep their current behavior
+    // and their AIR stays byte-identical (demo 16 unaffected).
+    if is_presence {
+        let p_withdraw_out: PlaceHandle<DynamicToken> = ctx.bridge_out(
+            format!("p_{id}_withdraw_out"),
+            format!("{label} - Withdraw Claim"),
+            pool_net_id,
+            well_known::POOL_WITHDRAW_INBOX,
+        );
+        ctx.transition(
+            format!("t_{id}_withdraw_finally"),
+            format!("{label} - Withdraw claim on teardown"),
+        )
+        .auto_input("pending", &p_pending)
+        .auto_output("withdraw", &p_withdraw_out)
+        .finalizer()
+        .logic_rhai("#{ withdraw: #{ grant_id: pending.grant_id } }")
+        .done();
+    }
+
     LeaseBridge {
         p_input,
         p_body_in,

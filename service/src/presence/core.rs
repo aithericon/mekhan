@@ -483,12 +483,13 @@ mod tests {
         let inj = runners::acquire_injection(
             rid,
             2,
+            1_700_000_000_123,
             "runner-jobs/3bb26085-29f3-5fbf-8a8c-a2e485a1f55b",
             &caps,
         );
         assert_eq!(
             inj.dedup_id,
-            "presence-acquire:3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2"
+            "presence-acquire:3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2@1700000000123"
         );
         assert_eq!(
             bridge_envelope(inj, T),
@@ -496,14 +497,14 @@ mod tests {
                 "source_net_id": "mekhan-presence-controller",
                 "source_place_name": "presence",
                 "token_color": {
-                    "unit_id": "3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2",
+                    "unit_id": "3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2@1700000000123",
                     "runner_id": "3bb26085-29f3-5fbf-8a8c-a2e485a1f55b",
                     "executor_namespace": "runner-jobs/3bb26085-29f3-5fbf-8a8c-a2e485a1f55b",
                     "caps": { "backend": "python" },
                 },
-                "signal_key": "presence-acquire-3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2",
+                "signal_key": "presence-acquire-3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2@1700000000123",
                 "timestamp": T,
-                "dedup_id": "presence-acquire:3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2",
+                "dedup_id": "presence-acquire:3bb26085-29f3-5fbf-8a8c-a2e485a1f55b#2@1700000000123",
             })
         );
     }

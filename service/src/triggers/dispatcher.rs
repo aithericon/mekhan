@@ -48,6 +48,21 @@ pub struct TriggerDispatcher {
     /// `Arc<Mutex<..>>` lets us run an atomic check-and-set without
     /// holding the DashMap entry lock across an `.await`.
     concurrency: DashMap<(Uuid, i32), Arc<tokio::sync::Mutex<CoalesceState>>>,
+    /// Late-bound `AppState` handle, set once after construction (the dispatcher
+    /// is built BEFORE `AppState` — `AppState` holds `Arc<TriggerDispatcher>`, so
+    /// the wiring is a forward reference closed in `main` via [`Self::set_app_state`]).
+    ///
+    /// Needed by [`Self::fire_spawn_active`] to route a fired launch's AIR through
+    /// the binding-aware launcher ([`crate::petri::launcher::prepare_air_with_bindings`])
+    /// — applying per-workspace defaults / platform auto-bind / the run-gate that
+    /// the user POST path already gets. `None` only in the narrow window before
+    /// `main` wires it (no fires can happen yet) and in unit tests that construct
+    /// a bare dispatcher; in both cases the launch falls back to the baked
+    /// baseline AIR (byte-for-byte today's behaviour). Stored as a clone of the
+    /// process-lifetime `AppState` (cheap — every field is `Arc`/handle-shaped);
+    /// the resulting `AppState -> Arc<TriggerDispatcher> -> AppState` reference
+    /// cycle is intentional and benign for this boot-lifetime singleton.
+    app_state: std::sync::OnceLock<crate::AppState>,
 }
 
 /// Per-template coalesce bookkeeping. See `ConcurrencyPolicy` doc.
@@ -86,7 +101,15 @@ impl TriggerDispatcher {
             history: DashMap::new(),
             metrics: DashMap::new(),
             concurrency: DashMap::new(),
+            app_state: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Close the forward reference to `AppState` (see the `app_state` field doc).
+    /// Called once from `main` right after `AppState` is constructed. Idempotent:
+    /// a second call is a no-op (the first binding wins).
+    pub fn set_app_state(&self, state: crate::AppState) {
+        let _ = self.app_state.set(state);
     }
 
     /// Borrow the connection pool. Used by the catalog trigger source to run
@@ -873,6 +896,41 @@ impl TriggerDispatcher {
         // Synthetic principal — see proposal §9.3. Stable per trigger so audit
         // queries can attribute fires.
         let created_by = synthetic_principal_for_trigger(&record.node_id);
+
+        // Binding-aware AIR prep (resource-params): route the baked baseline AIR
+        // through the SAME launcher path the user POST takes — applying the
+        // per-workspace default / platform auto-bind tiers AND the run-gate that
+        // trigger fires previously skipped. The trigger's tenant
+        // (`record.workspace_id`) is the launching workspace; no per-instance
+        // overrides exist for a fire. A NULL-`requirements_json` template returns
+        // the AIR byte-for-byte unchanged, so existing triggers are unaffected.
+        // The `app_state` handle is `None` only before `main` wires it (no fires
+        // yet) or in unit tests; then we fall back to the baked baseline AIR.
+        let air_json = match self.app_state.get() {
+            Some(state) => {
+                use crate::petri::launcher::prepare_air_with_bindings;
+                match prepare_air_with_bindings(
+                    state,
+                    template,
+                    record.workspace_id,
+                    created_by,
+                    &std::collections::HashMap::new(),
+                    air_json,
+                )
+                .await
+                {
+                    Ok(prepared) => prepared,
+                    // Either an unbound REQUIRED slot (run-gate: do NOT launch) or
+                    // a bad-binding error — both must drop the fire. Folded into a
+                    // launch failure (recorded by the caller as a Dropped/errored
+                    // fire, like every other launch failure).
+                    Err(e) => {
+                        return Err(TriggerError::InstanceFailed(e.to_string()));
+                    }
+                }
+            }
+            None => air_json,
+        };
         // Per-tenant net id (phase 3): `mekhan-{workspace}-{instance}`. The
         // engine's subjects are `petri.{ws}.{net}.*`, so the net_id must carry
         // the workspace to keep a fired instance's stream off other tenants'

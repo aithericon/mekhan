@@ -41,6 +41,7 @@
 
 use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -353,10 +354,18 @@ async fn load_live_runner(db: &PgPool, runner_id: Uuid) -> Option<RunnerRow> {
 pub(crate) fn acquire_injection(
     runner_id: Uuid,
     slot: u32,
+    epoch: i64,
     executor_namespace: &str,
     caps: &serde_json::Value,
 ) -> PoolInjection<'static> {
-    let unit_id = format!("{runner_id}#{slot}");
+    // `epoch` (a per-admission wall-clock stamp) is folded into the unit_id — and
+    // thus the `dedup_id` — so a re-acquire after a reap (or a toggle off→on
+    // inside the engine's bridge dedup window) is NOT suppressed as a duplicate.
+    // The OLD scheme used a lifetime-stable `{runner_id}#{slot}`, so once a unit
+    // was granted-and-reaped every subsequent re-acquire carried the same
+    // dedup_id and the engine silently dropped it → the runner's pool sat empty
+    // forever after its first reap. Mirrors the human adapter's `{member}#{slot}@{epoch}`.
+    let unit_id = format!("{runner_id}#{slot}@{epoch}");
     PoolInjection {
         source_net_id: "mekhan-presence-controller",
         source_place_name: "presence",
@@ -369,6 +378,38 @@ pub(crate) fn acquire_injection(
         signal_key: format!("presence-acquire-{unit_id}"),
         dedup_id: format!("presence-acquire:{unit_id}"),
     }
+}
+
+/// Count how many pool units the engine net currently holds for `runner_id` — the
+/// `runner_id`-matching tokens in BOTH the FREE (`pool`) and HELD (`in_use`)
+/// places. This is the leak-free authority for the acquire top-up: the engine net
+/// is the source of truth for admitted slots, NOT mekhan's in-memory map (which is
+/// wiped on a mekhan restart while the engine retains its units). Returns `None` on
+/// any engine error or unexpected marking shape — callers treat `None` as "assume
+/// already at capacity" (inject NOTHING) so a transient engine blip can never
+/// DOUBLE-admit. Mirrors the human adapter's `count_member_units`.
+async fn count_runner_units(petri: &PetriClient, pool_net_id: &str, runner_id: Uuid) -> Option<u32> {
+    let state = petri.try_get_state(pool_net_id).await?;
+    let marking = serde_json::to_value(&state.marking).ok()?;
+    Some(count_units_in_marking(&marking, &runner_id.to_string()))
+}
+
+/// Pure token-counter over an engine marking JSON: the number of `pool` + `in_use`
+/// tokens whose `color.value.runner_id` equals `runner_id`. Free function so the
+/// shape-parsing is unit-testable without an engine.
+fn count_units_in_marking(marking: &serde_json::Value, runner_id: &str) -> u32 {
+    let tokens = &marking["tokens"];
+    let mut n = 0u32;
+    for place in ["pool", "in_use"] {
+        if let Some(arr) = tokens[place].as_array() {
+            for tok in arr {
+                if tok["color"]["value"]["runner_id"].as_str() == Some(runner_id) {
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
 }
 
 /// Build the caller parts of a BARE `presence_expired { runner_id }` signal
@@ -390,6 +431,7 @@ pub(crate) fn expire_signal(runner_id: Uuid, now_ms: i64) -> PoolSignal<'static>
 async fn handle_presence(
     db: &PgPool,
     nats: &MekhanNats,
+    petri: &PetriClient,
     presence: &PresenceMap,
     fleet: &FleetLiveness,
     runner_id: Uuid,
@@ -449,11 +491,15 @@ async fn handle_presence(
                     if let Some(runner) = load_live_runner(db, runner_id).await {
                         let executor_namespace = format!("runner-jobs/{runner_id}");
                         let caps = runner.capabilities.clone();
+                        // Fresh epoch for the grow batch (the grown slot indices are
+                        // already new, but stamping the episode keeps the dedup id
+                        // unique if the same index is re-grown after a later shrink).
+                        let epoch = Utc::now().timestamp_millis();
                         for slot in new_slots {
                             core::inject_acquire(
                                 nats,
                                 &pool_net_id,
-                                acquire_injection(runner_id, slot, &executor_namespace, &caps),
+                                acquire_injection(runner_id, slot, epoch, &executor_namespace, &caps),
                                 "presence acquire",
                             )
                             .await;
@@ -527,24 +573,44 @@ async fn handle_presence(
     let executor_namespace = format!("runner-jobs/{runner_id}");
     let caps = runner.capabilities.clone();
 
-    // Mint C distinct slots (slot 0..C), one bridge token each. `unit_id` is
-    // per-slot (`"{runner_id}#{slot}"`) so each is an independently grantable
-    // lease; they share `runner_id` so the reap-all-by-runner_id signals match
-    // any of them.
-    for slot in 0..concurrency {
+    // Per-admission epoch stamped into every slot's unit_id/dedup_id so this
+    // admission EPISODE is distinct from any prior one for this runner — a toggle
+    // off→on (or a re-acquire after a reap) inside the engine's bridge dedup
+    // window re-admits fresh instead of being silently suppressed.
+    let epoch = Utc::now().timestamp_millis();
+
+    // Top up to C against the engine's CURRENT unit count (the leak-free
+    // authority), not mekhan's in-memory map. `None` (engine error) is treated as
+    // "already at C" so a blip never double-admits; the next edge reconciles. A
+    // runner whose engine slots survived a mekhan restart counts as
+    // `existing == C` → inject 0 (we just re-track it in-memory), the case a
+    // pure-epoch scheme would otherwise double-admit.
+    let existing = count_runner_units(petri, &pool_net_id, runner_id)
+        .await
+        .unwrap_or(concurrency);
+    let need = core::grow_slots(false, existing, concurrency)
+        .map(|r| r.len() as u32)
+        .unwrap_or(0);
+
+    // Mint `need` distinct slots (slot 0..need), one bridge token each. `unit_id`
+    // is per-slot AND per-epoch so each is an independently grantable lease that
+    // the engine won't dedup against a prior episode; they share `runner_id` so
+    // the reap-all-by-runner_id signals match any of them.
+    for slot in 0..need {
         core::inject_acquire(
             nats,
             &pool_net_id,
-            acquire_injection(runner_id, slot, &executor_namespace, &caps),
+            acquire_injection(runner_id, slot, epoch, &executor_namespace, &caps),
             "presence acquire",
         )
         .await;
     }
 
-    // Commit the present edge AFTER injecting so a crash between inject + map
-    // update simply re-injects (idempotent at the engine via the per-slot
-    // dedup_id). Record the applied C so the sweep knows how many expire signals
-    // to inject and the grow path knows the current slot count.
+    // Commit the present edge AFTER injecting. A crash between inject + map update
+    // re-injects on the next edge with a FRESH epoch; the engine-count top-up
+    // above (not the dedup id) is what prevents a double-admit, so losing the
+    // in-memory epoch on a restart is safe. Record the applied C so the sweep
+    // knows how many expire signals to inject and the grow path knows the slot count.
     {
         let mut map = presence.lock().await;
         map.insert(
@@ -635,6 +701,7 @@ const MAX_RUNNER_CONCURRENCY: u32 = 256;
 pub(crate) async fn start_presence_subscriber(
     nats: MekhanNats,
     db: PgPool,
+    petri: PetriClient,
     presence: PresenceMap,
     fleet: FleetLiveness,
 ) {
@@ -652,6 +719,7 @@ pub(crate) async fn start_presence_subscriber(
         handle_presence(
             &db,
             &nats,
+            &petri,
             &presence,
             &fleet,
             runner_id,
@@ -762,11 +830,11 @@ pub fn spawn_presence_controller(
     presence: RunnerPresence,
     nats: MekhanNats,
     db: PgPool,
-    _petri: PetriClient,
+    petri: PetriClient,
     fleet: FleetLiveness,
 ) {
     core::spawn_controller(
-        start_presence_subscriber(nats.clone(), db, presence.map().clone(), fleet.clone()),
+        start_presence_subscriber(nats.clone(), db, petri, presence.map().clone(), fleet.clone()),
         start_presence_sweep(nats, presence.map().clone(), fleet),
     );
 }
@@ -889,14 +957,15 @@ mod tests {
 
     #[test]
     fn c_units_mint_distinct_unit_ids_sharing_one_runner_id() {
-        // The controller mints slot 0..C, each with a distinct per-slot unit_id
-        // `"{runner_id}#{slot}"` and the SHARED runner_id (the reap key). Mirror
-        // the inject_acquire identity + dedup formatting exactly.
+        // The controller mints slot 0..C, each with a distinct per-slot+epoch
+        // unit_id `"{runner_id}#{slot}@{epoch}"` and the SHARED runner_id (the reap
+        // key). Mirror the inject_acquire identity + dedup formatting exactly.
         let rid = Uuid::new_v4();
+        let epoch = 1_700_000_000_123i64;
         let c = 4u32;
-        let unit_ids: Vec<String> = (0..c).map(|slot| format!("{rid}#{slot}")).collect();
+        let unit_ids: Vec<String> = (0..c).map(|slot| format!("{rid}#{slot}@{epoch}")).collect();
         let dedup_ids: Vec<String> = (0..c)
-            .map(|slot| format!("presence-acquire:{rid}#{slot}"))
+            .map(|slot| format!("presence-acquire:{rid}#{slot}@{epoch}"))
             .collect();
 
         // C distinct unit_ids ...
@@ -915,12 +984,53 @@ mod tests {
 
         // The real builder agrees with the mirrored formatting (identity + dedup
         // come from `acquire_injection`, the single source of truth).
-        let inj = acquire_injection(rid, 0, "runner-jobs/x", &serde_json::json!({}));
+        let inj = acquire_injection(rid, 0, epoch, "runner-jobs/x", &serde_json::json!({}));
         assert_eq!(inj.dedup_id, dedup_ids[0]);
         assert_eq!(
             inj.token_color["unit_id"].as_str(),
             Some(unit_ids[0].as_str())
         );
+    }
+
+    #[test]
+    fn re_acquire_after_reap_is_dedup_fresh() {
+        // Regression guard for the stuck-after-first-reap bug: two acquisitions of
+        // the SAME slot in DIFFERENT epochs must produce DIFFERENT dedup_ids, so the
+        // engine's bridge dedup re-admits the runner instead of suppressing the
+        // re-acquire (which left the pool permanently empty under the old
+        // lifetime-stable `{runner_id}#{slot}` scheme).
+        let rid = Uuid::new_v4();
+        let caps = serde_json::json!({});
+        let first = acquire_injection(rid, 0, 1_700_000_000_000, "runner-jobs/x", &caps);
+        let after_reap = acquire_injection(rid, 0, 1_700_000_009_999, "runner-jobs/x", &caps);
+        assert_ne!(
+            first.dedup_id, after_reap.dedup_id,
+            "a re-acquire in a new epoch must NOT collide with the reaped unit's dedup id"
+        );
+    }
+
+    #[test]
+    fn count_units_in_marking_counts_free_and_held_for_runner() {
+        let me = "11111111-1111-1111-1111-111111111111";
+        let other = "22222222-2222-2222-2222-222222222222";
+        let marking = serde_json::json!({
+            "tokens": {
+                "pool": [
+                    {"color": {"value": {"runner_id": me}}},
+                    {"color": {"value": {"runner_id": other}}}
+                ],
+                "in_use": [
+                    {"color": {"value": {"runner_id": me}}},
+                    {"color": {"value": {"runner_id": me}}}
+                ]
+            }
+        });
+        // 1 free + 2 held for `me`.
+        assert_eq!(count_units_in_marking(&marking, me), 3);
+        assert_eq!(count_units_in_marking(&marking, other), 1);
+        assert_eq!(count_units_in_marking(&marking, "deadbeef"), 0);
+        // An empty/odd marking shape counts as zero (never panics).
+        assert_eq!(count_units_in_marking(&serde_json::json!({}), me), 0);
     }
 
     #[tokio::test]

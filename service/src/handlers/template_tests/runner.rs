@@ -54,6 +54,14 @@ pub struct RunContext {
     pub air_json: Value,
     pub graph: WorkflowGraph,
     pub created_by: Uuid,
+    /// The published template row, when the run is launched against a stored
+    /// version (`from_published`). Carries `requirements_json` so the runner can
+    /// apply the test's per-test `bindings` (highest-precedence tier) through
+    /// [`crate::petri::launcher::prepare_air_with_bindings`]. `None` for the
+    /// publish-gate path (which validates an about-to-publish AIR whose manifest
+    /// is not yet persisted) — there the test runs against the baked baseline,
+    /// the back-compat-safe default.
+    pub template: Option<WorkflowTemplate>,
 }
 
 impl RunContext {
@@ -75,6 +83,7 @@ impl RunContext {
             air_json,
             graph,
             created_by,
+            template: Some(template.clone()),
         })
     }
 }
@@ -99,6 +108,32 @@ pub async fn run_test(
         serde_json::from_value(test.start_tokens.clone()).map_err(|e| {
             ApiError::internal(format!("test {} has invalid start_tokens: {e}", test.id))
         })?;
+
+    // Apply the test's per-test resource/pool bindings (highest-precedence tier)
+    // to the AIR before launch — same path as the create-instance handler. For a
+    // template with no requirements manifest, or an empty `bindings` map, this is
+    // a byte-for-byte no-op (the baked baseline AIR). Only applied when the run is
+    // against a published template row (the publish-gate path carries no template
+    // and runs the baseline). A bindings-resolution failure surfaces as an
+    // infrastructure error (the runner caller maps it to a 500); the test's
+    // `bindings` are author-controlled, validated at save against the manifest.
+    let overrides: std::collections::HashMap<String, Uuid> =
+        serde_json::from_value(test.bindings.clone()).map_err(|e| {
+            ApiError::internal(format!("test {} has invalid bindings: {e}", test.id))
+        })?;
+    let air_json: Value = match (&ctx.template, overrides.is_empty()) {
+        (Some(template), false) => crate::petri::launcher::prepare_air_with_bindings(
+            state,
+            template,
+            ctx.workspace_id,
+            ctx.created_by,
+            &overrides,
+            ctx.air_json.clone(),
+        )
+        .await
+        .map_err(|e| ApiError::internal(format!("test {} binding resolution failed: {e}", test.id)))?,
+        _ => ctx.air_json.clone(),
+    };
 
     // Subscribe to the engine's authoritative human-request stream for THIS
     // net BEFORE launching, so a request published between launch and our
@@ -133,7 +168,7 @@ pub async fn run_test(
             template_version: ctx.template_version,
             created_by: ctx.created_by,
             metadata: json!({ "test_id": test.id, "test_name": test.name }),
-            air_json: &ctx.air_json,
+            air_json: &air_json,
             graph: &ctx.graph,
             start_tokens: &start_tokens,
             mode: Some("test_run"),

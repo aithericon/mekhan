@@ -49,6 +49,12 @@ locals {
   nats_account_name = "mekhan-${local.env}"
   nats_user_name    = "mekhan-${local.env}-worker"
   nats_user_kv_path = "nats/apps/mekhan/${local.env}/worker"
+  # Account-level material (JWT + the runner-signing key seed). mekhan reads
+  # `signing_seed` here to mint scoped runner JWTs under the mekhan-<env>
+  # account; the resolver trusts them because that signing key is listed in the
+  # pushed account JWT (added out-of-band via `nsc edit account --sk generate`,
+  # mirroring the mekhan-dev provisioning).
+  nats_account_kv_path = "nats/apps/mekhan/${local.env}/account"
 
   # ── Vault ──────────────────────────────────────────────────────────────────
   # Resource-secret prefix stays shared: the service hardcodes it, and per-env

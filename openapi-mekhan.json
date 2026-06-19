@@ -12799,6 +12799,70 @@
         }
       }
     },
+    "/api/v1/templates/{id}/bindings": {
+      "put": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "PUT /api/v1/templates/{id}/bindings",
+        "description": "Upsert the calling workspace's DEFAULT bindings for one or more requirement\nslots of this template family. Keyed by `(chain_root_id, workspace_id,\nslot_key)` so a default survives version bumps. These sit at precedence tier\n2 (below a per-instance override, above platform auto-bind / home baseline).\nRequires Editor on the template.",
+        "operationId": "put_template_bindings",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version row)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutBindingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bindings upserted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateRequirementsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/{id}/bundle": {
       "get": {
         "tags": [
@@ -14026,6 +14090,50 @@
           },
           "500": {
             "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/{id}/requirements": {
+      "get": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "GET /api/v1/templates/{id}/requirements",
+        "description": "Return the template's auto-derived resource/pool requirement manifest plus\nper-current-workspace readiness: for each slot, whether it is satisfied and\nby which binding tier (per-workspace default / platform auto-bind / home\nbaseline). The binding UI (Phase E) reads this to render the per-slot picker\nand gate the launch button. Read access requires the template's read gate.",
+        "operationId": "get_template_requirements",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Template id (any version row)",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Requirement manifest + readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateRequirementsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Template not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -17989,6 +18097,16 @@
           }
         }
       },
+      "BindingTier": {
+        "type": "string",
+        "description": "Which precedence tier satisfied a slot. Surfaced on the readiness endpoint\nso the binding UI can show WHY a slot is bound (and let the operator decide\nwhether to override).",
+        "enum": [
+          "instance_override",
+          "workspace_default",
+          "platform_auto_bind",
+          "home_baseline"
+        ]
+      },
       "BranchCondition": {
         "type": "object",
         "required": [
@@ -20062,6 +20180,20 @@
           "template_id"
         ],
         "properties": {
+          "bindings": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Per-instance resource/pool bindings: `slot_key -> resource_id` (Phase\nC). The HIGHEST-precedence binding tier — overrides the per-workspace\ndefault, platform auto-bind, and home-workspace baseline for any slot in\nthe template's auto-derived requirements manifest. Slot keys are the\nbinding aliases surfaced by `GET /templates/{id}/requirements`. Omitted /\n`None` ⇒ every slot resolves through the lower tiers (a template with no\nrequirements manifest ignores this entirely and launches as today).",
+            "additionalProperties": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "metadata": {
             "description": "Free-form audit metadata stored on the instance row. Unlike pre-typed-ports\nbehavior, this is NOT merged into initial Petri tokens — token shape is\ndriven solely by `start_tokens`."
           },
@@ -20400,6 +20532,17 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "bindings": {
+            "type": "object",
+            "description": "Per-test resource/pool bindings (`slot_key -> resource_id`) — same shape\nand precedence as `CreateInstanceRequest.bindings`. Forwarded into the\nlaunched `test_run` instance so a test can pin concrete resources for the\ntemplate's requirement slots. Omitted ⇒ no per-test override (slots\nresolve through the lower binding tiers).",
+            "additionalProperties": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "enabled": {
@@ -21670,6 +21813,13 @@
               "null"
             ],
             "description": "Phase 2 — a freshly-signed scoped NATS *user* JWT, minted from the\n`nats_public_key` the runner sent at enrollment. `null` when no public\nkey was supplied OR signing was unavailable; the runner can fetch it\nlater via `POST /api/v1/runners/{id}/nats-creds`."
+          },
+          "nats_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public NATS connect URL the runner should use (e.g.\n`wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered\nfrom mekhan's `runner_nats_public_url` config. The runner persists it so a\nbare daemon needs no `EXECUTOR_NATS_URL`. `null` when mekhan has no public\nURL configured; the runner then keeps its own configured/default URL."
           },
           "runner_token": {
             "type": "string"
@@ -29707,6 +29857,22 @@
           }
         }
       },
+      "PutBindingsRequest": {
+        "type": "object",
+        "description": "PUT body for `PUT /templates/{id}/bindings`.",
+        "required": [
+          "bindings"
+        ],
+        "properties": {
+          "bindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlotBindingInput"
+            },
+            "description": "The per-workspace default bindings to upsert. Each is keyed by\n`(chain_root, current_workspace, slot_key)` so it survives version bumps."
+          }
+        }
+      },
       "PutGrantRequest": {
         "type": "object",
         "description": "`PUT .../grants/{user_id}` body.",
@@ -30011,6 +30177,45 @@
             "type": "array",
             "items": {},
             "description": "The new record rows. Each is validated against the asset type's\n`fields_json` via `Port::json_schema`."
+          }
+        }
+      },
+      "RequirementSlot": {
+        "type": "object",
+        "description": "One auto-derived requirement slot: a distinct resource/pool reference the\ntemplate needs bound at instance-creation time.\n\n`key` is the binding ALIAS (the workspace-relative resource name) — the same\nstring the author typed and the same key the `__resources` splice is indexed\nby. It dedupes references: two surfaces naming the same alias collapse to one\nslot whose [`used_by`](Self::used_by) lists every referencing node.",
+        "required": [
+          "key",
+          "resource_type",
+          "role",
+          "required",
+          "used_by"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "Stable slot key = the binding alias (workspace resource name). Unique\nwithin a manifest; the per-instance/per-workspace binding maps key →\n`resource_id` against it."
+          },
+          "request_shape": {
+            "description": "The validated `request`/claim params (pool bindings) or `None`\n(`DataResource`). Surfaced so the binding UI (Phase E) can show what the\nslot expects, and so a substitute pool can be validated against the same\nclaim shape."
+          },
+          "required": {
+            "type": "boolean",
+            "description": "Whether the launch run-gate must reject if this slot is unbound. Pool\nbindings (`ExecutorCapacity` / `LeaseHolder` / `SchedulerLease`) are\nalways required — an unbound pool has no backing net to dispatch against.\n`DataResource` slots are required too (a missing secret envelope would\ncrash the step at run time), so today every derived slot is required;\nthe field exists so a future \"optional resource\" surface can opt out."
+          },
+          "resource_type": {
+            "type": "string",
+            "description": "Resolved resource type name (`postgres`, `openai`, a `capacity` /\n`datacenter` kind, …) of the resource the home-workspace baseline bound.\nThe effective-binding resolution (Phase C) only accepts a substitute of a\nmatching type."
+          },
+          "role": {
+            "$ref": "#/components/schemas/SlotRole",
+            "description": "Which binding surface introduced this slot. When the same alias is\nreferenced through multiple roles (rare — e.g. a pool also read as a\n`<path>.<field>` constant), the FIRST-derived role wins and a pool role\nalways beats `DataResource` (see [`derive_requirements`])."
+          },
+          "used_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Node ids that reference this slot. Merged across every surface naming the\nsame alias. Sorted + deduped for stable serialization."
           }
         }
       },
@@ -31075,6 +31280,13 @@
           "nats_jwt": {
             "type": "string",
             "description": "Freshly signed scoped user JWT, bound to the runner's stored\n`nats_public_key`."
+          },
+          "nats_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public NATS connect URL the runner should use (e.g.\n`wss://nats.aithericon.eu`) — the Traefik WebSocket front door, brokered\nfrom mekhan's `runner_nats_public_url` config. `null` when unconfigured."
           }
         }
       },
@@ -31544,6 +31756,80 @@
             "minimum": 0
           }
         }
+      },
+      "SlotBindingInput": {
+        "type": "object",
+        "description": "One per-workspace default binding upsert: `slot_key -> resource_id`\n(+ optional pinned version).",
+        "required": [
+          "slot_key",
+          "resource_id"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The resource to bind as this workspace's default for the slot."
+          },
+          "resource_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Optional version pin; omitted ⇒ the resource's `latest_version` at\nlaunch."
+          },
+          "slot_key": {
+            "type": "string",
+            "description": "The requirement slot key (binding alias) from the manifest."
+          }
+        }
+      },
+      "SlotReadiness": {
+        "type": "object",
+        "description": "Readiness of ONE slot for a given workspace — the projection the\n`GET /templates/{id}/requirements` endpoint returns per slot.",
+        "required": [
+          "slot",
+          "satisfied"
+        ],
+        "properties": {
+          "resource_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The effective resource id (tiers 1–3) when known. `None` for a\nbaseline-satisfied slot (its resource is baked in the AIR, not surfaced\nhere) or an unbound slot."
+          },
+          "satisfied": {
+            "type": "boolean",
+            "description": "`true` when the slot resolves by some tier (override/default/platform/\nbaseline) for the current workspace."
+          },
+          "slot": {
+            "$ref": "#/components/schemas/RequirementSlot",
+            "description": "The requirement slot."
+          },
+          "tier": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/BindingTier",
+                "description": "The tier that satisfies it (when `satisfied`), else `None`."
+              }
+            ]
+          }
+        }
+      },
+      "SlotRole": {
+        "type": "string",
+        "description": "What kind of binding surface introduced a requirement slot. Mirrors the\ncompiler's [`crate::compiler::lower::automated_step::DeploymentRole`] plus a\nfourth `DataResource` variant for the `<path>.<field>` envelope/credential\nrefs (which carry no [`DeploymentRole`] — they're plain resource reads, not\npool bindings).",
+        "enum": [
+          "executor_capacity",
+          "lease_holder",
+          "scheduler_lease",
+          "data_resource"
+        ]
       },
       "SmtpConfig": {
         "type": "object",
@@ -32804,6 +33090,35 @@
           }
         }
       },
+      "TemplateRequirementsResponse": {
+        "type": "object",
+        "description": "Response of `GET /templates/{id}/requirements`: the auto-derived requirement\nmanifest paired with per-CURRENT-workspace readiness (which slots resolve, by\nwhich tier, and to which resource).",
+        "required": [
+          "slots",
+          "readiness",
+          "launchable"
+        ],
+        "properties": {
+          "launchable": {
+            "type": "boolean",
+            "description": "`true` when every required slot is satisfied for the current workspace —\na launch would pass the run-gate."
+          },
+          "readiness": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SlotReadiness"
+            },
+            "description": "One readiness entry per slot, resolved for the caller's active\nworkspace through the launch-time precedence chain."
+          },
+          "slots": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RequirementSlot"
+            },
+            "description": "The template's auto-derived slots (empty for a template with no\nresource/pool refs or a pre-feature row)."
+          }
+        }
+      },
       "TemplateRunTimeseriesPoint": {
         "type": "object",
         "description": "One point of `GET /api/v1/templates/{id}/analytics/timeseries` — a single\n`(bucket, outcome)` cell, mirroring the inference-timeseries point shape.",
@@ -32931,6 +33246,9 @@
         ],
         "properties": {
           "assertions": {},
+          "bindings": {
+            "description": "Per-test resource/pool bindings (`slot_key -> resource_id`), the same\nshape as `CreateInstanceRequest.bindings`. Carried into the launched\n`test_run` instance as the HIGHEST-precedence binding tier so a test can\npin which concrete resource each requirement slot resolves to. Stored as\na JSON object (`{}` when none); decoded into a typed\n`HashMap<String, Uuid>` at run time by the runner."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -33923,6 +34241,20 @@
             ],
             "items": {
               "$ref": "#/components/schemas/Assertion"
+            }
+          },
+          "bindings": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Per-test resource/pool bindings (`slot_key -> resource_id`). `None` keeps\nthe existing bindings (COALESCE partial-update). Send an empty map to\nclear all per-test bindings.",
+            "additionalProperties": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "propertyNames": {
+              "type": "string"
             }
           },
           "enabled": {
@@ -35853,6 +36185,7 @@
             ],
             "format": "uuid"
           },
+          "requirements_json": {},
           "source_ref": {},
           "superseded_by": {
             "type": [

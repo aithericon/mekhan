@@ -58,6 +58,17 @@ pub struct WorkflowTemplate {
     // `graph`/`air_json` `serde_json::Value` + `sqlx::FromRow` convention.
     pub source_ref: Option<serde_json::Value>,
 
+    // Auto-derived resource/pool requirements manifest (populated on publish,
+    // alongside `air_json`). The serialized
+    // [`crate::compiler::RequirementsManifest`]: one slot per distinct
+    // resource/pool reference the template binds, plus the AIR addresses the
+    // home-workspace baseline baked for each. The binding-aware launcher reads
+    // this to substitute a different effective resource per instance/workspace
+    // without recompiling. NULL on pre-feature rows and on graphs with no
+    // resource/pool refs — those launch byte-for-byte as today.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requirements_json: Option<serde_json::Value>,
+
     // Metadata
     pub author_id: Uuid,
     /// `subject_as_uuid()` of whoever last mutated the template (Phase 2).

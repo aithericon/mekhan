@@ -1843,6 +1843,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
         air_json,
         graph_json,
         interface_json,
+        requirements_json,
         node_configs,
         metrics,
     } = publisher
@@ -1916,9 +1917,10 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
             (id, name, description, base_template_id, version,
              is_latest, published, published_at, graph, air_json,
              interface_json, author_id, workspace_id, visibility, owner_template_id,
-             metrics, template_kind, origin, coordinate, presentation, pack_id)
+             metrics, template_kind, origin, coordinate, presentation, pack_id,
+             requirements_json)
         VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $9, $10,
-                $11, $12, $13, $14, $15, $16)
+                $11, $12, $13, $14, $15, $16, $17)
         RETURNING *
         "#,
     )
@@ -1938,6 +1940,7 @@ pub async fn seed_one(state: &crate::AppState, dir: &Path) -> Result<SeedOutcome
     .bind(coordinate)
     .bind(presentation)
     .bind(pack_id)
+    .bind(&requirements_json)
     .fetch_one(&state.db)
     .await?;
 

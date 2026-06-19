@@ -576,10 +576,10 @@ pub(crate) fn lower_automated_step(cx: &mut LoweringCtx) -> Result<(), CompileEr
 /// Everything the pooled lowering needs once `Inline.capacity.alias` has been
 /// resolved to a net-backed `capacity` (or `datacenter`) resource and its
 /// dispatch backend.
-pub(super) struct PoolBinding {
+pub(crate) struct PoolBinding {
     /// Deterministic backing net id (`pool-<resource_id>`) the claim/register/
     /// release bridges target.
-    pub(super) backing_net_id: String,
+    pub(crate) backing_net_id: String,
     /// `Lease__<backend>` — the AIR definition name for the typed grant/lease.
     pub(super) lease_def_name: String,
     /// The backend's lease JSON Schema, registered into `scenario.definitions`.
@@ -604,7 +604,7 @@ pub(super) struct PoolBinding {
 /// caller names its role and [`resolve_binding`] checks the alias's resolved
 /// [`CapacityBackend`] is one the role accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum DeploymentRole {
+pub(crate) enum DeploymentRole {
     /// `Executor { capacity: { alias } }` — accepts `Tokens` or `Presence`
     /// (platform-owned in-net admission pools).
     ExecutorCapacity,
@@ -651,7 +651,7 @@ pub(super) enum DeploymentRole {
 ///   the right deployment model.
 /// - `request` fails validation against the backend's claim schema →
 ///   `ResourcePoolRequestInvalid`.
-pub(super) fn resolve_binding(
+pub(crate) fn resolve_binding(
     node_id: &str,
     alias: &str,
     request: Option<&serde_json::Value>,
@@ -1278,6 +1278,30 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         pool_net_id,
         well_known::POOL_RELEASE_INBOX,
     );
+    // Withdraw bridge — a teardown FINALIZER (`t_{id}_withdraw_finally`) bridges
+    // a `{ grant_id }` here when the net is cancelled/failed while still parked
+    // at `p_pending` (claim queued, not yet granted), so the pool's `t_withdraw`
+    // drops the orphaned claim instead of granting it to this dead net. Only the
+    // token + presence pools (`build_pool_net`) expose `withdraw_inbox`; the
+    // SCHEDULER backend bridges to `build_datacenter_lease_adapter_net` (a
+    // request→allocator→grant topology with no withdraw inbox — its in-flight
+    // claim needs allocator-side cancellation, a separate change), so we emit no
+    // withdraw bridge there and its AIR stays byte-identical.
+    let pool_has_withdraw_inbox = matches!(
+        pool_binding.backend,
+        aithericon_resources::pool::PoolBackend::Tokens
+            | aithericon_resources::pool::PoolBackend::Presence
+    );
+    let p_withdraw_out: Option<PlaceHandle<DynamicToken>> = if pool_has_withdraw_inbox {
+        Some(ctx.bridge_out(
+            format!("p_{id}_withdraw_out"),
+            format!("{label} - Withdraw Claim"),
+            pool_net_id,
+            well_known::POOL_WITHDRAW_INBOX,
+        ))
+    } else {
+        None
+    };
 
     // Internal parking places.
     let p_pending: PlaceHandle<DynamicToken> = ctx.state(
@@ -1583,6 +1607,54 @@ fn lower_pooled_body(cx: &mut LoweringCtx, pool_binding: PoolBinding) -> Result<
         .logic_rhai(format!("throw \"{}\"", rhai_str_escape(&msg)))
         .done();
     }
+
+    // ── Teardown FINALIZERS: release/withdraw capacity on cancel or permanent
+    // failure ───────────────────────────────────────────────────────────────
+    // The terminal exits above (`t_to_output`/`t_to_error`) free capacity only
+    // on a body TERMINAL (success / retries-exhausted). An EXTERNAL cancel
+    // (`terminate` → NetCancelled) or a permanent failure that strands the net
+    // mid-handshake never reaches them, so the single parked `p_pending` (claim
+    // queued, not yet granted) or `p_held` (granted, running) token would leak
+    // its pool capacity. These two `.finalizer()` transitions — fired ONLY
+    // during the engine's post-failure / pre-cancel finalizer drain
+    // (`drain_finalizers`), never in normal evaluation — reconcile whichever one
+    // is parked. They mirror `lease_bridge`'s `t_<id>_finally`. `p_pending` and
+    // `p_held` never hold a token simultaneously (`t_acquire` atomically swaps
+    // one for the other), so at most one fires, preserving release-exactly-once.
+
+    // Withdraw an un-granted queued claim. Bridges `{ grant_id }` to the pool's
+    // `withdraw_inbox`; the pool's `t_withdraw` drops the matching claim from
+    // `claim_inbox` so it is never granted to this now-dead net. Emitted only for
+    // pools that expose `withdraw_inbox` (token + presence — see above).
+    if let Some(p_withdraw_out) = &p_withdraw_out {
+        ctx.transition(
+            format!("t_{id}_withdraw_finally"),
+            format!("{label} - Withdraw claim on teardown"),
+        )
+        .auto_input("pending", &p_pending)
+        .auto_output("withdraw", p_withdraw_out)
+        .finalizer()
+        .logic_rhai("#{ withdraw: #{ grant_id: pending.grant_id } }")
+        .done();
+    }
+
+    // Release a held unit. Bridges `{ grant_id }` to `release_inbox`; the pool's
+    // `t_release` correlates it to the `in_use` hold and recycles the unit.
+    // Guarded on a real `grant_id` so the inherit-bypass SENTINEL hold
+    // (`grant_id == ()`, which never claimed a unit) bridges nothing. On the
+    // presence fail-path (`t_lease_abort`) the hold was already dropped by the
+    // pool's `t_reap_held` and `p_held` consumed, so this finds no token —
+    // no double-free.
+    ctx.transition(
+        format!("t_{id}_release_finally"),
+        format!("{label} - Release hold on teardown"),
+    )
+    .auto_input("held", &p_held)
+    .auto_output("release", &p_release_out)
+    .finalizer()
+    .guard_rhai("held.grant_id != ()")
+    .logic_rhai("#{ release: #{ grant_id: held.grant_id } }")
+    .done();
 
     // ── Presence-only: fail-fast on held-runner death (Phase 3) ─────────────
     // Symmetric with `lease_bridge`'s `t_lease_failed_register` + `t_lease_abort`

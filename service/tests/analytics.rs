@@ -121,7 +121,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     let limit = clamp_limit(None);
 
     // --- server dimension ---------------------------------------------------
-    let by_server = breakdown(&pool, &params, Dimension::Server, None, depth1, limit)
+    let by_server = breakdown(&pool, Uuid::nil(), &params, Dimension::Server, None, depth1, limit)
         .await
         .expect("server breakdown");
     assert_eq!(by_server.group_by, "server");
@@ -137,7 +137,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(by_server.total_bytes, b.bytes);
 
     // --- extension dimension (GENERATED column) ------------------------------
-    let by_ext = breakdown(&pool, &params, Dimension::Extension, None, depth1, limit)
+    let by_ext = breakdown(&pool, Uuid::nil(), &params, Dimension::Extension, None, depth1, limit)
         .await
         .expect("extension breakdown");
     assert_eq!(bucket(&by_ext, "csv").expect("csv").count, 2);
@@ -147,7 +147,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(bucket(&by_ext, "nostat").expect("nostat").count, 1);
 
     // --- size_class dimension -------------------------------------------------
-    let by_size = breakdown(&pool, &params, Dimension::SizeClass, None, depth1, limit)
+    let by_size = breakdown(&pool, Uuid::nil(), &params, Dimension::SizeClass, None, depth1, limit)
         .await
         .expect("size_class breakdown");
     // 100, 500, 10, 20, 30 → "<1 KiB"; 2048 → "1 KiB-1 MiB"; 5 MiB → "1-16 MiB";
@@ -161,13 +161,13 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(bucket(&by_size, "unknown").expect("unknown").count, 1);
 
     // --- age (first_seen) — just seeded, everything is <7d -------------------
-    let by_age = breakdown(&pool, &params, Dimension::Age, None, depth1, limit)
+    let by_age = breakdown(&pool, Uuid::nil(), &params, Dimension::Age, None, depth1, limit)
         .await
         .expect("age breakdown");
     assert_eq!(bucket(&by_age, "<7d").expect("<7d").count, 8);
 
     // --- mtime_age — 1d-old, 400d-old, and missing mtimes ---------------------
-    let by_mtime = breakdown(&pool, &params, Dimension::MtimeAge, None, depth1, limit)
+    let by_mtime = breakdown(&pool, Uuid::nil(), &params, Dimension::MtimeAge, None, depth1, limit)
         .await
         .expect("mtime_age breakdown");
     assert_eq!(bucket(&by_mtime, "<7d").expect("<7d").count, 5);
@@ -175,14 +175,14 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(bucket(&by_mtime, "unknown").expect("unknown").count, 2);
 
     // --- owner ----------------------------------------------------------------
-    let by_owner = breakdown(&pool, &params, Dimension::Owner, None, depth1, limit)
+    let by_owner = breakdown(&pool, Uuid::nil(), &params, Dimension::Owner, None, depth1, limit)
         .await
         .expect("owner breakdown");
     assert_eq!(bucket(&by_owner, "501").expect("uid 501").count, 2);
     assert_eq!(bucket(&by_owner, "unknown").expect("no uid").count, 6);
 
     // --- directory level 0 ------------------------------------------------------
-    let root = breakdown(&pool, &params, Dimension::Directory, None, depth1, limit)
+    let root = breakdown(&pool, Uuid::nil(), &params, Dimension::Directory, None, depth1, limit)
         .await
         .expect("directory root");
     let data = bucket(&root, "data").expect("data dir");
@@ -194,9 +194,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert!(bucket(&root, "100%done").is_some());
 
     // --- directory descent: under=data ----------------------------------------
-    let under_data = breakdown(
-        &pool,
-        &params,
+    let under_data = breakdown(&pool, Uuid::nil(), &params,
         Dimension::Directory,
         Some("data"),
         depth1,
@@ -214,9 +212,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(bucket(&under_data, "proc").expect("data/proc").count, 1);
 
     // under=data/raw → the files themselves, all leaves.
-    let under_raw = breakdown(
-        &pool,
-        &params,
+    let under_raw = breakdown(&pool, Uuid::nil(), &params,
         Dimension::Directory,
         Some("data/raw/"), // trailing slash must normalize away
         depth1,
@@ -229,9 +225,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     assert_eq!(under_raw.total_count, 3, "totals follow the under scope");
 
     // --- LIKE-escaping: `_` and `%` in `under` are literals --------------------
-    let under_weird = breakdown(
-        &pool,
-        &params,
+    let under_weird = breakdown(&pool, Uuid::nil(), &params,
         Dimension::Directory,
         Some("weird_dir"),
         depth1,
@@ -245,9 +239,7 @@ async fn breakdown_per_dimension_and_directory_descent() {
     );
     assert_eq!(bucket(&under_weird, "e.bin").expect("e.bin").count, 1);
 
-    let under_pct = breakdown(
-        &pool,
-        &params,
+    let under_pct = breakdown(&pool, Uuid::nil(), &params,
         Dimension::Directory,
         Some("100%done"),
         depth1,
@@ -259,6 +251,101 @@ async fn breakdown_per_dimension_and_directory_descent() {
         under_pct.total_count, 1,
         "unescaped `%` would match everything"
     );
+
+    cleanup(&pool, &[&server]).await;
+}
+
+/// Analytics MUST NOT aggregate `file_inventory` across workspaces. Seed the
+/// same logical files into two workspaces under the same server key and assert
+/// every read path (breakdown buckets, breakdown totals, snapshot→timeseries)
+/// sees only the caller's workspace — never the sum of both.
+#[tokio::test]
+async fn breakdown_and_timeseries_are_workspace_isolated() {
+    let Some(_url) = db_url() else {
+        eprintln!("SKIP breakdown_and_timeseries_are_workspace_isolated: set MEKHAN__DATABASE_URL to run");
+        return;
+    };
+    let pool = connect().await;
+
+    let run = Uuid::new_v4().simple().to_string();
+    let server = format!("test-aniso-{run}");
+    cleanup(&pool, &[&server]).await;
+
+    let ws_a = Uuid::new_v4();
+    let ws_b = Uuid::new_v4();
+
+    // ws_a: 2 files (3000 bytes). ws_b: 1 file (9000 bytes). Same server key.
+    index(
+        &pool,
+        ws_a,
+        &InventoryIndexRequest {
+            file_server_id: server.clone(),
+            items: vec![
+                item("a/x.csv", Some(1000), Some(1), None),
+                item("a/y.csv", Some(2000), Some(1), None),
+            ],
+        },
+    )
+    .await
+    .expect("seed ws_a");
+    index(
+        &pool,
+        ws_b,
+        &InventoryIndexRequest {
+            file_server_id: server.clone(),
+            items: vec![item("a/z.csv", Some(9000), Some(1), None)],
+        },
+    )
+    .await
+    .expect("seed ws_b");
+
+    let params = scoped(&server);
+    let depth1 = clamp_depth(Some(1));
+    let limit = clamp_limit(None);
+
+    // breakdown sees only the caller's workspace, not the union.
+    let a = breakdown(&pool, ws_a, &params, Dimension::Server, None, depth1, limit)
+        .await
+        .expect("ws_a breakdown");
+    assert_eq!(a.total_count, 2, "ws_a sees only its 2 files");
+    assert_eq!(a.total_bytes, 3000, "ws_a totals exclude ws_b");
+
+    let b = breakdown(&pool, ws_b, &params, Dimension::Server, None, depth1, limit)
+        .await
+        .expect("ws_b breakdown");
+    assert_eq!(b.total_count, 1, "ws_b sees only its 1 file");
+    assert_eq!(b.total_bytes, 9000, "ws_b totals exclude ws_a");
+
+    // A third, empty workspace sees nothing — never the global 12000 bytes.
+    let empty = breakdown(
+        &pool,
+        Uuid::new_v4(),
+        &params,
+        Dimension::Server,
+        None,
+        depth1,
+        limit,
+    )
+    .await
+    .expect("empty ws breakdown");
+    assert_eq!(empty.total_count, 0, "uninvolved workspace sees no rows");
+    assert_eq!(empty.total_bytes, 0);
+
+    // The snapshot writer partitions per workspace → timeseries scopes too.
+    write_snapshot(&pool).await.expect("snapshot");
+    let ts_a = timeseries(&pool, ws_a, "total", None, Some(&server), 86_400, 86_400)
+        .await
+        .expect("ws_a timeseries");
+    assert_eq!(ts_a.len(), 1);
+    assert_eq!(ts_a[0].file_count, 2, "ws_a timeseries excludes ws_b");
+    assert_eq!(ts_a[0].total_bytes, 3000);
+
+    let ts_b = timeseries(&pool, ws_b, "total", None, Some(&server), 86_400, 86_400)
+        .await
+        .expect("ws_b timeseries");
+    assert_eq!(ts_b.len(), 1);
+    assert_eq!(ts_b[0].file_count, 1, "ws_b timeseries excludes ws_a");
+    assert_eq!(ts_b[0].total_bytes, 9000);
 
     cleanup(&pool, &[&server]).await;
 }
@@ -298,7 +385,7 @@ async fn snapshot_twice_dedupes_in_timeseries() {
     );
 
     // dim=total, our server, day-wide buckets: exactly one deduped point.
-    let points = timeseries(&pool, "total", None, Some(&server), 86_400, 86_400)
+    let points = timeseries(&pool, Uuid::nil(), "total", None, Some(&server), 86_400, 86_400)
         .await
         .expect("timeseries total");
     assert_eq!(points.len(), 1, "two captures in one bucket dedupe to rn=1");
@@ -307,9 +394,7 @@ async fn snapshot_twice_dedupes_in_timeseries() {
     assert_eq!(points[0].total_bytes, 6000);
 
     // dim=extension with a key filter narrows to that key.
-    let csv = timeseries(
-        &pool,
-        "extension",
+    let csv = timeseries(&pool, Uuid::nil(), "extension",
         Some("csv"),
         Some(&server),
         86_400,

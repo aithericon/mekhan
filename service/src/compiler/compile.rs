@@ -345,6 +345,17 @@ pub struct CompileArtifacts {
     pub interfaces: Value,
     /// Per-node static config blobs to upload to S3, keyed by node id.
     pub node_configs: HashMap<String, serde_json::Value>,
+    /// Auto-derived requirements manifest: ONE slot per distinct resource/pool
+    /// reference in the graph, typed by resolved `resource_type`, tagged with
+    /// the binding role, PLUS the per-slot AIR addresses the concrete baseline
+    /// baked (`pool-{resource_id}` net ids + `__resources` splice keys). The
+    /// publish path (Phase C) persists this whole manifest into
+    /// `workflow_templates.requirements_json`; the binding-aware launcher reads
+    /// `requirements.air_addresses` to substitute a different effective resource
+    /// without recompiling. SEPARATE from `interfaces` by design (the interface
+    /// registry must not be overloaded). Empty (no slots) ⇒ the template
+    /// launches byte-for-byte as today.
+    pub requirements: crate::compiler::requirements::RequirementsManifest,
 }
 
 /// Unified options-based compile entry. Replaces the three additive
@@ -374,10 +385,26 @@ pub fn compile_to_air_with_options(
         .map_err(|e| CompileError::Compilation(format!("failed to serialize scenario: {e}")))?;
     let interfaces = serde_json::to_value(&interfaces)
         .map_err(|e| CompileError::Compilation(format!("failed to serialize interfaces: {e}")))?;
+    // Derive the requirements manifest from the SAME resolved-resource view the
+    // lowering pipeline used (`KnownResources` lifted from `known_globals`), so
+    // each slot's `resource_type` + baked `pool-{id}` net id match what publish
+    // baked into `air`. A graph with no resource/pool refs ⇒ empty manifest.
+    let known_resources =
+        crate::compiler::named_global::resources_from_globals(opts.known_globals);
+    // The ENVELOPE-USED subset publish actually splices `__resources` for — a
+    // resource reached only as a control-flow constant is NOT in this set, so it
+    // derives no late-bindable slot / records no `resource_keys` (and thus the
+    // launcher's run-gate never treats it as a bindable requirement). Mirrors
+    // `splice_resources_from_globals`, the set the publish splice consumes.
+    let envelope_used =
+        crate::compiler::named_global::splice_resources_from_globals(opts.known_globals);
+    let requirements =
+        crate::compiler::requirements::derive_requirements(graph, &known_resources, &envelope_used)?;
     Ok(CompileArtifacts {
         air,
         interfaces,
         node_configs,
+        requirements,
     })
 }
 

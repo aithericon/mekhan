@@ -81,6 +81,24 @@ pub const POOL_REGISTER_INBOX: &str = "register_inbox";
 /// arcs to release_out" structurally (`lower_automated_step_pooled`).
 pub const POOL_RELEASE_INBOX: &str = "release_inbox";
 
+/// The pool net's claim-WITHDRAWAL queue
+/// (`bridge_in::<WithdrawRequest>("withdraw_inbox", …)`). A claimant net that is
+/// cancelled or fails permanently while its claim is still QUEUED (bridged to
+/// `claim_inbox` but not yet granted — parked at the instance's `p_<id>_pending`)
+/// bridges a `WithdrawRequest { grant_id }` here from a teardown FINALIZER;
+/// `t_withdraw` correlates it to the still-queued claim by `grant_id` and drops
+/// the claim. Without this, the orphaned claim sits in `claim_inbox` and is
+/// granted to the now-dead net the instant capacity arrives — stranding the unit
+/// (it is consumed from the pool by `t_grant` but never registered, since the
+/// dead net can't `t_acquire`) AND bouncing the grant reply against a terminal
+/// net (the cancelled-net bridge NACK/dead-letter the engine now classifies).
+/// The HELD-unit-on-teardown leak is covered separately by the instance's
+/// release finalizer (`release_inbox` + `t_release`). Covers Seeded + presence
+/// `Auto` pools (where the claim lingers in `claim_inbox`); under presence
+/// `Consent` the claim is moved to `offers` by `t_post_offer` before teardown,
+/// so a queued-claim withdrawal there is a no-op (documented residual).
+pub const POOL_WITHDRAW_INBOX: &str = "withdraw_inbox";
+
 // ── runner_group (Phase 3) ────────────────────────────────────────────────────────────────────────────────────────────────────
 //
 // A `runner_group` resource is a capacity-LESS pool: its capacity is driven by

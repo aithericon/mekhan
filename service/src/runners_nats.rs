@@ -29,8 +29,15 @@
 
 use std::path::PathBuf;
 
+use aithericon_executor_domain::{INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 use nats_io_jwt::{KeyPair, Permission, ResponsePermission, StringList, Token, User};
 use uuid::Uuid;
+
+/// Core-NATS subject the executor's cancel listener subscribes to
+/// (`executor.cancel.{execution_id}`, wildcarded). A runner/worker must receive
+/// cancellations for the executions it drains; mirror
+/// `aithericon_executor_domain::cancel_subject_filter(None)`.
+const EXECUTOR_CANCEL_FILTER: &str = "executor.cancel.*";
 
 /// Vault KV-v2 path (under the default `secret` mount) for the persisted
 /// account signing seed — resolves to
@@ -40,6 +47,22 @@ const VAULT_SEED_PATH: &str = "aithericon/runners/nats_signing_seed";
 const VAULT_SEED_FIELD: &str = "seed";
 /// Local file (under `data_dir`) holding the account signing seed.
 const SEED_FILE_NAME: &str = "runners_account_signing.nk";
+
+/// Shared apalis stream-family key for lab-runner-fleet job delivery. Mirrors
+/// `aithericon_executor_worker::config::RUNNER_JOBS_NAMESPACE` (`"runner-jobs"`);
+/// re-stated here to build the `$JS.API.*` pull allow-list for a runner's
+/// partition-keyed consumer without depending on the executor crate.
+const RUNNER_JOBS_NAMESPACE: &str = "runner-jobs";
+
+/// The three apalis priority lanes (apalis-nats `storage.rs`). Each maps to a
+/// per-priority stream `{namespace}_{prio}` + a partition-keyed durable.
+const PRIORITIES: [&str; 3] = ["high", "medium", "low"];
+
+/// The shared JetStream streams every executor daemon (runner OR worker) ensures
+/// at boot, before draining any job: the status/events fan-in + the chunked-data
+/// transport stream. A scoped JWT must be allowed `STREAM.INFO/CREATE/UPDATE` on
+/// these or it fails at startup before it can drain.
+const SHARED_STREAMS: [&str; 3] = ["EXECUTOR_STATUS", "EXECUTOR_EVENTS", "EXECUTOR_DATASTREAM"];
 
 /// Errors raised while minting a runner user JWT.
 #[derive(Debug, thiserror::Error)]
@@ -63,6 +86,14 @@ pub enum MintError {
 pub struct RunnerNatsSigner {
     account_kp: KeyPair,
     account_public_key: String,
+    /// The account *identity* public key, when `account_kp` is an account
+    /// **signing key** rather than the account identity itself. Set as the
+    /// minted user JWT's `issuer_account` claim so the NATS resolver can map the
+    /// signing-key issuer back to its account; required by NATS whenever a user
+    /// JWT is signed by a signing key. `None` when `account_kp` IS the account
+    /// identity (the standalone/dev auto-generate case) — then `iss` already is
+    /// the account and no `issuer_account` is needed.
+    issuer_account: Option<String>,
 }
 
 impl std::fmt::Debug for RunnerNatsSigner {
@@ -89,12 +120,35 @@ impl RunnerNatsSigner {
         Self {
             account_kp,
             account_public_key,
+            issuer_account: None,
         }
     }
 
-    /// Resolve the account signing keypair using the documented precedence.
-    /// Never fails: falls through to generate-and-persist on any miss.
+    /// Set the account identity public key for signing-key mode. When `account`
+    /// is non-empty AND differs from this signer's own public key (i.e.
+    /// `account_kp` is a signing key, not the account identity), it becomes the
+    /// `issuer_account` claim on every minted user JWT. A value equal to the
+    /// signer's own key — or empty — leaves `issuer_account` unset (the signer
+    /// already IS the account).
+    pub fn with_issuer_account(mut self, account: Option<String>) -> Self {
+        self.issuer_account = account
+            .map(|a| a.trim().to_owned())
+            .filter(|a| !a.is_empty() && a != &self.account_public_key);
+        self
+    }
+
+    /// Resolve the runner-signing signer: the keypair (by the documented seed
+    /// precedence) plus, when that keypair is an account **signing key**, the
+    /// account identity from `RUNNERS_NATS_ACCOUNT_ID` to stamp as
+    /// `issuer_account`. Never fails — falls through to generate-and-persist on
+    /// any miss.
     pub fn resolve() -> Self {
+        Self::from_keypair(Self::resolve_account_kp())
+            .with_issuer_account(std::env::var("RUNNERS_NATS_ACCOUNT_ID").ok())
+    }
+
+    /// Resolve just the account signing keypair using the documented precedence.
+    fn resolve_account_kp() -> KeyPair {
         // 1. Explicit seed from env always wins.
         if let Ok(seed) = std::env::var("RUNNERS_NATS_SIGNING_SEED") {
             let seed = seed.trim();
@@ -105,7 +159,7 @@ impl RunnerNatsSigner {
                             account = %kp.public_key(),
                             "runner NATS signing account: from RUNNERS_NATS_SIGNING_SEED"
                         );
-                        return Self::from_keypair(kp);
+                        return kp;
                     }
                     Err(e) => tracing::warn!(
                         error = %e,
@@ -128,7 +182,7 @@ impl RunnerNatsSigner {
                         path = %seed_file.display(),
                         "runner NATS signing account: from local seed file"
                     );
-                    return Self::from_keypair(kp);
+                    return kp;
                 }
                 Err(e) => tracing::warn!(
                     error = %e,
@@ -148,7 +202,7 @@ impl RunnerNatsSigner {
                     );
                     // Mirror it to the local file so it survives Vault wipes.
                     persist_seed_to_file(&data_dir, &seed_file, &seed);
-                    return Self::from_keypair(kp);
+                    return kp;
                 }
                 Err(e) => tracing::warn!(
                     error = %e,
@@ -175,7 +229,7 @@ impl RunnerNatsSigner {
             path = %seed_file.display(),
             "runner NATS signing account: generated a fresh account key (dev)"
         );
-        Self::from_keypair(kp)
+        kp
     }
 
     /// The account signing key's PUBLIC key (`A…`) — the issuer of every minted
@@ -188,9 +242,11 @@ impl RunnerNatsSigner {
     /// runner-supplied `user_public_key`. Signed by the account keypair.
     ///
     /// Scope (subject taxonomy, docs/21 §4.5):
-    ///   PUBLISH allow: `executor.status.{id}.>`, `executor.events.{id}.>`,
-    ///   `runner.{id}.presence`, and `{pool}.claim` (only when pooled).
-    ///   SUBSCRIBE allow: `runner.{id}.>`.
+    ///   PUBLISH allow: `executor.status.*.>`, `executor.events.*.>` (keyed by
+    ///   EXECUTION id, not the runner id), `runner.{id}.presence`, and
+    ///   `{pool}.claim` (only when pooled), plus the JetStream pull + shared
+    ///   stream API (see the helpers below).
+    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`.
     ///   Plus a ResponsePermission so async-nats request/reply works.
     /// The JWT carries no expiry (long-lived; rotation = re-mint).
     pub fn mint_runner_jwt(
@@ -206,8 +262,16 @@ impl RunnerNatsSigner {
         }
 
         let mut pub_allow = vec![
-            format!("executor.status.{runner_id}.>"),
-            format!("executor.events.{runner_id}.>"),
+            // Status/events subjects are keyed by EXECUTION id
+            // (`executor.status.mekhan-{ws}-{inst}-{node}.{status}`), NOT the
+            // runner id — a runner reports on whatever execution it currently
+            // drains. The earlier `{runner_id}` scoping never matched a real
+            // subject, so every status/event publish was denied and its
+            // JetStream ack timed out. `*` spans the exec id (same as the worker
+            // mint). Job delivery is partition-isolated at the consumer, so this
+            // wildcard publish doesn't widen what a runner can actually drain.
+            "executor.status.*.>".to_string(),
+            "executor.events.*.>".to_string(),
             format!("runner.{runner_id}.presence"),
         ];
         if let Some(pool) = pool {
@@ -225,13 +289,34 @@ impl RunnerNatsSigner {
                 pub_allow.push(format!("{pool}.claim"));
             }
         }
-        // Control/presence-adjacent subjects for this runner. Job delivery is
-        // NOT a core-NATS subscribe: presence-pool grants land on the SHARED
-        // `runner-jobs` JetStream stream, drained via a partition-filtered pull
-        // consumer (`runner-jobs.{prio}.{runner_id}.>`). Scoping that pull
-        // (JetStream `$JS.API.*` perms for the shared stream + this runner's
-        // durable) is a separate prod-hardening concern; dev NATS is open.
-        let sub_allow = vec![format!("runner.{runner_id}.>")];
+        // Job delivery is NOT a core-NATS subscribe: presence-pool grants land on
+        // the SHARED `runner-jobs` JetStream stream-set, drained via a
+        // partition-keyed pull consumer per priority
+        // (`runner-jobs_{prio}_{runner_id}_consumer`). Grant exactly the
+        // `$JS.API.*` ops that consumer needs (STREAM.INFO + CONSUMER
+        // CREATE/INFO/MSG.NEXT), its `$JS.ACK.>` reply subjects, and the
+        // `runner-jobs.dlq` publish — scoped to THIS runner's durable so it can
+        // bind and drain its lane but touch no other partition.
+        pub_allow.extend(jetstream_pull_pub_allow(
+            RUNNER_JOBS_NAMESPACE,
+            &runner_id.to_string(),
+        ));
+        // The shared status/events/datastream streams the daemon ensures at boot
+        // (STREAM.INFO/CREATE/UPDATE) + the chunked-data publish subject.
+        pub_allow.extend(jetstream_shared_stream_pub_allow());
+
+        // This runner's own control subject PLUS the request/reply mux inbox.
+        // async-nats subscribes ONCE to `_INBOX.>` (default prefix) and ALL
+        // JetStream pull deliveries and `$JS.API.*` replies arrive there. Without
+        // this the inbox subscribe is denied and draining silently dies — the
+        // `resp` ResponsePermission only lets a RESPONDER publish to learned
+        // reply subjects, NOT a requester subscribe to its own inbox.
+        let sub_allow = vec![
+            format!("runner.{runner_id}.>"),
+            "_INBOX.>".to_string(),
+            // Receive cancellations for executions this runner drains.
+            EXECUTOR_CANCEL_FILTER.to_string(),
+        ];
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -252,6 +337,9 @@ impl RunnerNatsSigner {
             .pub_(Some(pub_perm))
             .sub(Some(sub_perm))
             .resp(Some(resp_perm))
+            // When signing with an account signing key, the resolver needs the
+            // account identity here to map `iss` (the signing key) → account.
+            .issuer_account(self.issuer_account.clone())
             .try_into()
             .map_err(|e| MintError::BuildClaims(format!("user claims: {e}")))?;
 
@@ -298,7 +386,15 @@ impl RunnerNatsSigner {
             )));
         }
 
-        let mut sub_allow = vec![format!("worker.{worker_id}.>")];
+        // Own control subject + the request/reply mux inbox — same reason as the
+        // runner mint: all JetStream pull deliveries + `$JS.API.*` replies land
+        // on the default-prefix `_INBOX.>`, so without it draining silently dies.
+        let mut sub_allow = vec![
+            format!("worker.{worker_id}.>"),
+            "_INBOX.>".to_string(),
+            // Receive cancellations for executions this worker drains.
+            EXECUTOR_CANCEL_FILTER.to_string(),
+        ];
         if let Some(group) = group {
             if !group.is_empty() {
                 // Defense in depth: `group` is validated at the registration-token
@@ -331,11 +427,29 @@ impl RunnerNatsSigner {
         // A worker publishes its presence heartbeat and the per-job status/events
         // it drains. No `.claim` — that is the presence-push admission grant a
         // worker never participates in (it competes on a pull queue).
-        let pub_allow = vec![
+        let mut pub_allow = vec![
             format!("worker.{worker_id}.presence"),
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
         ];
+
+        // JetStream pull scope, one stream-family per advertised backend wire. A
+        // grouped worker is a competing pull consumer on the PARALLEL
+        // `executor-<wire>-grp` stream-set, keyed on its group's routing
+        // partition. Only meaningful when grouped (an ungrouped worker has no
+        // partition to bind a durable on, mirroring the subscribe-filter
+        // omission above).
+        if let Some(group) = group {
+            if !group.is_empty() {
+                for wire in backends {
+                    let ns = format!("{}-grp", aithericon_backends::executor_pool_namespace(wire));
+                    pub_allow.extend(jetstream_pull_pub_allow(&ns, group));
+                }
+            }
+        }
+        // The shared status/events/datastream streams every worker ensures at
+        // boot (the StatusReporter runs regardless of grouping).
+        pub_allow.extend(jetstream_shared_stream_pub_allow());
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -356,6 +470,8 @@ impl RunnerNatsSigner {
             .pub_(Some(pub_perm))
             .sub(Some(sub_perm))
             .resp(Some(resp_perm))
+            // Account identity for the resolver when signing with a signing key.
+            .issuer_account(self.issuer_account.clone())
             .try_into()
             .map_err(|e| MintError::BuildClaims(format!("user claims: {e}")))?;
 
@@ -468,6 +584,85 @@ fn vault_write_seed(seed: &str) {
     }
 }
 
+/// Build the `$JS.API.*` + ACK + DLQ **publish** allow-list a partition-keyed
+/// pull consumer needs to bind and drain one apalis stream-family.
+///
+/// `namespace` is the apalis stream-family key (`runner-jobs` for a runner,
+/// `executor-<wire>-grp` for a worker); `partition` is the durable's partition
+/// token (the runner_id UUID, or the worker group's routing-partition UUID). For
+/// each priority lane apalis `NatsStorage` creates a `{namespace}_{prio}` stream
+/// and a durable `{namespace}_{prio}_{partition}_consumer`; a pull consumer
+/// drives `STREAM.INFO` → `CONSUMER.CREATE` (CreateOrUpdate on every reconnect)
+/// → `CONSUMER.INFO` → `CONSUMER.MSG.NEXT`, and acks land on a server-assigned
+/// `$JS.ACK.{stream}.{consumer}.…` reply subject. All entries are PUBLISH
+/// subjects (the `$JS.API.*` reply rides the `_INBOX.>` subscribe). Both the
+/// 2-token and 3-token filtered consumer-create forms are granted (async-nats
+/// 0.42 sends the filtered variant for a single-filter pull consumer), plus the
+/// legacy `DURABLE.CREATE`. No `STREAM.CREATE/UPDATE` (job streams are
+/// pre-created in-cluster) and no `CONSUMER.DELETE` — keeping it tight.
+fn jetstream_pull_pub_allow(namespace: &str, partition: &str) -> Vec<String> {
+    let mut out = Vec::with_capacity(PRIORITIES.len() * 7 + 1);
+    for prio in PRIORITIES {
+        let stream = format!("{namespace}_{prio}");
+        let durable = format!("{stream}_{partition}_consumer");
+        out.push(format!("$JS.API.STREAM.INFO.{stream}"));
+        out.push(format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}"));
+        out.push(format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}.>"));
+        out.push(format!(
+            "$JS.API.CONSUMER.DURABLE.CREATE.{stream}.{durable}"
+        ));
+        out.push(format!("$JS.API.CONSUMER.INFO.{stream}.{durable}"));
+        out.push(format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"));
+        // Server-assigned ack reply subject tail → wildcard, scoped per
+        // (stream, durable) so an identity can only ack its own deliveries.
+        out.push(format!("$JS.ACK.{stream}.{durable}.>"));
+    }
+    // The apalis ack path publishes a dead-lettered job to the `{namespace}.dlq`
+    // SUBJECT on terminal failure, and `NatsStorage` resolves the backing
+    // `{namespace}_dlq` STREAM at init (`get_or_create` → STREAM.INFO). That
+    // stream is CLUSTER-OWNED — mekhan pre-creates it at startup
+    // (`MekhanNats::ensure_runner_jobs_dlq_stream`) — so the runner only needs
+    // INFO (to resolve it) + the publish subject, NOT STREAM.CREATE. A
+    // fleet-shared stream must never be creatable/reconfigurable by a scoped
+    // edge runner; with the stream pre-created, `get_or_create` resolves via
+    // INFO and never attempts a create.
+    let dlq_stream = format!("{namespace}_dlq");
+    out.push(format!("$JS.API.STREAM.INFO.{dlq_stream}"));
+    out.push(format!("{namespace}.dlq"));
+    out
+}
+
+/// Build the `$JS.API.STREAM.*` management + datastream publish allow-list for
+/// the [`SHARED_STREAMS`] every executor daemon ensures at boot.
+///
+/// Before draining, a runner/worker calls `StatusReporter::new`
+/// (→ `get_or_create_stream` on `EXECUTOR_STATUS` + `EXECUTOR_EVENTS`) and
+/// ensures `EXECUTOR_DATASTREAM`. `get_or_create_stream` issues
+/// `$JS.API.STREAM.INFO.{name}` and, when absent, `STREAM.CREATE`/`UPDATE` — so
+/// a scoped JWT lacking these fails at startup. The status/events PUBLISH
+/// subjects are granted at the call site; this adds the stream-management API
+/// plus the chunked-data publish subject. No `STREAM.DELETE/PURGE` — these are
+/// shared streams a scoped identity must never tear down.
+fn jetstream_shared_stream_pub_allow() -> Vec<String> {
+    let mut out = Vec::with_capacity(SHARED_STREAMS.len() * 3 + 1);
+    for stream in SHARED_STREAMS {
+        out.push(format!("$JS.API.STREAM.INFO.{stream}"));
+        out.push(format!("$JS.API.STREAM.CREATE.{stream}"));
+        out.push(format!("$JS.API.STREAM.UPDATE.{stream}"));
+    }
+    out.push("executor.datastream.*.>".to_string());
+
+    // The executor's `FoldSink` (docs/32 batch-fold transport) resolves the
+    // `INVENTORY_FOLD` stream at boot and publishes `FoldBatch`es to
+    // `inventory.fold.batch.>`. That stream is CLUSTER-OWNED — mekhan's
+    // inventory-fold ingest consumer creates it at startup (always before a
+    // runner connects) — so the runner only needs INFO (to resolve it) + the
+    // batch publish subject, never STREAM.CREATE.
+    out.push(format!("$JS.API.STREAM.INFO.{INVENTORY_FOLD_STREAM}"));
+    out.push(format!("{INVENTORY_FOLD_SUBJECT}.>"));
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,8 +707,9 @@ mod tests {
         assert_eq!(claims["sub"], user_pub);
 
         let pub_allow = allow_list(&claims, "pub");
-        assert!(pub_allow.contains(&format!("executor.status.{id}.>")));
-        assert!(pub_allow.contains(&format!("executor.events.{id}.>")));
+        // Status/events keyed by exec id, not runner id → wildcard span.
+        assert!(pub_allow.contains(&"executor.status.*.>".to_string()));
+        assert!(pub_allow.contains(&"executor.events.*.>".to_string()));
         assert!(pub_allow.contains(&format!("runner.{id}.presence")));
         assert!(pub_allow.contains(&format!("{pool}.claim")));
 
@@ -522,6 +718,105 @@ mod tests {
 
         // ResponsePermission present so request/reply works.
         assert!(claims["nats"]["resp"].is_object());
+    }
+
+    #[test]
+    fn signing_key_mode_sets_issuer_account() {
+        // Signer keypair is an account *signing key*; a distinct account
+        // identity is supplied → every minted JWT must stamp it as
+        // `issuer_account` so the resolver can map `iss` (the signing key) back
+        // to the account. Without this NATS rejects with `authorization
+        // violation`.
+        let account_identity = KeyPair::new_account().public_key();
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account())
+            .with_issuer_account(Some(account_identity.clone()));
+
+        let user_pub = KeyPair::new_user().public_key();
+        let jwt = signer
+            .mint_runner_jwt(&user_pub, Uuid::new_v4(), Some("lab"))
+            .expect("mint should succeed");
+        let claims = decode_claims(&jwt);
+
+        assert_eq!(claims["iss"], signer.account_public_key());
+        assert_eq!(claims["nats"]["issuer_account"], account_identity);
+
+        // Workers ride the same signer → same issuer_account stamping.
+        let wjwt = signer
+            .mint_worker_jwt(&user_pub, Uuid::new_v4(), Some("grp"), &["python".into()])
+            .expect("worker mint should succeed");
+        assert_eq!(
+            decode_claims(&wjwt)["nats"]["issuer_account"],
+            account_identity
+        );
+    }
+
+    #[test]
+    fn runner_jwt_grants_jetstream_pull_and_inbox_scope() {
+        // Regression: a runner connecting to a real (auth-enabled) NATS needs
+        // `_INBOX.>` (sub) + `$JS.API.*`/`$JS.ACK.>` (pub) or it fails with
+        // `Permissions Violation` at consumer-bind / stream-ensure and never
+        // drains. Lock the exact subjects the apalis pull consumer drives.
+        let signer = RunnerNatsSigner::from_keypair(KeyPair::new_account());
+        let id = Uuid::new_v4();
+        let jwt = signer
+            .mint_runner_jwt(&KeyPair::new_user().public_key(), id, Some("lab"))
+            .expect("mint should succeed");
+        let claims = decode_claims(&jwt);
+
+        let sub = allow_list(&claims, "sub");
+        assert!(
+            sub.contains(&"_INBOX.>".to_string()),
+            "needs _INBOX.> subscribe"
+        );
+        assert!(
+            sub.contains(&EXECUTOR_CANCEL_FILTER.to_string()),
+            "needs executor.cancel.* subscribe for the cancel listener"
+        );
+
+        let pub_allow = allow_list(&claims, "pub");
+        let stream = format!("{RUNNER_JOBS_NAMESPACE}_high");
+        let durable = format!("{stream}_{id}_consumer");
+        for want in [
+            format!("$JS.API.STREAM.INFO.{stream}"),
+            format!("$JS.API.CONSUMER.CREATE.{stream}.{durable}.>"),
+            format!("$JS.API.CONSUMER.MSG.NEXT.{stream}.{durable}"),
+            format!("$JS.ACK.{stream}.{durable}.>"),
+            format!("{RUNNER_JOBS_NAMESPACE}.dlq"),
+            // INVENTORY_FOLD (FoldSink): cluster-created → INFO + publish only.
+            format!("$JS.API.STREAM.INFO.{INVENTORY_FOLD_STREAM}"),
+            format!("{INVENTORY_FOLD_SUBJECT}.>"),
+            format!("$JS.API.STREAM.INFO.{RUNNER_JOBS_NAMESPACE}_dlq"),
+            "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
+            "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
+        ] {
+            assert!(pub_allow.contains(&want), "missing pub grant: {want}");
+        }
+
+        // Consumer-only: a scoped runner must NOT be able to create/reconfigure
+        // the fleet-shared DLQ stream — mekhan pre-creates it cluster-side.
+        let dlq_create = format!("$JS.API.STREAM.CREATE.{RUNNER_JOBS_NAMESPACE}_dlq");
+        assert!(
+            !pub_allow.contains(&dlq_create),
+            "runner must NOT be granted STREAM.CREATE on the shared DLQ"
+        );
+    }
+
+    #[test]
+    fn identity_signer_omits_issuer_account() {
+        // When the signer IS the account identity (issuer == own key, or empty),
+        // no issuer_account is stamped — `iss` already is the account.
+        let kp = KeyPair::new_account();
+        let own = kp.public_key();
+        let signer = RunnerNatsSigner::from_keypair(kp).with_issuer_account(Some(own));
+
+        let user_pub = KeyPair::new_user().public_key();
+        let jwt = signer
+            .mint_runner_jwt(&user_pub, Uuid::new_v4(), None)
+            .expect("mint should succeed");
+        assert!(
+            decode_claims(&jwt)["nats"]["issuer_account"].is_null(),
+            "issuer_account must be absent when the signer is the account identity"
+        );
     }
 
     #[test]

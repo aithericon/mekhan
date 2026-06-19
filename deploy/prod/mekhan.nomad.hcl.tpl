@@ -192,11 +192,36 @@ MEKHAN__S3__SECRET_KEY={{ .Data.data.s3_secret_key }}
 EOH
       }
 
+      # Runner-signing key (mekhan zero-secret enrollment). The `signing_seed` is
+      # a signing key OF the mekhan-<env> NATS account, listed in the pushed
+      # account JWT — so scoped runner JWTs mekhan mints with it are trusted by
+      # the resolver. Rendered as an env var (env = true) so it wins over
+      # RunnerNatsSigner's local-file / auto-generate fallbacks; without it
+      # mekhan auto-generates an untrusted account key and every runner connect
+      # fails `authorization violation`. Provisioned out-of-band (the account
+      # path is populated by scripts/generate-nats-user.sh + a manual
+      # `nsc edit account --sk generate`; see deploy/README.md).
+      template {
+        destination = "secrets/runner-signing.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "secret/data/${nats_account_kv_path}" }}
+RUNNERS_NATS_SIGNING_SEED={{ .Data.data.signing_seed }}
+RUNNERS_NATS_ACCOUNT_ID={{ .Data.data.public_key }}
+{{- end }}
+EOH
+      }
+
       env {
         MEKHAN__HOST          = "0.0.0.0"
         MEKHAN__PORT          = "${service_port}"
         MEKHAN__NATS_URL      = "${nats_url}"
         MEKHAN__NATS_CREDS    = "$${NOMAD_SECRETS_DIR}/nats.creds"
+        # Public WebSocket front door advertised to enrolled external runners so
+        # a bare daemon needs no EXECUTOR_NATS_URL. Distinct from MEKHAN__NATS_URL
+        # (mekhan's own internal mesh connection).
+        MEKHAN__RUNNER_NATS_PUBLIC_URL = "${runner_nats_public_url}"
         MEKHAN__PETRI_LAB_URL = "${petri_lab_url}"
         MEKHAN__S3__ENDPOINT  = "${s3_endpoint}"
         MEKHAN__S3__BUCKET    = "${s3_bucket}"

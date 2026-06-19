@@ -299,8 +299,90 @@ pub async fn create(
     if let Some(ep) = &req.endpoint {
         insert_endpoint_tx(&mut tx, server.id, ep).await?;
     }
+
+    // Self-heal the crawl/register race: inventory folds run BEFORE a server is
+    // registered (the crawl publishes fold batches; `adopt`/`create` mints the
+    // server row later), so rows for this key may have landed in the nil
+    // workspace (`fold::resolve_server_workspace` falls back to nil when no
+    // server resolves). Now that the key has a real owner, claim those stranded
+    // nil rows into this workspace — same tx as the insert, so registration and
+    // re-homing commit atomically.
+    restamp_stranded_nil_rows(&mut tx, &req.key, workspace_id).await?;
+
     tx.commit().await?;
     Ok(server)
+}
+
+/// Nil/default workspace — the sentinel the fold ingest stamps onto inventory
+/// for a not-yet-registered server (matches `file_inventory.workspace_id`'s
+/// column DEFAULT and `fold::resolve_server_workspace`'s fallback).
+const NIL_WORKSPACE: Uuid = Uuid::nil();
+
+/// Re-home a freshly registered server's stranded crawl rows from the nil
+/// workspace into `workspace_id`. No-op when `workspace_id` is itself nil (the
+/// platform object-store seed) or when nothing crawled before registration.
+///
+/// Touches three tables, ONLY moving rows currently parked in the nil
+/// workspace (never stealing another tenant's rows):
+///   1. `file_inventory` — the physical copies, keyed by `file_server_id`.
+///   2. `inventory_snapshots` — the analytics rollups, same key.
+///   3. `catalogue_entries` — the logical entries, linked by `content_hash`
+///      (catalogue rows carry no server id). Only entries whose hash this
+///      server's inventory references are moved, and only when the destination
+///      workspace has no entry for that hash yet (the `(workspace_id,
+///      content_hash)` UNIQUE would otherwise collide — a pre-existing entry
+///      wins and the nil duplicate is left orphaned).
+async fn restamp_stranded_nil_rows(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    key: &str,
+    workspace_id: Uuid,
+) -> Result<(), QueryError> {
+    if workspace_id == NIL_WORKSPACE {
+        return Ok(());
+    }
+
+    sqlx::query(
+        "UPDATE file_inventory SET workspace_id = $1 \
+          WHERE file_server_id = $2 AND workspace_id = $3",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .bind(NIL_WORKSPACE)
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE inventory_snapshots SET workspace_id = $1 \
+          WHERE file_server_id = $2 AND workspace_id = $3",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .bind(NIL_WORKSPACE)
+    .execute(&mut **tx)
+    .await?;
+
+    sqlx::query(
+        "UPDATE catalogue_entries dst SET workspace_id = $1 \
+          WHERE dst.workspace_id = $3 \
+            AND dst.content_hash IS NOT NULL \
+            AND dst.content_hash IN ( \
+                  SELECT content_hash FROM file_inventory \
+                   WHERE file_server_id = $2 AND content_hash IS NOT NULL \
+                     AND workspace_id = $1 \
+            ) \
+            AND NOT EXISTS ( \
+                  SELECT 1 FROM catalogue_entries other \
+                   WHERE other.workspace_id = $1 \
+                     AND other.content_hash = dst.content_hash \
+            )",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .bind(NIL_WORKSPACE)
+    .execute(&mut **tx)
+    .await?;
+
+    Ok(())
 }
 
 /// Whether a server already exists at `(workspace_id, key)`.

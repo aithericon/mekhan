@@ -59,6 +59,16 @@ resource "vault_policy" "mekhan_nats_read" {
     capabilities = ["read"]
   }
 
+  # Account-level NATS material — mekhan reads `signing_seed` here to mint scoped
+  # runner JWTs under the mekhan-<env> account (RUNNERS_NATS_SIGNING_SEED).
+  path "secret/data/${local.nats_account_kv_path}" {
+    capabilities = ["read"]
+  }
+
+  path "secret/metadata/${local.nats_account_kv_path}" {
+    capabilities = ["read"]
+  }
+
   # Worker-pool enrollment token (executor self-enroll). Reusable `wt_` token,
   # rendered into EXECUTOR_WORKER_REG_TOKEN by executor.nomad.hcl.tpl.
   path "secret/data/${local.executor_reg_token_path}" {

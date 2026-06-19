@@ -20,17 +20,22 @@ const UNCATALOGUED_PEEK: i64 = 50;
 /// TTL for the uncatalogued count+peek cache (see [`uncatalogued_cached`]).
 const UNCATALOGUED_TTL: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Process-wide cache for the uncatalogued section of the response.
+/// Per-workspace cache for the uncatalogued section of the response.
 ///
-/// The anti-join COUNT (+ the peek's `ORDER BY updated_at` sort) scans all of
-/// `file_inventory` — fine at demo scale, a multi-second full pass per
-/// pageview at the 4M-file corpus. The section is workspace-global (the
-/// underlying queries carry no workspace filter), so one short-TTL entry
-/// serves every request; 15 s staleness is invisible next to a crawl
-/// campaign's own batch cadence. `(checked_at, count, peek_rows)`.
-static UNCATALOGUED_CACHE: tokio::sync::RwLock<
-    Option<(std::time::Instant, i64, Vec<InventoryEntry>)>,
-> = tokio::sync::RwLock::const_new(None);
+/// The anti-join COUNT (+ the peek's `ORDER BY updated_at` sort) scans this
+/// workspace's slice of `file_inventory` — fine at demo scale, a multi-second
+/// full pass per pageview at the 4M-file corpus. The section is now
+/// workspace-SCOPED (both underlying queries filter `fi.workspace_id`), so the
+/// cache is keyed by workspace — one short-TTL entry per tenant, never shared
+/// across tenants (the prior process-wide single entry leaked one workspace's
+/// filenames/paths into every other workspace's response). 15 s staleness is
+/// invisible next to a crawl campaign's own batch cadence. Value:
+/// `(checked_at, count, peek_rows)`.
+/// One cache slot: `(checked_at, count, peek_rows)` for a single workspace.
+type UncataloguedSlot = (std::time::Instant, i64, Vec<InventoryEntry>);
+
+static UNCATALOGUED_CACHE: tokio::sync::RwLock<Option<HashMap<Uuid, UncataloguedSlot>>> =
+    tokio::sync::RwLock::const_new(None);
 
 /// Resolve `file_server_id` (== `file_servers.key`) → (display_name, kind) for a
 /// workspace's servers. `kind` now lives on the child endpoints, so we surface
@@ -126,10 +131,14 @@ pub async fn list_entries(
         .collect();
     let mut copies_by_hash: HashMap<String, Vec<DataCopy>> = HashMap::new();
     if !hashes.is_empty() {
+        // Scope copies to this workspace's inventory — a content hash shared
+        // across tenants must NOT surface another workspace's physical copies
+        // (server id / path / status) on this page.
         let rows = sqlx::query_as::<_, InventoryEntry>(
-            "SELECT * FROM file_inventory WHERE content_hash = ANY($1)",
+            "SELECT * FROM file_inventory WHERE content_hash = ANY($1) AND workspace_id = $2",
         )
         .bind(&hashes)
+        .bind(workspace_id)
         .fetch_all(pool)
         .await?;
         for r in rows {
@@ -171,7 +180,7 @@ pub async fn list_entries(
     //    Served through the short-TTL cache; per-request server resolution
     //    (display name / servable) still happens below, so a server rename or
     //    endpoint verify shows up immediately even on a cached peek.
-    let (uncatalogued_count, peek_rows) = uncatalogued_cached(pool).await?;
+    let (uncatalogued_count, peek_rows) = uncatalogued_cached(pool, workspace_id).await?;
     let uncatalogued = peek_rows
         .into_iter()
         .map(|r| {
@@ -194,28 +203,42 @@ pub async fn list_entries(
     })
 }
 
-/// Count + peek of uncatalogued inventory rows, through [`UNCATALOGUED_CACHE`].
-async fn uncatalogued_cached(pool: &PgPool) -> Result<(i64, Vec<InventoryEntry>), sqlx::Error> {
-    if let Some((at, count, rows)) = UNCATALOGUED_CACHE.read().await.as_ref() {
-        if at.elapsed() < UNCATALOGUED_TTL {
-            return Ok((*count, rows.clone()));
+/// Count + peek of a workspace's uncatalogued inventory rows, through the
+/// per-workspace [`UNCATALOGUED_CACHE`]. Both the anti-join COUNT and the peek
+/// filter `fi.workspace_id`, and the catalogue side of the anti-join is matched
+/// within the same workspace — an inventory row counts as "catalogued" only if
+/// THIS workspace registered its hash, never another tenant's.
+async fn uncatalogued_cached(
+    pool: &PgPool,
+    workspace_id: Uuid,
+) -> Result<(i64, Vec<InventoryEntry>), sqlx::Error> {
+    if let Some(map) = UNCATALOGUED_CACHE.read().await.as_ref() {
+        if let Some((at, count, rows)) = map.get(&workspace_id) {
+            if at.elapsed() < UNCATALOGUED_TTL {
+                return Ok((*count, rows.clone()));
+            }
         }
     }
 
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*)::bigint FROM file_inventory fi \
-         LEFT JOIN catalogue_entries c ON c.content_hash = fi.content_hash \
-         WHERE c.entry_id IS NULL",
+         LEFT JOIN catalogue_entries c \
+                ON c.content_hash = fi.content_hash AND c.workspace_id = fi.workspace_id \
+         WHERE fi.workspace_id = $1 AND c.entry_id IS NULL",
     )
+    .bind(workspace_id)
     .fetch_one(pool)
     .await?;
 
     let rows = if count > 0 {
         sqlx::query_as::<_, InventoryEntry>(
             "SELECT fi.* FROM file_inventory fi \
-             LEFT JOIN catalogue_entries c ON c.content_hash = fi.content_hash \
-             WHERE c.entry_id IS NULL ORDER BY fi.updated_at DESC LIMIT $1",
+             LEFT JOIN catalogue_entries c \
+                    ON c.content_hash = fi.content_hash AND c.workspace_id = fi.workspace_id \
+             WHERE fi.workspace_id = $1 AND c.entry_id IS NULL \
+             ORDER BY fi.updated_at DESC LIMIT $2",
         )
+        .bind(workspace_id)
         .bind(UNCATALOGUED_PEEK)
         .fetch_all(pool)
         .await?
@@ -223,6 +246,13 @@ async fn uncatalogued_cached(pool: &PgPool) -> Result<(i64, Vec<InventoryEntry>)
         Vec::new()
     };
 
-    *UNCATALOGUED_CACHE.write().await = Some((std::time::Instant::now(), count, rows.clone()));
+    UNCATALOGUED_CACHE
+        .write()
+        .await
+        .get_or_insert_with(HashMap::new)
+        .insert(
+            workspace_id,
+            (std::time::Instant::now(), count, rows.clone()),
+        );
     Ok((count, rows))
 }

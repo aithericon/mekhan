@@ -380,13 +380,14 @@ async fn fork_one_template(
         r#"
         INSERT INTO workflow_templates
             (id, name, description, base_template_id, version, is_latest, published,
-             published_at, published_by, graph, air_json, interface_json, author_id,
+             published_at, published_by, graph, air_json, interface_json,
+             requirements_json, author_id,
              workspace_id, visibility, presentation, forked_from, template_kind,
              lifecycle_status, updated_by)
         VALUES ($1, $2, $3, $1, 1, TRUE, $4,
                 CASE WHEN $4 THEN NOW() ELSE NULL END,
                 CASE WHEN $4 THEN $5 ELSE NULL END,
-                $6, $7, $8, $5, $9, 'workspace', $10, $11, 'workflow', 'active', $5)
+                $6, $7, $8, $12, $5, $9, 'workspace', $10, $11, 'workflow', 'active', $5)
         RETURNING *
         "#,
     )
@@ -401,6 +402,11 @@ async fn fork_one_template(
     .bind(target_ws)
     .bind(&source.presentation)
     .bind(&forked_from)
+    // $12 — carry the auto-derived requirements manifest so the fork stays
+    // binding-aware (readiness + run-gate apply). Without this the fork would
+    // be a NULL-manifest legacy template and silently launch on the SOURCE
+    // workspace's baked baseline resources (cross-tenant).
+    .bind(&source.requirements_json)
     .fetch_one(&state.db)
     .await
     .map_err(|e| {
@@ -420,7 +426,127 @@ async fn fork_one_template(
         tracing::error!("failed to init Y.Doc for forked template {new_id}: {e}");
     }
 
+    // Resource/pool bindings are RUN-TIME parameters, not part of the
+    // definition: the source's per-workspace `template_resource_bindings` rows
+    // belong to the SOURCE workspace and are deliberately NOT copied. The fork's
+    // `requirements_json` rides along in the row above (so its manifest +
+    // home-baseline AIR addresses are intact), but every slot starts unbound in
+    // the target workspace except where a best-effort path-match finds a local
+    // equivalent. Non-fatal: a failure here just leaves slots unbound (the
+    // readiness surface flags them), never blocks the fork.
+    if let Err(e) = seed_fork_binding_defaults(state, source, &template, target_ws, principal).await
+    {
+        tracing::warn!(
+            new_template_id = %template.id,
+            source_template_id = %source.id,
+            workspace = %target_ws,
+            error = ?e,
+            "fork: best-effort binding default seed failed; fork left with unbound slots"
+        );
+    }
+
     Ok(template)
+}
+
+/// Best-effort seed of per-workspace DEFAULT bindings for a freshly-forked
+/// template, by path-matching the source's requirement slots against resources
+/// in the FORK TARGET workspace.
+///
+/// A requirement slot's `key` IS the binding alias, which is the workspace-scoped
+/// resource PATH (the compiler resolves an alias by `resources.path = alias`; see
+/// `process::discover`). So for each slot we look for a resource in the target
+/// workspace whose `path` equals the slot key AND whose `resource_type` matches
+/// the slot's declared type. When one exists we write a `template_resource_bindings`
+/// row pinning that slot to it (tier 2 — a per-workspace default).
+///
+/// Deliberately omitted:
+/// - **Platform-scoped resources** need NO row — the launcher's tier-3 platform
+///   auto-bind matches them by type at launch. Seeding a row would just duplicate
+///   that, and (worse) pin the fork to one platform resource even if a better
+///   tenant resource appears later. We only seed TENANT (`workspace_id =
+///   target_ws`) matches.
+/// - **No match** → the slot is left unbound so the readiness surface
+///   (`GET /templates/{id}/requirements`) flags it as "needs configuration".
+///
+/// Keyed by `(chain_root_id, target_ws, slot_key)` to match
+/// `put_template_bindings`; `ON CONFLICT DO NOTHING` so a fork never clobbers an
+/// existing default a concurrent caller may have set.
+async fn seed_fork_binding_defaults(
+    state: &AppState,
+    source: &WorkflowTemplate,
+    forked: &WorkflowTemplate,
+    target_ws: Uuid,
+    principal: Uuid,
+) -> Result<(), ApiError> {
+    // Decode the source manifest off its `requirements_json`. NULL / empty
+    // (pre-feature row, or no resource refs) → nothing to seed.
+    let manifest: crate::compiler::RequirementsManifest = match source.requirements_json.as_ref() {
+        Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        None => return Ok(()),
+    };
+    if manifest.is_empty() {
+        return Ok(());
+    }
+
+    let chain_root_id = forked.chain_root_id();
+    let mut seeded = 0u32;
+    for slot in &manifest.slots {
+        // A DataResource slot with no resolved type (analyze-path fallback)
+        // can't be type-matched — skip; it falls through to unbound.
+        if slot.resource_type.is_empty() {
+            continue;
+        }
+
+        // Path-match a TENANT resource in the target workspace: same path
+        // (== the slot alias) AND same resource_type, not soft-deleted.
+        // Platform rows are excluded — they auto-bind at launch (tier 3).
+        let matched: Option<(Uuid, i32)> = sqlx::query_as(
+            "SELECT id, latest_version FROM resources \
+             WHERE workspace_id = $1 AND path = $2 AND resource_type = $3 \
+               AND scope_kind <> 'platform' AND deleted_at IS NULL \
+             LIMIT 1",
+        )
+        .bind(target_ws)
+        .bind(&slot.key)
+        .bind(&slot.resource_type)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("fork: binding match query failed: {e}")))?;
+
+        let Some((resource_id, _latest_version)) = matched else {
+            continue;
+        };
+
+        // Default to the resource's latest_version (NULL pin) — matching the
+        // tier-2 default semantics in `put_template_bindings`.
+        let inserted = sqlx::query(
+            "INSERT INTO template_resource_bindings \
+                (chain_root_id, workspace_id, slot_key, resource_id, resource_version, \
+                 created_by, updated_by) \
+             VALUES ($1, $2, $3, $4, NULL, $5, $5) \
+             ON CONFLICT (chain_root_id, workspace_id, slot_key) DO NOTHING",
+        )
+        .bind(chain_root_id)
+        .bind(target_ws)
+        .bind(&slot.key)
+        .bind(resource_id)
+        .bind(principal)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("fork: seed binding default failed: {e}")))?;
+        seeded += inserted.rows_affected() as u32;
+    }
+
+    if seeded > 0 {
+        tracing::info!(
+            new_template_id = %forked.id,
+            workspace = %target_ws,
+            seeded,
+            slots = manifest.slots.len(),
+            "fork: path-matched binding defaults seeded for fork"
+        );
+    }
+    Ok(())
 }
 
 /// Home a (just-forked) template in a folder of the target workspace. Keys on

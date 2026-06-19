@@ -184,6 +184,7 @@ pub fn test_config() -> AppConfig {
             .unwrap_or_else(|_| "http://localhost:13030".to_string()),
         nats_url: nats_url(),
         nats_creds: None,
+        runner_nats_public_url: None,
         cleanup: CleanupConfig::default(),
         analytics: Default::default(),
         wait_timeout_secs: 30,

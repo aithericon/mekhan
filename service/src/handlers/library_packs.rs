@@ -576,6 +576,11 @@ pub async fn import_pack(
             interface_json,
             node_configs,
             metrics,
+            // Library-node import persists no per-node requirements manifest:
+            // a pack node is embedded by reference as a sub-workflow, never
+            // launched standalone, so its slots are derived (and bound) by the
+            // parent that embeds it at publish.
+            ..
         } = publisher
             .compile_artifacts(
                 &p.graph,
