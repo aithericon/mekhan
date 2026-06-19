@@ -932,6 +932,12 @@ pub fn build_router(state: AppState) -> Router {
             "/api/storage/fold",
             axum::routing::post(handlers::storage::fold_ingest),
         )
+        // This router is `.merge`d in AFTER the `protected` router's
+        // `DefaultBodyLimit` layer, so it does NOT inherit it — without an
+        // explicit layer it falls back to axum's 2 MiB default, which a fold
+        // batch (sized to the 8 MiB NATS `max_payload`) or an artifact blob PUT
+        // overruns with a 413. Match the protected router's 50 MiB ceiling.
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::extractor::require_auth_middleware,
