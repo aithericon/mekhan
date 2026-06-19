@@ -119,6 +119,7 @@ async fn run_spec(spec: ExecutionSpec, tmp: std::path::PathBuf, eid: &str) -> Ex
         Some(store as Arc<dyn SecretStore>),
         None,
         None,
+        None,
     );
     let job = ExecutionJob {
         execution_id: eid.to_string(),

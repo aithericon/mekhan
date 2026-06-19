@@ -95,6 +95,7 @@ async fn secret_template_stays_on_disk_plaintext_only_reaches_child() {
         None, // no global artifact store
         Some(secret_store.clone() as Arc<dyn SecretStore>),
         None, // no vault addr — falls through to direct store resolution
+        None, // no broker secrets
         None, // no nix hook
     );
 
@@ -283,7 +284,7 @@ async fn no_secret_store_means_no_resolution_at_all() {
         uuid_like()
     ));
 
-    let pipeline = default_pipeline(tmp.clone(), None, None, None, None);
+    let pipeline = default_pipeline(tmp.clone(), None, None, None, None, None);
     let backend = ProcessBackend::new();
 
     let process_spec = echo_env_to_file_spec();
@@ -384,6 +385,7 @@ async fn inline_input_secret_is_resolved_in_staged_file_only() {
         tmp.clone(),
         None,
         Some(secret_store.clone() as Arc<dyn SecretStore>),
+        None,
         None,
         None,
     );
@@ -528,6 +530,7 @@ async fn inline_input_without_secret_template_is_not_diverted() {
         tmp.clone(),
         None,
         Some(secret_store.clone() as Arc<dyn SecretStore>),
+        None,
         None,
         None,
     );

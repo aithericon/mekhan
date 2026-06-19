@@ -368,6 +368,94 @@ impl ArtifactStore {
         Ok((bytes, content_type))
     }
 
+    /// Retrieve a file, returning `None` (not an error) when the object is
+    /// absent. The runner storage-broker GET proxy uses this so a genuinely
+    /// missing key maps to HTTP 404 (→ `StorageError::NotFound` on the brokered
+    /// store) rather than a 502, keeping the executor's not-found semantics.
+    pub async fn get_file_opt(
+        &self,
+        key: &str,
+    ) -> Result<Option<(Vec<u8>, String)>, ArtifactStoreError> {
+        let resp = match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(resp) => resp,
+            Err(e) => {
+                let svc = e.into_service_error();
+                if svc.is_no_such_key() {
+                    return Ok(None);
+                }
+                return Err(ArtifactStoreError::S3(format!("get {key}: {svc}")));
+            }
+        };
+
+        let content_type = resp
+            .content_type()
+            .unwrap_or("application/octet-stream")
+            .to_string();
+        let bytes = resp
+            .body
+            .collect()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("read body {key}: {e}")))?
+            .into_bytes()
+            .to_vec();
+        Ok(Some((bytes, content_type)))
+    }
+
+    /// Write raw bytes to an arbitrary object key. The generic PUT counterpart
+    /// of [`Self::get_file`] — used by the runner storage-broker proxy
+    /// (`PUT /api/v1/storage/blob/{key}`) so an external zero-secret runner can
+    /// promote `kind:"file"` outputs into the artifact bucket through mekhan
+    /// instead of holding static S3 creds. The key is authorized + (where
+    /// applicable) workspace-scoped by the caller BEFORE it reaches here.
+    pub async fn put_file(
+        &self,
+        key: &str,
+        bytes: Vec<u8>,
+        content_type: &str,
+    ) -> Result<(), ArtifactStoreError> {
+        self.client
+            .put_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .body(ByteStream::from(bytes))
+            .content_type(content_type)
+            .send()
+            .await
+            .map_err(|e| ArtifactStoreError::S3(format!("put {key}: {e}")))?;
+        Ok(())
+    }
+
+    /// Whether an object exists at `key` (HEAD). Used by the runner storage
+    /// broker's `exists` op so the brokered `ArtifactStore` can answer without
+    /// pulling the whole body.
+    pub async fn object_exists(&self, key: &str) -> Result<bool, ArtifactStoreError> {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(_) => Ok(true),
+            Err(e) => {
+                let svc = e.into_service_error();
+                if svc.is_not_found() {
+                    Ok(false)
+                } else {
+                    Err(ArtifactStoreError::S3(format!("head {key}: {svc}")))
+                }
+            }
+        }
+    }
+
     /// Mint a time-limited presigned GET URL for `key`.
     ///
     /// Used by the file-server serve bridge (docs/32 Phase 3b) to 302 a browser

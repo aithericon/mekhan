@@ -113,6 +113,7 @@ impl ExecutorTestContext {
             store,
             None, // No secret store in tests
             None, // No vault addr in tests
+            None, // No broker secrets in tests
             None, // No nix hook in tests
         ));
 

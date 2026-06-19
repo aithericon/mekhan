@@ -95,6 +95,12 @@ struct EnrolledRunner {
     /// when mekhan has no public URL configured.
     #[serde(default)]
     nats_url: Option<String>,
+    /// Brokered storage base URL — the mekhan blob-proxy origin
+    /// (`{base}/api/storage/blob`) when it differs from the control plane. `None`
+    /// when the control-plane origin (the `--url` arg) doubles as the storage
+    /// origin; the daemon's effective broker base is `storage_url ?? mekhan_url`.
+    #[serde(default)]
+    storage_url: Option<String>,
 }
 
 /// Response body of `POST /api/v1/runners/{id}/nats-creds` — shared wire
@@ -159,6 +165,17 @@ struct RunnerIdentity<'a> {
     /// `nats_url`. Omitted from the JSON when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     nats_url: Option<&'a str>,
+    /// The mekhan base URL this runner enrolled against (the `register --url`
+    /// arg). The daemon reads this back in `ExecutorConfig::normalize()` to reach
+    /// the zero-secret brokers (blob proxy + secret-unwrap proxy) with no
+    /// `EXECUTOR_MEKHAN_URL`. Always written (we know the enroll base).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mekhan_url: Option<&'a str>,
+    /// Brokered storage base URL from the enroll response, when distinct from the
+    /// control-plane origin. Omitted when absent (effective broker base then
+    /// falls back to `mekhan_url`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage_url: Option<&'a str>,
 }
 
 /// Entry point for the `register` subcommand. Reads `std::env::args()` and
@@ -224,11 +241,17 @@ pub async fn register() -> Result<(), BoxErr> {
     std::fs::create_dir_all(&runner_dir)
         .map_err(|e| format!("failed to create {}: {e}", runner_dir.display()))?;
 
+    // Persist BOTH the enroll base (so the daemon can reach the brokers) and the
+    // optional storage_url override. The effective broker base the daemon uses is
+    // `storage_url ?? mekhan_url`.
+    let mekhan_base = args.url.trim_end_matches('/');
     let identity = RunnerIdentity {
         runner_id: &enrolled.id,
         pool: enrolled.pool.as_deref(),
         workspace_id: &enrolled.workspace_id,
         nats_url: enrolled.nats_url.as_deref(),
+        mekhan_url: Some(mekhan_base),
+        storage_url: enrolled.storage_url.as_deref(),
     };
     let identity_path = runner_dir.join("identity.json");
     let identity_json = serde_json::to_vec_pretty(&identity)
@@ -275,6 +298,10 @@ pub async fn register() -> Result<(), BoxErr> {
     println!("  nats nkey    : {} (mode 0600)", nk_path.display());
     if let Some(url) = enrolled.nats_url.as_deref() {
         println!("  nats url     : {url}");
+    }
+    println!("  mekhan url   : {mekhan_base}");
+    if let Some(url) = enrolled.storage_url.as_deref() {
+        println!("  storage url  : {url}");
     }
     if creds_written {
         println!("  nats creds   : {} (mode 0600)", creds_path.display());

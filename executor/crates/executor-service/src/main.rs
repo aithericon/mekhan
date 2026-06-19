@@ -42,7 +42,7 @@ use aithericon_executor_smtp::SmtpBackend;
 use aithericon_executor_storage::OpenDalArtifactStore;
 #[cfg(not(feature = "opendal"))]
 use aithericon_executor_storage::StorageBackend;
-use aithericon_executor_storage::{ArtifactStore, LocalArtifactStore};
+use aithericon_executor_storage::{ArtifactStore, BrokeredArtifactStore, LocalArtifactStore};
 #[cfg(feature = "surya")]
 use aithericon_executor_surya::SuryaBackend;
 use aithericon_executor_worker::{
@@ -1128,11 +1128,19 @@ fn build_executor(
     // Build the staging pipeline with default hooks
     let secret_store: Arc<dyn aithericon_secrets::SecretStore> = build_secret_store();
     let vault_addr = std::env::var("VAULT_ADDR").ok().filter(|s| !s.is_empty());
+    // Zero-secret runner: when there's no direct VAULT_ADDR but the runner
+    // enrolled against a broker (base + runner_id + token all resolve), route
+    // `wrapped_secrets` unwrapping through mekhan's self-scoped HTTP endpoint.
+    // In-cluster workers (VAULT_ADDR set) keep the direct Vault path; the broker
+    // config is harmless to build (PlanSecretsHook only uses it when
+    // vault_addr is None).
+    let broker_secrets = build_broker_secrets(config, &base_dir);
     let pipeline = Arc::new(aithericon_executor_worker::staging::default_pipeline(
         base_dir.clone(),
         artifact_store.clone(),
         Some(secret_store),
         vault_addr,
+        broker_secrets,
         nix_hook,
     ));
 
@@ -1332,9 +1340,15 @@ fn attach_livekit(registry: TransportRegistry, _config: &ExecutorConfig) -> Tran
 
 /// Build the artifact store based on config.
 ///
-/// When the `opendal` feature is enabled and a `[storage]` config section
-/// is present, uses `OpenDalArtifactStore` for the configured backend.
-/// Otherwise falls back to `LocalArtifactStore` at `base_dir`.
+/// Selection order (additive — a static-storage daemon is unchanged):
+/// 1. `config.storage` present → `OpenDalArtifactStore` (in-cluster worker, the
+///    `opendal` feature) or a local store. Static storage ALWAYS wins.
+/// 2. No `config.storage`, but the runner enrolled against a zero-secret broker
+///    (a `runner_broker_base()` + a readable `runner.token`) →
+///    `BrokeredArtifactStore`: all blob I/O proxies through
+///    `{base}/api/storage/blob` authenticated with the runner's bearer token, no
+///    cloud credentials on the box.
+/// 3. Otherwise → `LocalArtifactStore` at `base_dir` (the historical default).
 fn build_artifact_store(
     config: &ExecutorConfig,
     base_dir: &Path,
@@ -1366,9 +1380,61 @@ fn build_artifact_store(
         }
     }
 
+    // Zero-secret runner: no static storage, but enrolled against a broker.
+    // Prefer the brokered blob proxy over a local store so artifacts land in the
+    // platform object store reachable by in-cluster readers.
+    if let Some(broker_base) = config.runner_broker_base() {
+        if let Some(token) = read_runner_token(config, base_dir) {
+            info!(
+                base = %broker_base,
+                "building brokered artifact store (zero-secret runner blob proxy)"
+            );
+            let store = BrokeredArtifactStore::new(broker_base, token, reqwest::Client::new());
+            return Ok(Some(Arc::new(store)));
+        }
+        warn!(
+            base = %broker_base,
+            "runner broker base configured but no readable runner token; \
+             falling back to local artifact store"
+        );
+    }
+
     Ok(Some(Arc::new(LocalArtifactStore::new(
         base_dir.to_path_buf(),
     ))))
+}
+
+/// Read the runner bearer token (`rnr_<uuid>.<secret>`) for the brokered store.
+/// Prefers the resolved `config.runner_token_path` (set in `normalize()`), else
+/// the conventional `{base_dir}/runner/runner.token`. Returns the trimmed token
+/// on success, `None` when the file is absent/unreadable.
+fn read_runner_token(config: &ExecutorConfig, base_dir: &Path) -> Option<String> {
+    let path = config
+        .runner_token_path
+        .clone()
+        .unwrap_or_else(|| base_dir.join("runner").join("runner.token"));
+    std::fs::read_to_string(&path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Assemble the brokered secret-unwrap config for the staging pipeline, when
+/// this daemon is a zero-secret runner: a `runner_broker_base()`, a `runner_id`,
+/// and a readable `runner.token` must all resolve. `None` otherwise (an
+/// in-cluster worker; `PlanSecretsHook` then never reroutes through mekhan).
+fn build_broker_secrets(
+    config: &ExecutorConfig,
+    base_dir: &Path,
+) -> Option<aithericon_executor_worker::staging::BrokerSecretsConfig> {
+    let base_url = config.runner_broker_base()?;
+    let runner_id = config.runner_id.clone()?;
+    let runner_token = read_runner_token(config, base_dir)?;
+    Some(aithericon_executor_worker::staging::BrokerSecretsConfig {
+        base_url,
+        runner_token,
+        runner_id,
+    })
 }
 
 /// Build the metric sink from config.

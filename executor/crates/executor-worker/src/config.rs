@@ -344,6 +344,18 @@ pub struct ExecutorConfig {
     #[serde(default)]
     pub mekhan_url: Option<String>,
 
+    /// Brokered storage base URL for a zero-secret runner (the mekhan blob proxy
+    /// origin). When mekhan runs the blob proxy on a distinct origin from the
+    /// control plane it surfaces it as `EnrolledRunner.storage_url`, persisted in
+    /// `identity.json` and read back here in `normalize()`. The daemon's
+    /// effective broker base is `storage_url ?? mekhan_url`
+    /// ([`Self::runner_broker_base`]). `None` means the control-plane origin
+    /// (`mekhan_url`) doubles as the storage origin.
+    ///
+    /// Environment variable: `EXECUTOR_RUNNER_STORAGE_URL=https://...`.
+    #[serde(default)]
+    pub runner_storage_url: Option<String>,
+
     /// Enrolled-worker identity (Phase B — grouped + enrolled workers).
     ///
     /// When this executor was enrolled into a mekhan worker fleet (either by a
@@ -512,6 +524,19 @@ pub struct RunnerIdentity {
     /// public URL configured.
     #[serde(default)]
     pub nats_url: Option<String>,
+    /// The mekhan base URL this runner enrolled against (the `register --url`
+    /// arg). Persisted so a bare daemon can reach the zero-secret brokers — the
+    /// blob proxy (`{base}/api/storage/blob`) and the secret-unwrap proxy
+    /// (`{base}/api/v1/runners/{id}/secrets/unwrap`) — without an
+    /// `EXECUTOR_MEKHAN_URL`. `None` on identities written before the broker.
+    #[serde(default)]
+    pub mekhan_url: Option<String>,
+    /// Brokered storage base URL, when mekhan runs the blob proxy on a distinct
+    /// origin from the control plane (`EnrolledRunner.storage_url`). The daemon's
+    /// effective broker base is `storage_url ?? mekhan_url`. `None` when the
+    /// control-plane origin doubles as the storage origin.
+    #[serde(default)]
+    pub storage_url: Option<String>,
 }
 
 /// On-disk enrolled-worker identity persisted by the boot-time self-enroll
@@ -778,6 +803,40 @@ impl ExecutorConfig {
             self.runner_token_path = Some(runner_dir.join("runner.token"));
         }
 
+        // Default the mekhan control-plane base URL + brokered storage URL from
+        // the runner identity, unless the operator set `mekhan_url` explicitly.
+        // This is what lets a bare `aithericon-executor` reach the zero-secret
+        // brokers (blob proxy + secret-unwrap proxy) after `register` with no
+        // `EXECUTOR_MEKHAN_URL`. Read independently of runner_id discovery so it
+        // applies even when runner_id came from the environment. The
+        // `storage_url` override is folded into `runner_storage_url` (effective
+        // broker base = storage_url ?? mekhan_url).
+        if self.mekhan_url.is_none() || self.runner_storage_url.is_none() {
+            let identity_path = runner_dir.join("identity.json");
+            if let Ok(bytes) = std::fs::read(&identity_path) {
+                if let Ok(identity) = serde_json::from_slice::<RunnerIdentity>(&bytes) {
+                    if self.mekhan_url.is_none() {
+                        if let Some(url) = identity
+                            .mekhan_url
+                            .map(|u| u.trim().to_owned())
+                            .filter(|u| !u.is_empty())
+                        {
+                            self.mekhan_url = Some(url);
+                        }
+                    }
+                    if self.runner_storage_url.is_none() {
+                        if let Some(url) = identity
+                            .storage_url
+                            .map(|u| u.trim().to_owned())
+                            .filter(|u| !u.is_empty())
+                        {
+                            self.runner_storage_url = Some(url);
+                        }
+                    }
+                }
+            }
+        }
+
         // Default the NATS URL to the enroll-brokered public URL (the Traefik
         // WebSocket front door) persisted in identity.json, unless the operator
         // set one explicitly. This is what lets a bare `aithericon-executor`
@@ -912,6 +971,19 @@ impl ExecutorConfig {
     pub fn mekhan_url(&self) -> Option<String> {
         self.mekhan_url
             .clone()
+            .map(|u| u.trim_end_matches('/').to_string())
+            .filter(|u| !u.is_empty())
+    }
+
+    /// The effective zero-secret broker base URL for an enrolled runner:
+    /// `runner_storage_url ?? mekhan_url` (trailing slash trimmed). This is the
+    /// `{base}` the [`crate::staging::PlanSecretsHook`] secret-unwrap proxy and
+    /// the `BrokeredArtifactStore` blob proxy address. `None` when neither is
+    /// configured (an in-cluster worker with static storage/Vault).
+    pub fn runner_broker_base(&self) -> Option<String> {
+        self.runner_storage_url
+            .clone()
+            .or_else(|| self.mekhan_url.clone())
             .map(|u| u.trim_end_matches('/').to_string())
             .filter(|u| !u.is_empty())
     }
@@ -1058,6 +1130,7 @@ mod tests {
             ros: None,
             model_agent: None,
             mekhan_url: None,
+            runner_storage_url: None,
             worker_id: None,
             worker_group: None,
             worker_reg_token: None,

@@ -24,6 +24,16 @@ pub struct AppConfig {
     /// `MEKHAN__RUNNER_NATS_PUBLIC_URL`.
     #[serde(default)]
     pub runner_nats_public_url: Option<String>,
+    /// Public base URL of the storage blob broker advertised to enrolled
+    /// external runners in the enroll response (e.g.
+    /// `https://mekhan.dev.aithericon.eu`). A bare runner reads/writes artifact
+    /// bytes through `{this}/api/storage/blob` (and unwraps secrets through
+    /// `{this}/api/v1/runners/{id}/secrets/unwrap`) so it needs no S3/Vault
+    /// credentials of its own. `None` ⇒ the response omits the hint and the
+    /// runner falls back to the mekhan base it enrolled against. Parsed from
+    /// `MEKHAN__RUNNER_STORAGE_BROKER_URL`.
+    #[serde(default)]
+    pub runner_storage_broker_url: Option<String>,
     #[serde(default)]
     pub cleanup: CleanupConfig,
     /// File-analytics growth snapshots (docs/32 Cut 2) — the periodic

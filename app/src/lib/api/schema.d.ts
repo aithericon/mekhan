@@ -3913,6 +3913,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/runners/{id}/secrets/unwrap": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/runners/{id}/secrets/unwrap` — unwrap a Vault response-wrapping
+         *     token on the runner's behalf so a bare runner needs no `VAULT_ADDR`/token of
+         *     its own. Runner-token authed, self-only: the principal's subject MUST be
+         *     `runner:{id}` (same boundary as heartbeat / nats-creds). mekhan calls
+         *     `vault_unwrap_secrets` with its own reachability to Vault; the wrapping token
+         *     itself authenticates the unwrap, so mekhan never needs a Vault service token
+         *     for this path.
+         */
+        post: operations["unwrap_runner_secret"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runners/{runner_id}/model-commands": {
         parameters: {
             query?: never;
@@ -8047,6 +8072,16 @@ export interface components {
              */
             nats_url?: string | null;
             runner_token: string;
+            /**
+             * @description Public base URL of the storage blob broker the runner should use for
+             *     artifact bytes (e.g. `https://mekhan.dev.aithericon.eu`) — brokered from
+             *     mekhan's `runner_storage_broker_url` config. The runner persists it and
+             *     reads/writes via `{this}/api/storage/blob` (and unwraps secrets via
+             *     `{this}/api/v1/runners/{id}/secrets/unwrap`), so a bare daemon needs no
+             *     S3/Vault credentials. `null` when mekhan has no broker URL configured;
+             *     the runner then falls back to the mekhan base it enrolled against.
+             */
+            storage_url?: string | null;
             /** Format: uuid */
             workspace_id: string;
         };
@@ -13908,6 +13943,25 @@ export interface components {
             key: string;
             /** Format: int64 */
             total_size_bytes: number;
+        };
+        /**
+         * @description Request body for `POST /api/v1/runners/{id}/secrets/unwrap` — the Vault
+         *     response-wrapping token (`hvs.*` / `s.*`) the engine handed the runner with
+         *     its job. Single-use: Vault invalidates it on the unwrap.
+         */
+        UnwrapSecretRequest: {
+            /** @description The Vault response-wrapping token to unwrap. Single-use. */
+            wrapping_token: string;
+        };
+        /** @description Response for the secret-unwrap proxy — the unwrapped secret key/value pairs. */
+        UnwrapSecretResponse: {
+            /**
+             * @description The unwrapped secrets (`KEY` → `value`), e.g. injected as env into the
+             *     runner's task. Empty when the wrapped payload carried no entries.
+             */
+            secrets: {
+                [key: string]: string;
+            };
         };
         /**
          * @description Request body for `PUT /api/v1/asset-types/{id}`. Schema updates must be
@@ -23763,6 +23817,60 @@ export interface operations {
             };
             /** @description Runner not found or no stored nats_public_key */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    unwrap_runner_secret: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Runner id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UnwrapSecretRequest"];
+            };
+        };
+        responses: {
+            /** @description Unwrapped secrets */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UnwrapSecretResponse"];
+                };
+            };
+            /** @description Wrong / foreign / revoked runner token */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Vault unwrap failed (bad/expired wrapping token) */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret broker unconfigured (no VAULT_ADDR) */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };

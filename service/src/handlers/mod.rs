@@ -37,6 +37,7 @@ pub mod process_live;
 pub mod resources;
 pub mod roster;
 pub mod runners;
+pub mod storage;
 pub mod streams;
 pub mod task_stream;
 pub mod template_tests;

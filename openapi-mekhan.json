@@ -11764,6 +11764,79 @@
         }
       }
     },
+    "/api/v1/runners/{id}/secrets/unwrap": {
+      "post": {
+        "tags": [
+          "runners"
+        ],
+        "summary": "`POST /api/v1/runners/{id}/secrets/unwrap` — unwrap a Vault response-wrapping\ntoken on the runner's behalf so a bare runner needs no `VAULT_ADDR`/token of\nits own. Runner-token authed, self-only: the principal's subject MUST be\n`runner:{id}` (same boundary as heartbeat / nats-creds). mekhan calls\n`vault_unwrap_secrets` with its own reachability to Vault; the wrapping token\nitself authenticates the unwrap, so mekhan never needs a Vault service token\nfor this path.",
+        "operationId": "unwrap_runner_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Runner id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnwrapSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Unwrapped secrets",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnwrapSecretResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Wrong / foreign / revoked runner token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Vault unwrap failed (bad/expired wrapping token)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Secret broker unconfigured (no VAULT_ADDR)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/runners/{runner_id}/model-commands": {
       "post": {
         "tags": [
@@ -21823,6 +21896,13 @@
           },
           "runner_token": {
             "type": "string"
+          },
+          "storage_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Public base URL of the storage blob broker the runner should use for\nartifact bytes (e.g. `https://mekhan.dev.aithericon.eu`) — brokered from\nmekhan's `runner_storage_broker_url` config. The runner persists it and\nreads/writes via `{this}/api/storage/blob` (and unwraps secrets via\n`{this}/api/v1/runners/{id}/secrets/unwrap`), so a bare daemon needs no\nS3/Vault credentials. `null` when mekhan has no broker URL configured;\nthe runner then falls back to the mekhan base it enrolled against."
           },
           "workspace_id": {
             "type": "string",
@@ -33941,6 +34021,38 @@
           "total_size_bytes": {
             "type": "integer",
             "format": "int64"
+          }
+        }
+      },
+      "UnwrapSecretRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/runners/{id}/secrets/unwrap` — the Vault\nresponse-wrapping token (`hvs.*` / `s.*`) the engine handed the runner with\nits job. Single-use: Vault invalidates it on the unwrap.",
+        "required": [
+          "wrapping_token"
+        ],
+        "properties": {
+          "wrapping_token": {
+            "type": "string",
+            "description": "The Vault response-wrapping token to unwrap. Single-use."
+          }
+        }
+      },
+      "UnwrapSecretResponse": {
+        "type": "object",
+        "description": "Response for the secret-unwrap proxy — the unwrapped secret key/value pairs.",
+        "required": [
+          "secrets"
+        ],
+        "properties": {
+          "secrets": {
+            "type": "object",
+            "description": "The unwrapped secrets (`KEY` → `value`), e.g. injected as env into the\nrunner's task. Empty when the wrapped payload carried no entries.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
           }
         }
       },
