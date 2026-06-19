@@ -33,6 +33,8 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use aithericon_executor_domain::FoldBatch;
+
 use crate::auth::AuthUser;
 use crate::models::error::ApiError;
 use crate::AppState;
@@ -166,6 +168,33 @@ pub async fn put_blob(
         .put_file(&q.key, body.to_vec(), "application/octet-stream")
         .await
         .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("storage put failed: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/storage/fold` — runner fold-batch broker. The external runner
+/// POSTs a `FoldBatch` here instead of JetStream-publishing to `INVENTORY_FOLD`
+/// over its WebSocket connection (where it cannot reliably receive the
+/// publish-ack — the batch lands but the ack never returns, failing the crawl
+/// step). mekhan folds it straight into the inventory via the SAME ingest path
+/// the NATS consumer uses, so the runner gets a clean HTTP response and no JS
+/// ack round-trip is needed. Single-origin, consistent with the storage + secret
+/// brokers.
+pub async fn fold_ingest(
+    State(state): State<AppState>,
+    user: AuthUser,
+    axum::Json(batch): axum::Json<FoldBatch>,
+) -> Result<StatusCode, ApiError> {
+    let ws = user.require_workspace()?;
+    // Defense: the batch must belong to the runner's own workspace (the
+    // execution_id embeds it). A runner can only fold into its own tenant.
+    if let Some(batch_ws) = parse_exec_workspace(&batch.execution_id) {
+        if batch_ws != ws {
+            return Err(deny());
+        }
+    }
+    crate::inventory::fold::process_fold_batch(&state.db, &batch)
+        .await
+        .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, format!("fold ingest failed: {e}")))?;
     Ok(StatusCode::NO_CONTENT)
 }
 

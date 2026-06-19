@@ -49,8 +49,8 @@ use aithericon_executor_worker::{
     drain_signal, handle_execution, spawn_fileserve_handler, spawn_presence_task,
     spawn_worker_presence_task, BackendRegistry, BatchRunner, CancellationRegistry,
     CompletionTracker, DrainConfig, ExecutorConfig, JobExecutor, JobSource, Lifetime,
-    LiveModelState, NatsBatchSink, NatsCancelListener, NixEnvironmentHook, SidecarLogConfig,
-    StatusReporter, TransportRegistry,
+    BrokeredBatchSink, LiveModelState, NatsBatchSink, NatsCancelListener, NixEnvironmentHook,
+    SidecarLogConfig, StatusReporter, TransportRegistry,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -1035,14 +1035,33 @@ async fn build_batch_sink(
     jetstream: &async_nats::jetstream::Context,
     config: &ExecutorConfig,
 ) -> Result<Option<Arc<dyn BatchSink>>, Box<dyn std::error::Error + Send + Sync>> {
+    let serve_group = config
+        .runner_id
+        .clone()
+        .or_else(|| config.worker_routing_partition.clone());
+
+    // Brokered runner: no reliable JetStream publish-ack over the WS front door,
+    // so fold batches POST through mekhan (`/api/storage/fold`) instead of
+    // JS-publishing to INVENTORY_FOLD. Same selection as the brokered artifact +
+    // secret stores (a `runner_broker_base()` + a readable `runner.token`). An
+    // in-cluster worker (static storage / direct NATS) keeps the NATS sink.
+    if let Some(broker_base) = config.runner_broker_base() {
+        let base_dir = std::path::Path::new(&config.base_dir);
+        if let Some(token) = read_runner_token(config, base_dir) {
+            info!(base = %broker_base, "building brokered fold sink (runner fold proxy)");
+            return Ok(Some(Arc::new(BrokeredBatchSink::new(
+                broker_base,
+                token,
+                serve_group,
+            ))));
+        }
+    }
+
     let sink = NatsBatchSink::new(
         jetstream.clone(),
         config.status_replicas,
         config.subject_prefix.clone(),
-        config
-            .runner_id
-            .clone()
-            .or_else(|| config.worker_routing_partition.clone()),
+        serve_group,
     )
     .await?;
     Ok(Some(Arc::new(sink)))

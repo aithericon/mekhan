@@ -79,17 +79,40 @@ pub async fn start_inventory_fold_ingest(nats: MekhanNats, db: PgPool) {
     }
 }
 
-/// Deserialize and fold one batch. Errors propagate to the NAK path.
+/// Deserialize and fold one batch (NATS ingest path). Errors propagate to the
+/// NAK path.
 async fn process_batch(
     db: &PgPool,
     payload: &[u8],
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let batch: FoldBatch = serde_json::from_slice(payload)?;
+    process_fold_batch(db, &batch).await
+}
+
+/// Fold one already-deserialized batch into the inventory/catalogue. Shared by
+/// the NATS ingest loop above and the runner fold-broker HTTP endpoint
+/// (`POST /api/storage/fold`) — so an external zero-secret runner that can't
+/// reliably receive a JetStream publish-ack over its WebSocket connection still
+/// lands its batches by POSTing them through mekhan.
+pub(crate) async fn process_fold_batch(
+    db: &PgPool,
+    batch: &FoldBatch,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Resolve the owning workspace from the target file server (the inventory
-    // rows belong to the same tenant that owns the server). A server row that
-    // can't be resolved (legacy / racing creation) folds under the nil
-    // workspace, matching the DEFAULT backfill on `file_inventory.workspace_id`.
-    let workspace_id = resolve_server_workspace(db, &batch.file_server_id).await?;
+    // rows belong to the same tenant that owns the server). When the server row
+    // doesn't exist yet — the `adopt` step that mints it runs only AFTER a
+    // successful crawl, so an in-flight or failed crawl has none — fall back to
+    // the workspace embedded in the batch's `execution_id`
+    // (`mekhan-{ws}-{instance}-...`). That lands inventory in the crawling
+    // instance's tenant directly, instead of stranding it under the nil
+    // workspace until a later `adopt` self-heals it (which never happens if the
+    // crawl step failed).
+    let mut workspace_id = resolve_server_workspace(db, &batch.file_server_id).await?;
+    if workspace_id.is_nil() {
+        if let Some(ws) = workspace_from_execution_id(&batch.execution_id) {
+            workspace_id = ws;
+        }
+    }
     let ctx = ObservationContext {
         endpoint_root: Some(batch.endpoint_root.clone()).filter(|s| !s.is_empty()),
         serve_group: batch.serve_group.clone(),
@@ -199,6 +222,18 @@ async fn resolve_server_workspace(
     .fetch_optional(db)
     .await?;
     Ok(ws.unwrap_or_else(uuid::Uuid::nil))
+}
+
+/// Parse the workspace UUID embedded at the head of a mekhan execution_id
+/// (`mekhan-{workspace}-{instance}-{node-suffix}`). Mirrors the storage
+/// broker's `parse_exec_workspace`. `None` when the id isn't in that shape.
+fn workspace_from_execution_id(execution_id: &str) -> Option<uuid::Uuid> {
+    let rest = execution_id.strip_prefix("mekhan-")?;
+    // A canonical UUID is exactly 36 chars (8-4-4-4-12).
+    if rest.len() < 36 {
+        return None;
+    }
+    uuid::Uuid::parse_str(&rest[..36]).ok()
 }
 
 /// Parse the crawl op's RFC 3339 mtime rendering; unparseable values drop to
