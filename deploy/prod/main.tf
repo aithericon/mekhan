@@ -20,17 +20,18 @@ resource "nomad_job" "mekhan_service" {
   ]
 
   jobspec = templatefile("${path.module}/mekhan.nomad.hcl.tpl", {
-    namespace         = var.nomad_namespace
-    environment       = var.environment
-    job_id            = local.service_job_id
-    service_name      = local.service_consul_name
-    engine_name       = local.engine_consul_name
-    router            = local.traefik_router
-    router_http       = local.traefik_router_http
-    engine_router     = local.engine_router
-    vault_role        = local.vault_role_service
-    vault_policies    = jsonencode(local.service_vault_policies)
-    nats_user_kv_path = local.nats_user_kv_path
+    namespace            = var.nomad_namespace
+    environment          = var.environment
+    job_id               = local.service_job_id
+    service_name         = local.service_consul_name
+    engine_name          = local.engine_consul_name
+    router               = local.traefik_router
+    router_http          = local.traefik_router_http
+    engine_router        = local.engine_router
+    vault_role           = local.vault_role_service
+    vault_policies       = jsonencode(local.service_vault_policies)
+    nats_user_kv_path    = local.nats_user_kv_path
+    nats_account_kv_path = local.nats_account_kv_path
     # Secret VALUES are NOT passed into the jobspec — the `template` stanzas in
     # mekhan.nomad.hcl.tpl read them from Vault at alloc start. Only these PATHS
     # appear in the rendered Nomad job.

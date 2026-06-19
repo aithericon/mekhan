@@ -192,6 +192,27 @@ MEKHAN__S3__SECRET_KEY={{ .Data.data.s3_secret_key }}
 EOH
       }
 
+      # Runner-signing key (mekhan zero-secret enrollment). The `signing_seed` is
+      # a signing key OF the mekhan-<env> NATS account, listed in the pushed
+      # account JWT — so scoped runner JWTs mekhan mints with it are trusted by
+      # the resolver. Rendered as an env var (env = true) so it wins over
+      # RunnerNatsSigner's local-file / auto-generate fallbacks; without it
+      # mekhan auto-generates an untrusted account key and every runner connect
+      # fails `authorization violation`. Provisioned out-of-band (the account
+      # path is populated by scripts/generate-nats-user.sh + a manual
+      # `nsc edit account --sk generate`; see deploy/README.md).
+      template {
+        destination = "secrets/runner-signing.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "secret/data/${nats_account_kv_path}" }}
+RUNNERS_NATS_SIGNING_SEED={{ .Data.data.signing_seed }}
+RUNNERS_NATS_ACCOUNT_ID={{ .Data.data.public_key }}
+{{- end }}
+EOH
+      }
+
       env {
         MEKHAN__HOST          = "0.0.0.0"
         MEKHAN__PORT          = "${service_port}"
