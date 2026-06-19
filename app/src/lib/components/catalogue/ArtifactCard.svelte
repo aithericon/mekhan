@@ -1,5 +1,12 @@
 <script lang="ts">
-	import { catalogueDownloadUrl, dataEntryContentUrl, type CatalogueEntry } from '$lib/api/client';
+	import {
+		catalogueDownloadUrl,
+		dataEntryContentUrl,
+		type CatalogueEntry,
+		type LiveArtifactEntry
+	} from '$lib/api/client';
+	import { pickRenderer } from '$lib/components/process-live/renderers/registry';
+	import { pickMetadataRenderer } from './metadata/registry';
 	import { instanceIdFromNet, instanceIdFromExecution } from '$lib/utils';
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
 	import { StatusBadge } from '$lib/components/status';
@@ -110,17 +117,6 @@
 		return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', year: 'numeric' }).format(new Date(s));
 	}
 
-	// unix_mode (e.g. 33188) → symbolic perms ("rw-r--r--").
-	function symbolicMode(mode: number): string {
-		const p = mode & 0o777;
-		const bit = (n: number, r: string) => ((p >> n) & 1 ? r : '-');
-		return [
-			bit(8, 'r'), bit(7, 'w'), bit(6, 'x'),
-			bit(5, 'r'), bit(4, 'w'), bit(3, 'x'),
-			bit(2, 'r'), bit(1, 'w'), bit(0, 'x')
-		].join('');
-	}
-
 	function fileExt(name: string): string {
 		const m = name.match(/\.([a-z0-9]+)$/i);
 		return m ? m[1].toLowerCase() : '';
@@ -192,6 +188,37 @@
 		instanceIdFromNet(entry.source_net) ?? instanceIdFromExecution(entry.execution_id)
 	);
 	const Icon = $derived(fileIcon());
+
+	// ── Media preview ─────────────────────────────────────────────────────────
+	// The process-live renderer registry works off a LiveArtifactEntry; the card
+	// holds a CatalogueEntry. Adapt the overlapping fields so the same media
+	// renderers (image/video/audio/…) can drive the catalogue detail preview.
+	const liveEntry = $derived.by((): LiveArtifactEntry => ({
+		execution_id: entry.execution_id,
+		name: entry.name,
+		category: entry.category,
+		filename: entry.filename,
+		mime_type: entry.mime_type ?? null,
+		storage_path: entry.storage_path ?? null,
+		size_bytes: entry.size_bytes ?? null,
+		process_step: entry.process_step ?? null,
+		signal_key: entry.signal_key ?? null,
+		user_metadata: (entry.user_metadata ?? null) as Record<string, unknown> | null,
+		created_at: entry.created_at,
+		id: entry.id,
+		artifact_id: entry.entry_id ?? entry.id
+	}));
+
+	// Pick a media renderer for the preview section. Suppress raw text/json dumps
+	// when a structured tabular sample (the `preview` rows) already shows below —
+	// otherwise the same bytes read twice (once as a dump, once as a table).
+	const previewRenderer = $derived.by(() => {
+		if (!entry.storage_path) return null;
+		const r = pickRenderer(liveEntry);
+		if (!r) return null;
+		if (preview && /^(text\/|application\/json)/.test(entry.mime_type ?? '')) return null;
+		return r;
+	});
 
 	// Self-fetched copies for call-sites that didn't pass the `copies` prop.
 	let fetchedCopies = $state<DataCopy[] | null>(null);
@@ -447,6 +474,17 @@
 
 <!-- Detail sections — rendered inline (static `expanded`) or in the dialog. -->
 {#snippet detailSections()}
+			<!-- Preview: media renderer (image/video/audio/…) for the stored bytes -->
+			{#if previewRenderer}
+				{@const R = previewRenderer}
+				<section>
+					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Preview</h4>
+					<div class="max-h-[26rem] overflow-auto rounded-md border border-border bg-background">
+						<R entry={liveEntry} />
+					</div>
+				</section>
+			{/if}
+
 			<!-- Location: where the bytes physically live -->
 			{#if allCopies.length > 0 || entry.storage_path}
 				<section>
@@ -493,70 +531,17 @@
 				</section>
 			{/if}
 
-			<!-- Format & schema -->
-			{#if formatLabel || schema || details || numRows != null || columns.length > 0 || dims.length > 0 || unixMode != null}
-				<section>
-					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Format &amp; schema</h4>
-					<div class="flex flex-wrap items-center gap-x-2 gap-y-1.5">
-						{#if formatLabel}
-							<span class="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs">{formatLabel}</span>
-						{/if}
-						{#if numRows != null}
-							<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs tabular-nums">{numRows.toLocaleString()} rows × {numCols ?? '?'} cols</span>
-						{/if}
-						{#each dims as d}
-							<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs">
-								<span class="text-muted-foreground">{d.name}:</span>
-								<span class="font-medium text-foreground tabular-nums">{d.size != null ? d.size.toLocaleString() : '∞'}</span>
-							</span>
-						{/each}
-						{#if details}
-							{#each details.fields ?? [] as f}
-								<span class="rounded border border-border bg-background px-1.5 py-0.5 text-xs">
-									<span class="text-muted-foreground">{f.label}:</span>
-									<span class="font-medium text-foreground">{f.value}{f.unit ? ` ${f.unit}` : ''}</span>
-								</span>
-							{/each}
-						{/if}
-						{#if unixMode != null}
-							<span class="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs" title="unix mode {unixMode}">{symbolicMode(unixMode)}</span>
-						{/if}
-						{#if schema?.digest}
-							<button
-								class="rounded border border-border bg-background px-1.5 py-0.5 font-mono text-xs hover:border-primary hover:text-primary"
-								onclick={() => handleSchemaClick(schema!.digest)}
-								title="Filter by this schema fingerprint (v{schema.version})"
-							>schema {schema.digest}</button>
-						{/if}
-					</div>
-
-					{#if columns.length > 0}
-						<div class="mt-2 flex flex-wrap gap-1">
-							{#each columns as col}
-								<span class="inline-flex items-center gap-1 rounded border border-border bg-background px-1.5 py-0.5 text-xs">
-									<span class="font-medium text-foreground">{col.name}</span>
-									<span class="text-muted-foreground">{col.data_type}{col.nullable ? '?' : ''}</span>
-									{#each col.classifications ?? [] as tag}
-										<span class="rounded-sm bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400" title="{pct(tag.confidence)} confidence">{tag.category}</span>
-									{/each}
-								</span>
-							{/each}
-						</div>
-					{/if}
-
-					{#if details}
-						{#each details.tables ?? [] as t}
-							<DetailTable title={t.title} columns={t.columns} rows={t.rows} />
-						{/each}
-					{/if}
-				</section>
+			<!-- Format & schema — dispatched to a format-family-specific renderer -->
+			{#if mv && (formatLabel || schema || details || numRows != null || columns.length > 0 || dims.length > 0 || unixMode != null)}
+				{@const MetaRenderer = pickMetadataRenderer(mv)}
+				<MetaRenderer {mv} onSchemaClick={handleSchemaClick} />
 			{/if}
 
-			<!-- Preview (first rows of tabular data) -->
+			<!-- Sample rows (first rows of tabular data) -->
 			{#if preview && preview.rows.length > 0}
 				<section>
 					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-						Preview
+						Sample rows
 						{#if preview.total_row_count != null}
 							<span class="ml-1 font-normal normal-case text-muted-foreground/70">of {preview.total_row_count.toLocaleString()} rows</span>
 						{/if}
