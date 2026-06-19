@@ -128,12 +128,14 @@
 		return r.slot.required && !r.satisfied;
 	}
 
-	/** Required, non-platform slots that still have no chosen resource — these
-	 *  gate the Run button. */
+	/** Required slots that genuinely need a choice here AND still have none — these
+	 *  gate the Run button. A slot already satisfied by ANY tier (home baseline,
+	 *  workspace default, platform) does NOT block: the launcher resolves it even
+	 *  when the dialog leaves `bindings[key]` empty (home-baseline slots carry no
+	 *  surfaced resource_id to pre-fill, so we must gate on `satisfied`, not on
+	 *  whether a resource was pre-filled). */
 	const unboundSlots = $derived(
-		slotReadiness.filter(
-			(r) => r.slot.required && !isPlatformBound(r) && !bindings[r.slot.key]
-		)
+		slotReadiness.filter((r) => needsChoice(r) && !bindings[r.slot.key])
 	);
 
 	async function loadResourcesForType(resourceType: string) {
@@ -181,7 +183,16 @@
 
 	function resourceLabel(r: SlotReadiness): string {
 		const chosen = bindings[r.slot.key];
-		if (!chosen) return 'Select a resource…';
+		if (!chosen) {
+			// Satisfied without an explicit pick → the launcher resolves it
+			// automatically; show that (editable) instead of implying it's missing.
+			if (r.satisfied) {
+				return r.tier === 'workspace_default'
+					? 'Workspace default — pick to override'
+					: 'Default — pick to override';
+			}
+			return 'Select a resource…';
+		}
 		const list = resourcesByType[r.slot.resource_type] ?? [];
 		const found = list.find((x) => x.id === chosen);
 		return found ? `${found.path} — ${found.display_name}` : chosen;
