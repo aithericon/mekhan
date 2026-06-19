@@ -23,7 +23,7 @@ use aithericon_executor_logs::{
 use aithericon_executor_loki::LokiBackend;
 use aithericon_executor_metrics::{
     CompositeMetricSink, InMemoryMetricSink, LokiMetricSink, MetricSink, MetricSinkConfig,
-    NatsMetricSink,
+    MetricsConfig, NatsMetricSink,
 };
 #[cfg(feature = "postgres")]
 use aithericon_executor_postgres::PostgresBackend;
@@ -1465,18 +1465,29 @@ fn build_metric_sink(
     config: &ExecutorConfig,
     nats_client: &async_nats::Client,
 ) -> Result<Option<Arc<dyn MetricSink>>, Box<dyn std::error::Error + Send + Sync>> {
+    // Metrics are ON by default: the executor always holds a NATS client, so the
+    // NATS metric sink is wired unless explicitly disabled. An absent `[metrics]`
+    // block (`config.metrics = None`) means "use defaults" (enabled + NATS sink),
+    // NOT "off" — only an explicit `enabled = false` turns metrics off.
     let metrics_config = match &config.metrics {
-        Some(cfg) if cfg.enabled => cfg,
-        _ => return Ok(None),
+        Some(cfg) if !cfg.enabled => return Ok(None),
+        Some(cfg) => cfg.clone(),
+        None => MetricsConfig::default(),
     };
 
-    if metrics_config.sinks.is_empty() {
-        return Ok(None);
-    }
+    // No sinks listed → default to the NATS sink (the only transport that reaches
+    // mekhan; Memory stays on the runner, Loki needs a URL). This is what makes a
+    // bare runner's metrics — e.g. the file-ops crawl's files/sec — show up in the
+    // run's Metrics tab with zero config.
+    let sink_configs: Vec<MetricSinkConfig> = if metrics_config.sinks.is_empty() {
+        vec![MetricSinkConfig::Nats]
+    } else {
+        metrics_config.sinks.clone()
+    };
 
     let mut sinks: Vec<Arc<dyn MetricSink>> = Vec::new();
 
-    for sink_config in &metrics_config.sinks {
+    for sink_config in &sink_configs {
         match sink_config {
             MetricSinkConfig::Memory => {
                 info!(
