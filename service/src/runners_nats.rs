@@ -272,6 +272,11 @@ impl RunnerNatsSigner {
             // wildcard publish doesn't widen what a runner can actually drain.
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
+            // Metric batches publish to `executor.metrics.{exec_id}` (one token,
+            // dots/spaces in the exec id are `_`-escaped by the sink). Without
+            // this a runner with a metric sink enabled gets a permissions
+            // violation and its files/sec (etc.) never reach the run Metrics tab.
+            "executor.metrics.>".to_string(),
             format!("runner.{runner_id}.presence"),
         ];
         if let Some(pool) = pool {
@@ -431,6 +436,8 @@ impl RunnerNatsSigner {
             format!("worker.{worker_id}.presence"),
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
+            // Metric batches → `executor.metrics.{exec_id}` (see runner mint).
+            "executor.metrics.>".to_string(),
         ];
 
         // JetStream pull scope, one stream-family per advertised backend wire. A
@@ -710,6 +717,7 @@ mod tests {
         // Status/events keyed by exec id, not runner id → wildcard span.
         assert!(pub_allow.contains(&"executor.status.*.>".to_string()));
         assert!(pub_allow.contains(&"executor.events.*.>".to_string()));
+        assert!(pub_allow.contains(&"executor.metrics.>".to_string()));
         assert!(pub_allow.contains(&format!("runner.{id}.presence")));
         assert!(pub_allow.contains(&format!("{pool}.claim")));
 
