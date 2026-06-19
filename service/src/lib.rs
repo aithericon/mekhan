@@ -925,6 +925,13 @@ pub fn build_router(state: AppState) -> Router {
             "/api/storage/blob",
             get(handlers::storage::get_blob).put(handlers::storage::put_blob),
         )
+        // Fold-batch broker: the runner POSTs crawl fold batches here instead of
+        // JetStream-publishing over its WS connection (no reliable publish-ack);
+        // mekhan folds them straight into the inventory via the same ingest path.
+        .route(
+            "/api/storage/fold",
+            axum::routing::post(handlers::storage::fold_ingest),
+        )
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             auth::extractor::require_auth_middleware,
