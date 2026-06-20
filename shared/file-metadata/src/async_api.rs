@@ -19,14 +19,28 @@ use crate::{ExtractAllOptions, FileResult};
 pub async fn extract_metadata_async(path: &Path) -> Result<FileMetadata, MetadataError> {
     let path: PathBuf = path.to_path_buf();
     tokio::task::spawn_blocking(move || {
-        // Unknown / unmodeled formats (e.g. `.fasta`, arbitrary binaries) make
-        // `extract_metadata` return `UnsupportedFormat` — but the content hash
-        // is still needed (content-addressing, by-reference registration, the
-        // 4M-file reconcile). Fall back to a checksum-only FileMetadata so every
-        // readable file is hashable, never aborting before the checksum.
+        // A readable-but-unmodeled file must still yield a content hash (content-
+        // addressing, by-reference registration, the 4M-file reconcile). Three
+        // extractor outcomes mean "I can't describe this file" yet say nothing
+        // about readability — degrade each to a checksum-only FileMetadata so the
+        // probe never aborts before the hash:
+        //   - `UnsupportedFormat`: a format was detected but no backend handles it.
+        //   - `DetectionFailed`:   no magic/extension matched (arbitrary binaries,
+        //     Mach-O, framework dylibs, `PkgInfo`, `.DS_Store`). This is the common
+        //     case for app-bundle internals — NOT `UnsupportedFormat`, which is why
+        //     they used to slip past this fallback and land indexed-but-hashless.
+        //   - `ParseError`: a format was detected but the typed parser rejected the
+        //     bytes (ragged CSV, non-strict JSON, a `.strings` file mis-detected as
+        //     media). The file is malformed for that format, not unreadable.
+        // Genuine read failures (`Io`, `FileNotFound`) still abort — those ARE probe
+        // failures and the caller must count them.
         let mut meta = match crate::extract_metadata(&path) {
             Ok(m) => m,
-            Err(MetadataError::UnsupportedFormat(_)) => FileMetadata::checksum_only(&path),
+            Err(
+                MetadataError::UnsupportedFormat(_)
+                | MetadataError::DetectionFailed(_)
+                | MetadataError::ParseError { .. },
+            ) => FileMetadata::checksum_only(&path),
             Err(e) => return Err(e),
         };
         meta.checksum = crate::compute_checksum(&path, crate::ChecksumAlgorithm::Sha256).ok();
