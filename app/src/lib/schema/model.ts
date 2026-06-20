@@ -184,6 +184,32 @@ function objectNodeLabel(fields: Map<string, SchemaNode>): string {
 }
 
 /**
+ * Map a file-metadata scalar (`#[serde(rename_all = "snake_case")]`) to the
+ * canonical scalar `name` the schema views colour-code (String / Number / Bool
+ * / Timestamp), so catalogue type trees look like the node-config schema views.
+ * The precise wire name (`int64` vs `float64`) is preserved separately as the
+ * node's `label`.
+ */
+function canonicalScalarName(snake: string): string {
+	switch (snake) {
+		case 'boolean':
+			return 'Bool';
+		case 'string':
+			return 'String';
+		case 'binary':
+			return 'Binary';
+		case 'date':
+			return 'Date';
+		case 'time':
+			return 'Time';
+		case 'duration':
+			return 'Duration';
+		default:
+			return /^u?int\d+$/.test(snake) || /^float\d+$/.test(snake) ? 'Number' : snake;
+	}
+}
+
+/**
  * Convert a raw `aithericon-file-metadata` `DataType` (as serialized into a
  * catalogue entry's `file_metadata.columns[].data_type`) into a `SchemaNode`.
  *
@@ -197,10 +223,11 @@ function objectNodeLabel(fields: Map<string, SchemaNode>): string {
  * - `{ unknown: "x" }`                   → opaque
  */
 export function fileMetadataDataTypeToSchemaNode(dt: unknown): SchemaNode {
-	// Unit variants serialize as plain snake_case strings — keep them as the
-	// label verbatim ("int64" vs "float64" is more informative than "Number").
+	// Unit variants serialize as plain snake_case strings — keep the precise wire
+	// name as the label ("int64" vs "float64" is more informative than "Number"),
+	// but colour-code via the canonical scalar name.
 	if (typeof dt === 'string') {
-		return { kind: 'scalar', name: dt, label: dt };
+		return { kind: 'scalar', name: canonicalScalarName(dt), label: dt };
 	}
 	if (!dt || typeof dt !== 'object' || Array.isArray(dt)) {
 		return { kind: 'any', label: 'any' };

@@ -6,8 +6,16 @@
 	import type { MetadataProps } from './types';
 	import { pct } from './utils';
 	import DetailTable from '../DetailTable.svelte';
+	import SchemaView from '$lib/schema/SchemaView.svelte';
 
-	let { mv, onSchemaClick }: MetadataProps = $props();
+	let { mv, columnSchemas, onSchemaClick }: MetadataProps = $props();
+
+	// A complex (struct/list) column gets a real expandable type tree; scalar
+	// columns keep the compact humanized string — a tree there adds no detail.
+	function complexSchema(name: string) {
+		const node = columnSchemas?.get(name);
+		return node && (node.kind === 'object' || node.kind === 'array') ? node : null;
+	}
 
 	const formatLabel = $derived(mv.format ?? null);
 	const schema = $derived(mv.schema_fingerprint ?? null);
@@ -51,9 +59,16 @@
 					</thead>
 					<tbody>
 						{#each columns as col}
-							<tr class="border-b border-border/40 last:border-0">
+							{@const tree = complexSchema(col.name)}
+							<tr class="border-b border-border/40 last:border-0 align-top">
 								<td class="whitespace-nowrap px-2 py-1 font-medium text-foreground" title={col.name}>{col.name}</td>
-								<td class="whitespace-nowrap px-2 py-1 text-muted-foreground">{col.data_type}</td>
+								<td class="px-2 py-1 text-muted-foreground">
+									{#if tree}
+										<SchemaView node={tree} />
+									{:else}
+										<span class="whitespace-nowrap">{col.data_type}</span>
+									{/if}
+								</td>
 								<td class="whitespace-nowrap px-2 py-1 text-muted-foreground">{col.nullable ? 'nullable' : '—'}</td>
 								<td class="px-2 py-1">
 									{#if (col.classifications ?? []).length > 0}

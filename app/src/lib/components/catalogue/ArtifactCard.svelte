@@ -7,7 +7,8 @@
 	} from '$lib/api/client';
 	import { pickRenderer } from '$lib/components/process-live/renderers/registry';
 	import JsonRenderer from '$lib/components/process-live/renderers/JsonRenderer.svelte';
-	import { catalogueColumnsToSchemaNode } from '$lib/schema/model';
+	import { catalogueColumnsToSchemaNode, fileMetadataDataTypeToSchemaNode } from '$lib/schema/model';
+	import type { SchemaNode } from '$lib/schema/model';
 	import { pickMetadataRenderer } from './metadata/registry';
 	import { instanceIdFromNet, instanceIdFromExecution } from '$lib/utils';
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
@@ -255,6 +256,24 @@
 	const jsonRecordSchema = $derived.by(() => {
 		const fm = entry.file_metadata as { columns?: unknown } | null | undefined;
 		return catalogueColumnsToSchemaNode(fm?.columns) ?? undefined;
+	});
+
+	// Per-column type trees (name → SchemaNode) from the same raw nested types,
+	// so the Format & schema columns table can render struct/list types as an
+	// expandable tree instead of a truncated `struct<…>` string.
+	const columnSchemas = $derived.by((): Map<string, SchemaNode> | undefined => {
+		const fm = entry.file_metadata as { columns?: unknown } | null | undefined;
+		if (!Array.isArray(fm?.columns)) return undefined;
+		const map = new Map<string, SchemaNode>();
+		for (const col of fm.columns) {
+			if (col && typeof col === 'object') {
+				const c = col as Record<string, unknown>;
+				if (typeof c.name === 'string') {
+					map.set(c.name, fileMetadataDataTypeToSchemaNode(c.data_type));
+				}
+			}
+		}
+		return map.size > 0 ? map : undefined;
 	});
 
 	const hasDetails = $derived(
@@ -561,7 +580,7 @@
 			<!-- Format & schema — dispatched to a format-family-specific renderer -->
 			{#if mv && (formatLabel || schema || details || numRows != null || columns.length > 0 || dims.length > 0 || unixMode != null)}
 				{@const MetaRenderer = pickMetadataRenderer(mv)}
-				<MetaRenderer {mv} onSchemaClick={handleSchemaClick} />
+				<MetaRenderer {mv} {columnSchemas} onSchemaClick={handleSchemaClick} />
 			{/if}
 
 			<!-- Sample rows (first rows of tabular data) -->
