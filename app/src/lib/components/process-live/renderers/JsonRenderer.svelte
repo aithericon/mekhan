@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { catalogueDownloadUrl } from '$lib/api/client';
+	import { artifactFetchUrl } from '$lib/api/client';
 	import { authFetch } from '$lib/auth/fetch';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 
@@ -18,12 +18,12 @@
 		content = null;
 		loading = true;
 		error = null;
-		if (!entry.storage_path) {
+		const url = artifactFetchUrl(entry);
+		if (!url) {
 			loading = false;
-			error = 'no storage_path';
+			error = 'no content url';
 			return;
 		}
-		const url = catalogueDownloadUrl(entry.storage_path);
 		const controller = new AbortController();
 		authFetch(url, { signal: controller.signal })
 			.then((r) => {

@@ -1198,6 +1198,14 @@ export interface LiveArtifactEntry {
 	filename: string;
 	mime_type: string | null;
 	storage_path: string | null;
+	/**
+	 * Pre-resolved fetch URL for this entry's bytes, set by callers that hold a
+	 * by-reference catalogue entry (no `storage_path`, bytes served from a file
+	 * server by content hash). When present, renderers fetch this instead of
+	 * `catalogueDownloadUrl(storage_path)`. Live process artifacts leave it
+	 * unset and keep the storage-path path. See `artifactFetchUrl`.
+	 */
+	content_url?: string | null;
 	size_bytes: number | null;
 	process_step: string | null;
 	signal_key: string | null;
@@ -1332,6 +1340,19 @@ export function catalogueDownloadUrl(storagePath: string): string {
  */
 export function dataEntryContentUrl(contentHash: string): string {
 	return `${API_BASE}/data/entries/${contentHash}/content`;
+}
+
+/**
+ * Resolve the byte-fetch URL for an artifact entry, regardless of where the
+ * bytes live: a caller-supplied `content_url` (by-reference, served by content
+ * hash) wins; otherwise the platform-store `storage_path`. Returns null when
+ * neither is available (e.g. an un-adopted by-reference entry with no servable
+ * endpoint) — renderers treat null as "nothing to preview".
+ */
+export function artifactFetchUrl(entry: LiveArtifactEntry): string | null {
+	if (entry.content_url) return entry.content_url;
+	if (entry.storage_path) return catalogueDownloadUrl(entry.storage_path);
+	return null;
 }
 
 // ── File inventory (content-addressed catalogue companion, docs/32) ──────────

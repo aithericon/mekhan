@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, onDestroy } from 'svelte';
 	import * as echarts from 'echarts';
-	import { catalogueDownloadUrl } from '$lib/api/client';
+	import { artifactFetchUrl } from '$lib/api/client';
 	import { authFetch } from '$lib/auth/fetch';
 	import type { LiveArtifactEntry } from '$lib/api/client';
 
@@ -96,13 +96,14 @@
 		const id = entry.artifact_id ?? entry.id;
 		void id;
 		error = null;
-		if (!entry.storage_path) {
-			error = 'no storage_path';
+		const url = artifactFetchUrl(entry);
+		if (!url) {
+			error = 'no content url';
 			return;
 		}
 		fetching = true;
 		const controller = new AbortController();
-		authFetch(catalogueDownloadUrl(entry.storage_path), { signal: controller.signal })
+		authFetch(url, { signal: controller.signal })
 			.then((r) => {
 				if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
 				return r.json();
