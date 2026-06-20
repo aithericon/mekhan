@@ -174,6 +174,88 @@ export function jsonSchemaToSchemaNode(
 	return { kind: 'any', label: 'any' };
 }
 
+// ── File-metadata (catalogue) adapter ──────────────────────────────────────────
+
+/** `{a, b, c, …}` style label for an object node. */
+function objectNodeLabel(fields: Map<string, SchemaNode>): string {
+	if (fields.size === 0) return 'object';
+	const keys = [...fields.keys()];
+	return `{${keys.slice(0, 3).join(', ')}${keys.length > 3 ? ', …' : ''}}`;
+}
+
+/**
+ * Convert a raw `aithericon-file-metadata` `DataType` (as serialized into a
+ * catalogue entry's `file_metadata.columns[].data_type`) into a `SchemaNode`.
+ *
+ * Mirrors the Rust enum's serde shape (`#[serde(rename_all = "snake_case")]`
+ * in `shared/file-metadata/src/data_type.rs`):
+ * - unit variants → bare strings: "string", "int64", "float64", "boolean", …
+ * - `{ struct: [[name, dt], …] }`        → object (recursive)
+ * - `{ list: dt }`                       → array
+ * - `{ timestamp: { timezone } }`        → scalar (timezone folded into label)
+ * - `{ dictionary: { index, value } }`   → the value's node
+ * - `{ unknown: "x" }`                   → opaque
+ */
+export function fileMetadataDataTypeToSchemaNode(dt: unknown): SchemaNode {
+	// Unit variants serialize as plain snake_case strings — keep them as the
+	// label verbatim ("int64" vs "float64" is more informative than "Number").
+	if (typeof dt === 'string') {
+		return { kind: 'scalar', name: dt, label: dt };
+	}
+	if (!dt || typeof dt !== 'object' || Array.isArray(dt)) {
+		return { kind: 'any', label: 'any' };
+	}
+	const obj = dt as Record<string, unknown>;
+	if (Array.isArray(obj.struct)) {
+		const fields = new Map<string, SchemaNode>();
+		for (const pair of obj.struct as unknown[]) {
+			if (Array.isArray(pair) && pair.length === 2 && typeof pair[0] === 'string') {
+				fields.set(pair[0], fileMetadataDataTypeToSchemaNode(pair[1]));
+			}
+		}
+		return { kind: 'object', fields, selectable: true, label: objectNodeLabel(fields) };
+	}
+	if ('list' in obj) {
+		const element = fileMetadataDataTypeToSchemaNode(obj.list);
+		return { kind: 'array', element, label: `list<${element.label}>` };
+	}
+	if ('timestamp' in obj) {
+		const tz = (obj.timestamp as Record<string, unknown> | null)?.timezone;
+		return { kind: 'scalar', name: 'timestamp', label: typeof tz === 'string' ? `timestamp<${tz}>` : 'timestamp' };
+	}
+	if ('dictionary' in obj) {
+		return fileMetadataDataTypeToSchemaNode((obj.dictionary as Record<string, unknown> | null)?.value);
+	}
+	if ('unknown' in obj) {
+		const name = typeof obj.unknown === 'string' ? obj.unknown : 'unknown';
+		return { kind: 'opaque', name, label: name };
+	}
+	return { kind: 'any', label: 'any' };
+}
+
+/**
+ * Build the per-record object `SchemaNode` from a catalogue entry's raw
+ * `file_metadata.columns`. Returns null when no usable column schema exists
+ * (legacy / pre-probe rows, or a non-record file).
+ *
+ * The probe stores one column per record field — for a single-object JSON those
+ * are the object's keys, for an array-of-objects they are the element keys. Both
+ * share this record shape, so the caller (which has the parsed value) decides
+ * whether the file's top-level value IS this record or an array OF it.
+ */
+export function catalogueColumnsToSchemaNode(columns: unknown): SchemaNode | null {
+	if (!Array.isArray(columns) || columns.length === 0) return null;
+	const fields = new Map<string, SchemaNode>();
+	for (const col of columns) {
+		if (!col || typeof col !== 'object') continue;
+		const c = col as Record<string, unknown>;
+		if (typeof c.name !== 'string') continue;
+		fields.set(c.name, fileMetadataDataTypeToSchemaNode(c.data_type));
+	}
+	if (fields.size === 0) return null;
+	return { kind: 'object', fields, selectable: true, label: objectNodeLabel(fields) };
+}
+
 // ── Port adapter ──────────────────────────────────────────────────────────────
 
 /**

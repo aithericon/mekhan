@@ -6,6 +6,8 @@
 		type LiveArtifactEntry
 	} from '$lib/api/client';
 	import { pickRenderer } from '$lib/components/process-live/renderers/registry';
+	import JsonRenderer from '$lib/components/process-live/renderers/JsonRenderer.svelte';
+	import { catalogueColumnsToSchemaNode } from '$lib/schema/model';
 	import { pickMetadataRenderer } from './metadata/registry';
 	import { instanceIdFromNet, instanceIdFromExecution } from '$lib/utils';
 	import { copiesForHash, type DataCopy } from '$lib/api/data';
@@ -245,6 +247,14 @@
 		if (!r) return null;
 		if (preview && /^(text\/|application\/json)/.test(entry.mime_type ?? '')) return null;
 		return r;
+	});
+
+	// Per-record schema (column → type) recovered from the probe's raw nested
+	// `DataType`s, fed to the JSON preview tree so its fields are type-annotated
+	// rather than rendered as bare values. Null for legacy / non-record files.
+	const jsonRecordSchema = $derived.by(() => {
+		const fm = entry.file_metadata as { columns?: unknown } | null | undefined;
+		return catalogueColumnsToSchemaNode(fm?.columns) ?? undefined;
 	});
 
 	const hasDetails = $derived(
@@ -493,7 +503,11 @@
 				<section>
 					<h4 class="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Preview</h4>
 					<div class="max-h-[26rem] overflow-auto rounded-md border border-border bg-background">
-						<R entry={liveEntry} />
+						{#if R === JsonRenderer}
+							<JsonRenderer entry={liveEntry} schemaNode={jsonRecordSchema} />
+						{:else}
+							<R entry={liveEntry} />
+						{/if}
 					</div>
 				</section>
 			{/if}

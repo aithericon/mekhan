@@ -3,6 +3,8 @@ import {
 	tyDescriptorToSchemaNode,
 	jsonSchemaToSchemaNode,
 	portToSchemaNode,
+	fileMetadataDataTypeToSchemaNode,
+	catalogueColumnsToSchemaNode,
 	isPrimitive,
 	isFileRef,
 	isStorageKey
@@ -439,5 +441,89 @@ describe('portToSchemaNode', () => {
 		if (node.kind === 'object') {
 			expect(node.fields.size).toBe(0);
 		}
+	});
+});
+
+describe('fileMetadataDataTypeToSchemaNode', () => {
+	it('maps unit (snake_case string) variants to labelled scalars', () => {
+		for (const name of ['string', 'int64', 'float64', 'boolean', 'binary']) {
+			const node = fileMetadataDataTypeToSchemaNode(name);
+			expect(node.kind).toBe('scalar');
+			expect(node.label).toBe(name);
+		}
+	});
+
+	it('maps a struct variant to a recursive object node', () => {
+		const node = fileMetadataDataTypeToSchemaNode({
+			struct: [
+				['name', 'string'],
+				['age', 'int64'],
+				['address', { struct: [['city', 'string']] }]
+			]
+		});
+		expect(node.kind).toBe('object');
+		if (node.kind === 'object') {
+			expect([...node.fields.keys()]).toEqual(['name', 'age', 'address']);
+			expect(node.fields.get('age')?.label).toBe('int64');
+			const addr = node.fields.get('address');
+			expect(addr?.kind).toBe('object');
+			if (addr?.kind === 'object') {
+				expect(addr.fields.get('city')?.label).toBe('string');
+			}
+		}
+	});
+
+	it('maps a list variant to an array node with element schema', () => {
+		const node = fileMetadataDataTypeToSchemaNode({ list: 'string' });
+		expect(node.kind).toBe('array');
+		if (node.kind === 'array') {
+			expect(node.element.label).toBe('string');
+			expect(node.label).toBe('list<string>');
+		}
+	});
+
+	it('folds a timestamp timezone into the label', () => {
+		expect(fileMetadataDataTypeToSchemaNode({ timestamp: { timezone: 'UTC' } }).label).toBe(
+			'timestamp<UTC>'
+		);
+		expect(fileMetadataDataTypeToSchemaNode({ timestamp: { timezone: null } }).label).toBe(
+			'timestamp'
+		);
+	});
+
+	it('unwraps a dictionary to its value type and maps unknown to opaque', () => {
+		expect(
+			fileMetadataDataTypeToSchemaNode({ dictionary: { index: 'uint32', value: 'string' } }).label
+		).toBe('string');
+		const unk = fileMetadataDataTypeToSchemaNode({ unknown: 'custom' });
+		expect(unk.kind).toBe('opaque');
+		expect(unk.label).toBe('custom');
+	});
+
+	it('degrades unrecognized input to any', () => {
+		expect(fileMetadataDataTypeToSchemaNode(null).kind).toBe('any');
+		expect(fileMetadataDataTypeToSchemaNode(42).kind).toBe('any');
+		expect(fileMetadataDataTypeToSchemaNode({ weird: 1 }).kind).toBe('any');
+	});
+});
+
+describe('catalogueColumnsToSchemaNode', () => {
+	it('builds an object node from file-metadata columns', () => {
+		const node = catalogueColumnsToSchemaNode([
+			{ name: 'id', data_type: 'int64', nullable: false },
+			{ name: 'meta', data_type: { struct: [['k', 'string']] }, nullable: true }
+		]);
+		expect(node?.kind).toBe('object');
+		if (node?.kind === 'object') {
+			expect(node.fields.get('id')?.label).toBe('int64');
+			expect(node.fields.get('meta')?.kind).toBe('object');
+		}
+	});
+
+	it('returns null for empty / non-record / malformed columns', () => {
+		expect(catalogueColumnsToSchemaNode([])).toBeNull();
+		expect(catalogueColumnsToSchemaNode(undefined)).toBeNull();
+		expect(catalogueColumnsToSchemaNode('nope')).toBeNull();
+		expect(catalogueColumnsToSchemaNode([{ nope: 1 }])).toBeNull();
 	});
 });
