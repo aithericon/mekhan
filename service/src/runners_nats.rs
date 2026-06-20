@@ -246,7 +246,8 @@ impl RunnerNatsSigner {
     ///   EXECUTION id, not the runner id), `runner.{id}.presence`, and
     ///   `{pool}.claim` (only when pooled), plus the JetStream pull + shared
     ///   stream API (see the helpers below).
-    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`.
+    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`, and
+    ///   `fileserve.{id}.read` (the file-handle data plane the daemon serves on).
     ///   Plus a ResponsePermission so async-nats request/reply works.
     /// The JWT carries no expiry (long-lived; rotation = re-mint).
     pub fn mint_runner_jwt(
@@ -321,6 +322,13 @@ impl RunnerNatsSigner {
             "_INBOX.>".to_string(),
             // Receive cancellations for executions this runner drains.
             EXECUTOR_CANCEL_FILTER.to_string(),
+            // File-handle data plane (docs/36): a runner daemon queue-subscribes
+            // `fileserve.<group>.read` to serve cross-executor file reads OUT of
+            // its outputs. A runner's serve_group is exactly its `runner_id`
+            // (`executor-service/src/main.rs` pushes `config.runner_id`), so grant
+            // that one subject — without it the subscribe is denied (Permissions
+            // Violation) and any cross-executor read from this runner stalls.
+            format!("fileserve.{runner_id}.read"),
         ];
 
         let pub_perm: Permission = Permission::builder()
@@ -372,6 +380,8 @@ impl RunnerNatsSigner {
     ///     `worker.{id}.>` subscribe; the anonymous `executor-<wire>` pull path
     ///     is governed by the (dev-open) JetStream pull perms, not a core
     ///     subscribe, exactly as the runner job-delivery comment above explains.
+    ///     A grouped worker also gets `fileserve.<group>.read`, where `group` is
+    ///     the routing partition it serves the file-handle data plane on.
     ///   PUBLISH allow: `worker.{id}.presence` (its heartbeat), and the shared
     ///     status/events fan-in `executor.status.*.>` / `executor.events.*.>`
     ///     (a worker reports on whatever exec-id it is currently draining, so the
@@ -426,6 +436,16 @@ impl RunnerNatsSigner {
                     let ns = aithericon_backends::executor_pool_namespace(wire);
                     sub_allow.push(format!("{ns}-grp.*.{group}.>"));
                 }
+                // File-handle data plane (docs/36): an enrolled worker-pool daemon
+                // queue-subscribes `fileserve.<worker_routing_partition>.read` to
+                // serve cross-executor file reads OUT of its outputs. The `group`
+                // arg here IS the routing partition (the capacity-resource UUID) —
+                // `handlers/workers.rs` mints with `routing_partition.to_string()`,
+                // and the daemon serves on `config.worker_routing_partition`
+                // (populated from `identity.routing_partition`). Grant that one
+                // subject; without it the serve subscribe is denied (Permissions
+                // Violation) and cross-executor reads from this worker stall.
+                sub_allow.push(format!("fileserve.{group}.read"));
             }
         }
 
@@ -723,6 +743,8 @@ mod tests {
 
         let sub_allow = allow_list(&claims, "sub");
         assert!(sub_allow.contains(&format!("runner.{id}.>")));
+        // File-handle data plane (docs/36): a runner serves on its own runner_id.
+        assert!(sub_allow.contains(&format!("fileserve.{id}.read")));
 
         // ResponsePermission present so request/reply works.
         assert!(claims["nats"]["resp"].is_object());
@@ -896,6 +918,9 @@ mod tests {
         assert!(sub_allow.contains(&format!("worker.{id}.>")));
         assert!(sub_allow.contains(&format!("executor-python-grp.*.{group}.>")));
         assert!(sub_allow.contains(&format!("executor-docker-grp.*.{group}.>")));
+        // File-handle data plane (docs/36): a grouped worker serves on its
+        // routing partition, which is the `group` arg passed at mint time.
+        assert!(sub_allow.contains(&format!("fileserve.{group}.read")));
 
         // PUBLISH: presence heartbeat + the shared status/events fan-in. NO
         // `.claim` — a worker is a pull competitor, not a presence-push target.
@@ -928,6 +953,12 @@ mod tests {
         assert!(
             !sub_allow.iter().any(|s| s.starts_with("executor-")),
             "an ungrouped worker gets no group pull filter, got {sub_allow:?}"
+        );
+        // An ungrouped worker has no routing partition to serve on, so it gets
+        // no `fileserve.*.read` grant either (mirrors the pull-filter omission).
+        assert!(
+            !sub_allow.iter().any(|s| s.starts_with("fileserve.")),
+            "an ungrouped worker gets no fileserve subscribe, got {sub_allow:?}"
         );
     }
 
