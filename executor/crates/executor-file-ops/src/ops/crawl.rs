@@ -42,7 +42,9 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use aithericon_executor_backend::traits::{BatchSink, EventStream};
-use aithericon_executor_domain::{FoldBatch, FoldItem, FoldMode, MetricPoint, MetricType};
+use aithericon_executor_domain::{
+    FoldBatch, FoldItem, FoldMode, LogLevel, MetricPoint, MetricType,
+};
 
 /// How often the crawl emits a files/sec progress sample — both a `MetricPoint`
 /// batch (when the worker has a metric sink) and an `info!` log line (always).
@@ -95,6 +97,24 @@ async fn emit_crawl_progress(
     ])
     .await;
 }
+
+/// Stream a diagnostic line to the run's log panel (`executor.events.{exec_id}.log`)
+/// when an `EventStream` is wired. Crawl traversal/probe errors otherwise reach
+/// only the runner's LOCAL `warn!` tracing, where a user never sees them — so a
+/// permission-walled crawl looks like it "finished with N files" and silently
+/// drops the rest. No-op without a stream (sink-less unit runs).
+async fn crawl_log(event_stream: &Option<Arc<dyn EventStream>>, level: LogLevel, message: String) {
+    if let Some(es) = event_stream {
+        es.log(level, message, HashMap::new()).await;
+    }
+}
+
+/// Per-class cap on individually-streamed error lines (list errors and probe
+/// errors each get their own budget). A corpus with thousands of unreadable
+/// entries must not flood the run log — beyond the cap the errors are still
+/// counted and reported in the completion summary, and `warn!` tracing stays
+/// uncapped on the runner host.
+const MAX_STREAMED_DIAGNOSTICS: u64 = 25;
 
 use crate::config::CrawlConfig;
 
@@ -486,6 +506,14 @@ pub async fn execute(
                     return Err(e.into());
                 }
                 warn!(error = %e, "crawl: list error; skipping unreadable path");
+                if list_errors <= MAX_STREAMED_DIAGNOSTICS {
+                    crawl_log(
+                        &event_stream,
+                        LogLevel::Warn,
+                        format!("skipped unreadable directory ({}): {e}", e.kind()),
+                    )
+                    .await;
+                }
                 continue;
             }
             // Genuine infrastructure errors still abort the walk.
@@ -546,6 +574,14 @@ pub async fn execute(
                 Err(e) => {
                     warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
                     probe_errors += 1;
+                    if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
+                        crawl_log(
+                            &event_stream,
+                            LogLevel::Warn,
+                            format!("indexed without metadata (probe failed): {user_path} — {e}"),
+                        )
+                        .await;
+                    }
                     (None, None)
                 }
             }
@@ -666,6 +702,33 @@ pub async fn execute(
         "crawl complete"
     );
 
+    // Surface a completion summary to the RUN log — anomalies especially. Without
+    // this the user only sees `count` in the output token and can't tell a clean
+    // `count=1` from one where a permission wall silently swallowed the rest. WARN
+    // when anything was skipped so it stands out; INFO on a clean walk.
+    let mut summary = format!("crawl complete: {total} files indexed");
+    if probe_errors > 0 {
+        summary.push_str(&format!(
+            ", {probe_errors} indexed without metadata (unreadable content)"
+        ));
+    }
+    if list_errors > 0 {
+        summary.push_str(&format!(
+            ", {list_errors} directories skipped (permission denied / vanished)"
+        ));
+    }
+    if cancelled {
+        summary.push_str(", cancelled — will resume");
+    } else if stopped_by_max {
+        summary.push_str(", paused at max_batches");
+    }
+    let level = if probe_errors > 0 || list_errors > 0 {
+        LogLevel::Warn
+    } else {
+        LogLevel::Info
+    };
+    crawl_log(&event_stream, level, summary).await;
+
     Ok(HashMap::from([
         ("prefix".into(), serde_json::json!(config.prefix)),
         ("count".into(), serde_json::json!(total)),
@@ -697,11 +760,14 @@ mod tests {
     #[derive(Default)]
     struct CapturingStream {
         items: Mutex<Vec<Value>>,
+        logs: Mutex<Vec<(LogLevel, String)>>,
     }
 
     #[async_trait]
     impl EventStream for CapturingStream {
-        async fn log(&self, _level: LogLevel, _message: String, _fields: HashMap<String, String>) {}
+        async fn log(&self, level: LogLevel, message: String, _fields: HashMap<String, String>) {
+            self.logs.lock().unwrap().push((level, message));
+        }
 
         async fn item(&self, _channel: String, _episode_uid: String, _idx: u64, payload: Value) {
             self.items.lock().unwrap().push(payload);
@@ -926,6 +992,80 @@ mod tests {
 
         // Restore perms so TempDir cleanup works everywhere.
         let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+    }
+
+    /// A permission-denied directory is skipped (counted in `list_errors`) AND
+    /// surfaced to the RUN log: a streamed WARN names the skipped directory and
+    /// the completion summary reports the count — so a permission wall is never
+    /// the silent "finished with N files" the old crawl produced. The walk still
+    /// completes and includes the readable sibling. A completion summary streams
+    /// unconditionally (INFO on a clean walk, WARN when anything was skipped).
+    #[tokio::test]
+    async fn crawl_permission_denied_dir_streams_warning_and_summary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas/secret")).unwrap();
+        std::fs::write(dir.path().join("nas/ok.txt"), "fine").unwrap();
+        std::fs::write(dir.path().join("nas/secret/hidden.txt"), "nope").unwrap();
+        // Lock the subdir so the recursive lister can't read its entries.
+        let secret = dir.path().join("nas/secret");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a permission-denied subdir must not fail the walk");
+
+        // The readable sibling is always crawled (≥1; root reads the locked dir too).
+        assert!(result["count"].as_u64().unwrap() >= 1);
+
+        let logs = stream.logs.lock().unwrap();
+        assert!(
+            logs.iter().any(|(_, m)| m.starts_with("crawl complete:")),
+            "a completion summary must always stream: {logs:?}"
+        );
+
+        let list_errors = result["list_errors"].as_u64().unwrap();
+        if list_errors > 0 {
+            // Non-root: the locked dir is skipped and surfaced — a per-error WARN
+            // plus the summary naming the skipped count, both at WARN.
+            assert!(
+                logs.iter().any(|(l, m)| matches!(l, LogLevel::Warn)
+                    && m.contains("skipped unreadable directory")),
+                "permission-denied dir must stream a WARN line: {logs:?}"
+            );
+            assert!(
+                logs.iter().any(|(l, m)| matches!(l, LogLevel::Warn)
+                    && m.contains("directories skipped")),
+                "completion summary must flag skipped dirs at WARN: {logs:?}"
+            );
+        } else {
+            // Root (CI) reads everything → clean INFO summary, no skip warnings.
+            assert!(
+                logs.iter()
+                    .any(|(l, m)| matches!(l, LogLevel::Info) && m.starts_with("crawl complete:")),
+                "a clean walk streams an INFO summary: {logs:?}"
+            );
+        }
+
+        // Restore perms so TempDir cleanup works everywhere.
+        let _ = std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o755));
     }
 
     /// Unknown probe values are a config error (caught at execute too, not
