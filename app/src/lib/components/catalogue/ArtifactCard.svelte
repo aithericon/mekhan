@@ -189,37 +189,6 @@
 	);
 	const Icon = $derived(fileIcon());
 
-	// ── Media preview ─────────────────────────────────────────────────────────
-	// The process-live renderer registry works off a LiveArtifactEntry; the card
-	// holds a CatalogueEntry. Adapt the overlapping fields so the same media
-	// renderers (image/video/audio/…) can drive the catalogue detail preview.
-	const liveEntry = $derived.by((): LiveArtifactEntry => ({
-		execution_id: entry.execution_id,
-		name: entry.name,
-		category: entry.category,
-		filename: entry.filename,
-		mime_type: entry.mime_type ?? null,
-		storage_path: entry.storage_path ?? null,
-		size_bytes: entry.size_bytes ?? null,
-		process_step: entry.process_step ?? null,
-		signal_key: entry.signal_key ?? null,
-		user_metadata: (entry.user_metadata ?? null) as Record<string, unknown> | null,
-		created_at: entry.created_at,
-		id: entry.id,
-		artifact_id: entry.entry_id ?? entry.id
-	}));
-
-	// Pick a media renderer for the preview section. Suppress raw text/json dumps
-	// when a structured tabular sample (the `preview` rows) already shows below —
-	// otherwise the same bytes read twice (once as a dump, once as a table).
-	const previewRenderer = $derived.by(() => {
-		if (!entry.storage_path) return null;
-		const r = pickRenderer(liveEntry);
-		if (!r) return null;
-		if (preview && /^(text\/|application\/json)/.test(entry.mime_type ?? '')) return null;
-		return r;
-	});
-
 	// Self-fetched copies for call-sites that didn't pass the `copies` prop.
 	let fetchedCopies = $state<DataCopy[] | null>(null);
 	$effect(() => {
@@ -233,6 +202,50 @@
 
 	// The canonical (or first) physical copy — surfaced in the collapsed row.
 	const primaryCopy = $derived(allCopies.find((c) => c.is_canonical) ?? allCopies[0] ?? null);
+
+	// ── Media preview ───────────────────────────────────────────────────────────
+	// The process-live renderer registry works off a LiveArtifactEntry; the card
+	// holds a CatalogueEntry. Adapt the overlapping fields so the same media
+	// renderers (image/video/audio/…) drive the catalogue detail preview.
+	//
+	// Two byte sources: platform-store artifacts carry a `storage_path`
+	// (catalogueDownloadUrl). Crawled / by-reference entries have none — their
+	// bytes live on a file server and are served by content hash, but only once
+	// the server is ADOPTED so a servable copy exists. `content_url` carries that
+	// resolved by-reference URL so the renderers can fetch either source.
+	const byRefContentUrl = $derived(
+		!entry.storage_path && entry.content_hash && allCopies.some((c) => c.servable)
+			? dataEntryContentUrl(entry.content_hash)
+			: null
+	);
+	const liveEntry = $derived.by((): LiveArtifactEntry => ({
+		execution_id: entry.execution_id,
+		name: entry.name,
+		category: entry.category,
+		filename: entry.filename,
+		mime_type: entry.mime_type ?? null,
+		storage_path: entry.storage_path ?? null,
+		content_url: byRefContentUrl,
+		size_bytes: entry.size_bytes ?? null,
+		process_step: entry.process_step ?? null,
+		signal_key: entry.signal_key ?? null,
+		user_metadata: (entry.user_metadata ?? null) as Record<string, unknown> | null,
+		created_at: entry.created_at,
+		id: entry.id,
+		artifact_id: entry.entry_id ?? entry.id
+	}));
+
+	// Pick a media renderer for the preview section. Needs a fetchable source —
+	// a platform `storage_path` or a servable by-reference copy. Suppress raw
+	// text/json dumps when a structured tabular sample (the `preview` rows) shows
+	// below — otherwise the same bytes read twice (once as a dump, once as a table).
+	const previewRenderer = $derived.by(() => {
+		if (!entry.storage_path && !byRefContentUrl) return null;
+		const r = pickRenderer(liveEntry);
+		if (!r) return null;
+		if (preview && /^(text\/|application\/json)/.test(entry.mime_type ?? '')) return null;
+		return r;
+	});
 
 	const hasDetails = $derived(
 		allCopies.length > 0 ||

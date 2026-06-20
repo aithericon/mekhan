@@ -10,6 +10,7 @@
 
 <ArtifactMediaPreview
 	storagePath={entry.storage_path}
+	contentUrl={entry.content_url}
 	mimeType={entry.mime_type}
 	filename={entry.filename}
 	name={entry.name}
