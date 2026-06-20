@@ -442,6 +442,16 @@ pub async fn execute(
     let mut cancelled = false;
     let mut stopped_by_max = false;
     let mut probe_errors: u64 = 0;
+    // Directory `list` failures (EACCES on a restricted subtree, or a dir that
+    // vanished mid-walk) are tolerated like probe errors: a large corpus WILL
+    // contain unreadable dirs, and aborting the whole campaign on one is worse
+    // than skipping it. opendal's `FlatLister` drops the failed subdir and
+    // resumes the parent on the next poll, so we log, count, and continue.
+    // `consecutive_list_errors` guards the rarer mid-read case where the SAME
+    // lister keeps erroring — bail rather than spin forever.
+    let mut list_errors: u64 = 0;
+    let mut consecutive_list_errors: u32 = 0;
+    const MAX_CONSECUTIVE_LIST_ERRORS: u32 = 100;
 
     // Live throughput sampling — see `emit_crawl_progress`. `file_server` labels
     // the metric in sink mode (the only mode with a server identity).
@@ -450,7 +460,37 @@ pub async fn execute(
     let mut last_sample_total: u64 = 0;
 
     while let Some(entry) = lister.next().await {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(e) => {
+                consecutive_list_errors = 0;
+                e
+            }
+            // Skip unreadable / vanished directories instead of failing the
+            // whole walk. opendal's `FlatLister` has already dropped the failed
+            // subdir, so `continue` resumes the parent's remaining entries; the
+            // error message carries the offending path for the operator.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    opendal::ErrorKind::PermissionDenied | opendal::ErrorKind::NotFound
+                ) =>
+            {
+                list_errors += 1;
+                consecutive_list_errors += 1;
+                if consecutive_list_errors > MAX_CONSECUTIVE_LIST_ERRORS {
+                    warn!(
+                        error = %e,
+                        consecutive = consecutive_list_errors,
+                        "crawl: too many consecutive list errors; aborting walk"
+                    );
+                    return Err(e.into());
+                }
+                warn!(error = %e, "crawl: list error; skipping unreadable path");
+                continue;
+            }
+            // Genuine infrastructure errors still abort the walk.
+            Err(e) => return Err(e.into()),
+        };
         let path = entry.path().to_string();
 
         // Skip directory markers — both the trailing-slash convention and the
@@ -621,6 +661,8 @@ pub async fn execute(
         batches = batch_idx,
         cancelled,
         exhausted,
+        probe_errors,
+        list_errors,
         "crawl complete"
     );
 
@@ -633,6 +675,7 @@ pub async fn execute(
         ("exhausted".into(), serde_json::json!(exhausted)),
         ("endpoint_root".into(), serde_json::json!(endpoint_root)),
         ("probe_errors".into(), serde_json::json!(probe_errors)),
+        ("list_errors".into(), serde_json::json!(list_errors)),
     ]))
 }
 
