@@ -19,6 +19,7 @@
 		type SlotReadiness
 	} from '$lib/api/client';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { bindingTierLabel } from '$lib/api/template-bindings';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import { fromPortFieldKind } from '$lib/fields/adapters';
@@ -185,11 +186,14 @@
 		const chosen = bindings[r.slot.key];
 		if (!chosen) {
 			// Satisfied without an explicit pick → the launcher resolves it
-			// automatically; show that (editable) instead of implying it's missing.
+			// automatically; name WHICH tier resolves it (template baseline /
+			// workspace default / platform) so the value traces back to where it
+			// was set, instead of an anonymous "Default".
 			if (r.satisfied) {
-				return r.tier === 'workspace_default'
-					? 'Workspace default — pick to override'
-					: 'Default — pick to override';
+				const origin = bindingTierLabel(r.tier) || 'Default';
+				// Platform-auto-bound slots are locked (no picker) — don't invite an
+				// override that isn't offered here.
+				return isPlatformBound(r) ? origin : `${origin} — pick to override`;
 			}
 			return 'Select a resource…';
 		}

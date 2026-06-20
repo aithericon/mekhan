@@ -344,6 +344,14 @@
 		</Select.Root>
 	</FormField>
 
+	{#if target === 'runner_group' || target === 'limit' || target === 'scheduled'}
+		<p class="text-xs italic text-muted-foreground">
+			Sets the <strong>default binding</strong> for this template's home workspace. Forks and other
+			workspaces bind their own resource under <em>Configure resources</em>, and each run can override
+			it in the launch dialog.
+		</p>
+	{/if}
+
 	{#if target === 'workers'}
 		<p class="text-sm text-muted-foreground">
 			{#if allowScheduled}
