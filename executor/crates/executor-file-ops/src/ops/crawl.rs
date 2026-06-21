@@ -686,20 +686,37 @@ pub async fn execute(
         let (hash, metadata) = if probe_mode == ProbeMode::Off {
             (None, None)
         } else {
-            match probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir).await {
-                Ok(hm) => hm,
-                Err(e) => {
-                    warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
-                    probe_errors += 1;
-                    if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
-                        crawl_log(
-                            &event_stream,
-                            LogLevel::Warn,
-                            format!("indexed without metadata (probe failed): {user_path} — {e}"),
-                        )
-                        .await;
+            // Race the probe against cancellation. A single `probe=full` probe of
+            // a multi-GB file blocks for minutes (a 43 GB NetCDF reads for ~12 min
+            // at ~57 MB/s), and the walk otherwise only checks the token between
+            // BATCHES — so a UI cancel sat unhonored for the whole read, the
+            // JetStream job stayed un-acked, and a force-restart redelivered it.
+            // `biased` checks the token first (a cancel that arrived earlier wins
+            // immediately); on cancel we abandon the in-flight read and stop the
+            // walk promptly. The orphaned blocking read finishes in the
+            // background and its result is dropped; the file is re-probed on the
+            // resume pass (`last_path` cursor), so nothing is lost.
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+                res = probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir) => match res {
+                    Ok(hm) => hm,
+                    Err(e) => {
+                        warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
+                        probe_errors += 1;
+                        if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
+                            crawl_log(
+                                &event_stream,
+                                LogLevel::Warn,
+                                format!("indexed without metadata (probe failed): {user_path} — {e}"),
+                            )
+                            .await;
+                        }
+                        (None, None)
                     }
-                    (None, None)
                 }
             }
         };
@@ -1050,6 +1067,47 @@ mod tests {
             .next_back()
             .unwrap();
         assert_eq!(files_total, 2.0, "files_total final sample");
+    }
+
+    /// A cancel stops a PROBING crawl at the probe boundary instead of waiting
+    /// out the in-flight read — the walk races each `probe_entry` against the
+    /// token (a real crawl's multi-GB probe would otherwise block for minutes,
+    /// leaving the cancel unhonored and the JetStream job un-acked). Pre-cancel
+    /// proves the biased cancel arm wins before the first probe runs: the walk
+    /// returns `cancelled=true` having indexed nothing.
+    #[tokio::test]
+    async fn crawl_cancel_during_probe_stops_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), "data").unwrap();
+        std::fs::write(dir.path().join("nas/b.txt"), "more").unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // cancelled before the walk reaches its first probe
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            None,
+            None,
+            "exec-test",
+            run_dir.path(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["cancelled"], serde_json::json!(true));
+        assert_eq!(
+            result["count"],
+            serde_json::json!(0),
+            "a pre-cancelled probing walk indexes nothing"
+        );
     }
 
     fn local_storage(dir: &std::path::Path) -> StorageConfig {
