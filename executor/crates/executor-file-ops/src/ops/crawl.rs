@@ -31,12 +31,14 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use futures::StreamExt;
 use opendal::Operator;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
@@ -46,30 +48,137 @@ use aithericon_executor_domain::{
     FoldBatch, FoldItem, FoldMode, LogLevel, MetricPoint, MetricType,
 };
 
-/// How often the crawl emits a files/sec progress sample — both a `MetricPoint`
-/// batch (when the worker has a metric sink) and an `info!` log line (always).
-/// A long walk is otherwise silent; this gives live throughput without spamming.
+/// How often the background sampler emits a throughput sample — both a
+/// `MetricPoint` batch (when the worker has a metric sink) and an `info!` log
+/// line (always). A long walk is otherwise silent; this gives live throughput
+/// without spamming.
 const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 
-/// Emit one crawl progress sample: `crawl/files_per_second` (gauge over the
-/// window since the last sample) + `crawl/files_total` (cumulative gauge), plus
-/// an always-on `info!` line. Metrics ride [`EventStream::metric`] → the same
-/// sink child-process SDK metrics use, so they surface wherever `train/loss`
-/// does. A no-op metric sink still leaves the log line.
+/// Live crawl progress, shared between the walk loop and the background sampler
+/// task. The sampler emits on its OWN timer ([`PROGRESS_INTERVAL`]) so samples
+/// keep flowing even while the walk loop is blocked for minutes inside a single
+/// large-file probe — the case the plain per-file emit could never cover (a
+/// 43 GB probe would otherwise look stalled, `files_per_second` pinned at 0).
+#[derive(Default)]
+struct CrawlProgress {
+    /// Cumulative FILE entries observed so far.
+    files: AtomicU64,
+    /// Cumulative bytes ingested. On Linux this is driven by `/proc/self/io`
+    /// `rchar` (see [`proc_rchar`]) so it advances MID-FILE — a 43 GB probe
+    /// reports throughput while it reads, not a flat 0 then a spike at
+    /// completion. On other platforms the walk loop adds each probed file's
+    /// size after the probe returns (file-granular fallback).
+    bytes: AtomicU64,
+}
+
+/// Bytes this process has read via `read(2)`-family syscalls so far, from
+/// `/proc/self/io` `rchar`. This is the read-path-agnostic way to see ingest
+/// progress MID-FILE: whichever code actually reads the bytes (the checksum
+/// loop, fmeta, opendal) bumps the kernel counter, so the sampler sees a 43 GB
+/// probe advancing in real time without threading a progress callback through
+/// every backend. Process-wide (includes the odd NATS/log read), but on a crawl
+/// runner those are negligible against multi-MB/s file reads. `None` off Linux.
+#[cfg(target_os = "linux")]
+fn proc_rchar() -> Option<u64> {
+    let io = std::fs::read_to_string("/proc/self/io").ok()?;
+    io.lines()
+        .find_map(|l| l.strip_prefix("rchar:"))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn proc_rchar() -> Option<u64> {
+    None
+}
+
+/// Aborts the background sampler when the walk returns — on the happy path AND
+/// on any early `?`/error/panic — so a finished crawl never leaves a task
+/// emitting metrics against a dead execution.
+struct SamplerGuard(JoinHandle<()>);
+impl Drop for SamplerGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Spawn the periodic sampler. It reads the shared [`CrawlProgress`] every
+/// [`PROGRESS_INTERVAL`] and, on Linux, refreshes `bytes` from `rchar` so the
+/// rate reflects mid-file progress. Runs on its own task: the multi-threaded
+/// worker runtime keeps ticking it while the walk task blocks in a probe.
+fn spawn_crawl_sampler(
+    progress: Arc<CrawlProgress>,
+    event_stream: Option<Arc<dyn EventStream>>,
+    file_server: Option<String>,
+    rchar_baseline: Option<u64>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+        ticker.tick().await; // consume the immediate first tick
+        let mut last = Instant::now();
+        let mut last_files = 0u64;
+        let mut last_bytes = 0u64;
+        loop {
+            ticker.tick().await;
+            // On Linux, derive cumulative bytes from rchar so the gauge climbs
+            // during a long single-file read; elsewhere the walk loop owns it.
+            if let (Some(base), Some(now)) = (rchar_baseline, proc_rchar()) {
+                progress
+                    .bytes
+                    .store(now.saturating_sub(base), Ordering::Relaxed);
+            }
+            let files = progress.files.load(Ordering::Relaxed);
+            let bytes = progress.bytes.load(Ordering::Relaxed);
+            if files == last_files && bytes == last_bytes {
+                continue; // nothing moved — stay quiet, keep accumulating the window
+            }
+            let window = last.elapsed();
+            emit_crawl_progress(
+                &event_stream,
+                file_server.as_deref(),
+                files,
+                files - last_files,
+                bytes,
+                bytes - last_bytes,
+                window,
+            )
+            .await;
+            last = Instant::now();
+            last_files = files;
+            last_bytes = bytes;
+        }
+    })
+}
+
+/// Emit one crawl progress sample: `crawl/files_per_second` +
+/// `crawl/bytes_per_second` (gauges over the window since the last sample) plus
+/// `crawl/files_total` + `crawl/bytes_total` (cumulative gauges), and an
+/// always-on `info!` line. `bytes_per_second` is the liveness signal that keeps
+/// moving through a single huge probe where `files_per_second` would read 0.
+/// Metrics ride [`EventStream::metric`] → the same sink child-process SDK
+/// metrics use, so they surface wherever `train/loss` does. A no-op metric sink
+/// still leaves the log line.
+#[allow(clippy::too_many_arguments)]
 async fn emit_crawl_progress(
     event_stream: &Option<Arc<dyn EventStream>>,
     file_server: Option<&str>,
     total: u64,
     window_files: u64,
+    bytes_total: u64,
+    window_bytes: u64,
     window: Duration,
 ) {
     let secs = window.as_secs_f64();
-    let files_per_sec = if secs > 0.0 {
-        window_files as f64 / secs
+    let (files_per_sec, bytes_per_sec) = if secs > 0.0 {
+        (window_files as f64 / secs, window_bytes as f64 / secs)
     } else {
-        0.0
+        (0.0, 0.0)
     };
-    info!(total, files_per_sec = format!("{files_per_sec:.1}"), "crawl: progress");
+    info!(
+        total,
+        files_per_sec = format!("{files_per_sec:.1}"),
+        mib_per_sec = format!("{:.1}", bytes_per_sec / (1024.0 * 1024.0)),
+        "crawl: progress"
+    );
     let Some(es) = event_stream else { return };
     let mut labels = HashMap::new();
     labels.insert("op".to_string(), "crawl".to_string());
@@ -77,23 +186,19 @@ async fn emit_crawl_progress(
         labels.insert("file_server".to_string(), fs.to_string());
     }
     let ts = Utc::now();
+    let gauge = |name: &str, value: f64| MetricPoint {
+        name: name.to_string(),
+        value,
+        step: None,
+        timestamp: ts,
+        metric_type: MetricType::Gauge,
+        labels: labels.clone(),
+    };
     es.metric(vec![
-        MetricPoint {
-            name: "crawl/files_per_second".to_string(),
-            value: files_per_sec,
-            step: None,
-            timestamp: ts,
-            metric_type: MetricType::Gauge,
-            labels: labels.clone(),
-        },
-        MetricPoint {
-            name: "crawl/files_total".to_string(),
-            value: total as f64,
-            step: None,
-            timestamp: ts,
-            metric_type: MetricType::Gauge,
-            labels,
-        },
+        gauge("crawl/files_per_second", files_per_sec),
+        gauge("crawl/files_total", total as f64),
+        gauge("crawl/bytes_per_second", bytes_per_sec),
+        gauge("crawl/bytes_total", bytes_total as f64),
     ])
     .await;
 }
@@ -473,11 +578,23 @@ pub async fn execute(
     let mut consecutive_list_errors: u32 = 0;
     const MAX_CONSECUTIVE_LIST_ERRORS: u32 = 100;
 
-    // Live throughput sampling — see `emit_crawl_progress`. `file_server` labels
-    // the metric in sink mode (the only mode with a server identity).
-    let file_server = config.sink.as_ref().map(|sc| sc.file_server_id.as_str());
-    let mut last_sample_at = Instant::now();
-    let mut last_sample_total: u64 = 0;
+    // Live throughput sampling — see `spawn_crawl_sampler`/`emit_crawl_progress`.
+    // `file_server` labels the metric in sink mode (the only mode with a server
+    // identity). The sampler runs on its own task so samples keep flowing even
+    // while this loop is blocked for minutes inside one large-file probe.
+    let file_server = config.sink.as_ref().map(|sc| sc.file_server_id.clone());
+    let crawl_start = Instant::now();
+    let progress = Arc::new(CrawlProgress::default());
+    // Capture the rchar baseline BEFORE any probe reads; if present (Linux) the
+    // sampler owns `bytes` from rchar and the loop must not also add to it.
+    let rchar_baseline = proc_rchar();
+    let rchar_active = rchar_baseline.is_some();
+    let _sampler = SamplerGuard(spawn_crawl_sampler(
+        progress.clone(),
+        event_stream.clone(),
+        file_server.clone(),
+        rchar_baseline,
+    ));
 
     while let Some(entry) = lister.next().await {
         let entry = match entry {
@@ -600,14 +717,12 @@ pub async fn execute(
         total += 1;
         last_path = Some(user_path);
 
-        // Time-based throughput sample (cheap `Instant::now()` per file; the
-        // emit branch only fires every `PROGRESS_INTERVAL`).
-        if last_sample_at.elapsed() >= PROGRESS_INTERVAL {
-            let window = last_sample_at.elapsed();
-            emit_crawl_progress(&event_stream, file_server, total, total - last_sample_total, window)
-                .await;
-            last_sample_at = Instant::now();
-            last_sample_total = total;
+        // Feed the background sampler. `files` is exact; `bytes` is owned by the
+        // sampler (from rchar) on Linux, so only add it here on the non-rchar
+        // fallback — the bytes were read by the probe regardless of hash result.
+        progress.files.store(total, Ordering::Relaxed);
+        if !rchar_active {
+            progress.bytes.fetch_add(size, Ordering::Relaxed);
         }
 
         if batch.len() >= batch_cap {
@@ -675,19 +790,28 @@ pub async fn execute(
             .await;
     }
 
-    // Final throughput sample for the trailing window (and the only sample for a
-    // sub-`PROGRESS_INTERVAL` crawl), so every walk reports at least once.
-    if total > last_sample_total {
-        let window = last_sample_at.elapsed();
-        emit_crawl_progress(
-            &event_stream,
-            file_server,
-            total,
-            total - last_sample_total,
-            window,
-        )
-        .await;
+    // Stop the periodic sampler and emit one final sample, so every walk reports
+    // at least once (incl. a sub-`PROGRESS_INTERVAL` crawl the sampler never
+    // ticked) and the run closes on the cumulative totals. The rates here are the
+    // crawl-wide averages over `crawl_start.elapsed()`.
+    drop(_sampler);
+    if let (Some(base), Some(now)) = (rchar_baseline, proc_rchar()) {
+        progress
+            .bytes
+            .store(now.saturating_sub(base), Ordering::Relaxed);
     }
+    let final_files = progress.files.load(Ordering::Relaxed);
+    let final_bytes = progress.bytes.load(Ordering::Relaxed);
+    emit_crawl_progress(
+        &event_stream,
+        file_server.as_deref(),
+        final_files,
+        final_files,
+        final_bytes,
+        final_bytes,
+        crawl_start.elapsed(),
+    )
+    .await;
 
     let exhausted = !cancelled && !stopped_by_max;
 
@@ -752,7 +876,7 @@ mod tests {
     use serde_json::Value;
 
     use aithericon_executor_backend::traits::EventStream;
-    use aithericon_executor_domain::LogLevel;
+    use aithericon_executor_domain::{LogLevel, MetricPoint};
     use aithericon_executor_storage::{StorageBackend, StorageConfig};
 
     use crate::config::CrawlConfig;
@@ -761,6 +885,7 @@ mod tests {
     struct CapturingStream {
         items: Mutex<Vec<Value>>,
         logs: Mutex<Vec<(LogLevel, String)>>,
+        metrics: Mutex<Vec<MetricPoint>>,
     }
 
     #[async_trait]
@@ -771,6 +896,10 @@ mod tests {
 
         async fn item(&self, _channel: String, _episode_uid: String, _idx: u64, payload: Value) {
             self.items.lock().unwrap().push(payload);
+        }
+
+        async fn metric(&self, points: Vec<MetricPoint>) {
+            self.metrics.lock().unwrap().extend(points);
         }
     }
 
@@ -848,8 +977,79 @@ mod tests {
             );
             // Probing off (default) — no content identity captured.
             assert!(e["hash"].is_null(), "hash absent when probe off: {e}");
-            assert!(e["metadata"].is_null(), "metadata absent when probe off: {e}");
+            assert!(
+                e["metadata"].is_null(),
+                "metadata absent when probe off: {e}"
+            );
         }
+    }
+
+    /// Every probing crawl emits the throughput metrics — including the
+    /// `crawl/bytes_*` pair added so a long single-file probe shows live
+    /// progress. The final sample always fires (even for this sub-interval
+    /// walk), and `bytes_total` reflects the content actually read.
+    #[tokio::test]
+    async fn crawl_emits_bytes_throughput_metrics() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), vec![b'x'; 4096]).unwrap();
+        std::fs::write(dir.path().join("nas/b.txt"), vec![b'y'; 2048]).unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["count"], serde_json::json!(2));
+
+        let metrics = stream.metrics.lock().unwrap();
+        let names: std::collections::HashSet<&str> =
+            metrics.iter().map(|m| m.name.as_str()).collect();
+        for expected in [
+            "crawl/files_per_second",
+            "crawl/files_total",
+            "crawl/bytes_per_second",
+            "crawl/bytes_total",
+        ] {
+            assert!(
+                names.contains(expected),
+                "missing metric {expected}: {names:?}"
+            );
+        }
+        // The final cumulative sample must reflect the bytes actually ingested by
+        // the probe (≥ the 6 KiB of file content on the per-file fallback path; on
+        // Linux the rchar basis is ≥ that too).
+        let bytes_total = metrics
+            .iter()
+            .filter(|m| m.name == "crawl/bytes_total")
+            .map(|m| m.value)
+            .next_back()
+            .expect("a bytes_total sample");
+        assert!(
+            bytes_total >= 6144.0,
+            "bytes_total should cover read content, got {bytes_total}"
+        );
+        let files_total = metrics
+            .iter()
+            .filter(|m| m.name == "crawl/files_total")
+            .map(|m| m.value)
+            .next_back()
+            .unwrap();
+        assert_eq!(files_total, 2.0, "files_total final sample");
     }
 
     fn local_storage(dir: &std::path::Path) -> StorageConfig {
@@ -985,7 +1185,10 @@ mod tests {
             .find(|e| e["path"].as_str().unwrap().ends_with("locked.txt"))
             .unwrap();
         if errs == 1 {
-            assert!(locked_entry["hash"].is_null(), "failed probe emits hashless");
+            assert!(
+                locked_entry["hash"].is_null(),
+                "failed probe emits hashless"
+            );
         } else {
             assert_eq!(errs, 0, "either counted or readable, never fatal");
         }
@@ -1051,8 +1254,8 @@ mod tests {
                 "permission-denied dir must stream a WARN line: {logs:?}"
             );
             assert!(
-                logs.iter().any(|(l, m)| matches!(l, LogLevel::Warn)
-                    && m.contains("directories skipped")),
+                logs.iter()
+                    .any(|(l, m)| matches!(l, LogLevel::Warn) && m.contains("directories skipped")),
                 "completion summary must flag skipped dirs at WARN: {logs:?}"
             );
         } else {
