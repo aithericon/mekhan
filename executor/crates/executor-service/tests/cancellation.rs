@@ -4,7 +4,7 @@ use std::time::Duration;
 use aithericon_executor_domain::ExecutionStatus;
 use aithericon_executor_test_harness::context::ExecutorTestContext;
 use aithericon_executor_test_harness::helpers::*;
-use aithericon_executor_worker::CancelListenerTuning;
+use aithericon_executor_worker::{CancelListenerTuning, CancellationRegistry};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -15,6 +15,27 @@ async fn await_cancel(token: &CancellationToken, timeout: Duration) -> bool {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     token.is_cancelled()
+}
+
+/// Poll until the cancel registry's active count drops to `expected` or `timeout`
+/// elapses; returns the final observed count.
+///
+/// Token deregistration happens in the worker *after* the terminal status is
+/// published (executor publishes status → then `deregister`). A test that
+/// observes the terminal status over NATS therefore cannot assume the worker has
+/// already run its local deregister: that's a separate, slightly-later step, and
+/// under concurrent load the gap is wide enough to lose the race. Poll for it
+/// instead of asserting on a single instant.
+async fn await_active_count(
+    registry: &CancellationRegistry,
+    expected: usize,
+    timeout: Duration,
+) -> usize {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline && registry.active_count() != expected {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    registry.active_count()
 }
 
 /// Cancel a long-running job via NATS and verify the Cancelled terminal status.
@@ -76,9 +97,11 @@ async fn test_cancel_via_nats() {
         statuses.iter().map(|s| s.status).collect::<Vec<_>>()
     );
 
-    // Token should be deregistered after completion
+    // Token should be deregistered after completion. The worker deregisters
+    // *after* publishing the terminal status we just observed, so poll rather
+    // than asserting on the instant collect_statuses returned.
     assert_eq!(
-        ctx.cancel_registry.active_count(),
+        await_active_count(&ctx.cancel_registry, 0, Duration::from_secs(5)).await,
         0,
         "cancel token not deregistered after cancellation"
     );
@@ -342,8 +365,12 @@ async fn test_cancel_after_completion_is_noop() {
         ],
     );
 
-    // Token should already be deregistered
-    assert_eq!(ctx.cancel_registry.active_count(), 0);
+    // Token should be deregistered after completion (deregister trails the
+    // terminal status publish that collect_statuses just observed).
+    assert_eq!(
+        await_active_count(&ctx.cancel_registry, 0, Duration::from_secs(5)).await,
+        0
+    );
 
     // Cancelling now should be a no-op
     let found = ctx.cancel_registry.cancel(&eid);
