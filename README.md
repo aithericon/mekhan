@@ -1,6 +1,8 @@
-# Aithericon Platform
+# Mekhan
 
-**A unified control plane for real-world work.** Aithericon integrates the
+*"Mekhan" is a working title — the platform's name may still change.*
+
+**A unified control plane for real-world work.** Mekhan integrates the
 infrastructure an organization already runs — people, HPC clusters, lab
 instruments, workstations, edge devices, and AI model servers — into one system,
 so a single workflow can **orchestrate** all of it, **observe** exactly what
@@ -15,7 +17,7 @@ machines, and need to be durable, reproducible, and auditable.
 > **Security & maturity** section below). We're sharing it now to develop in the
 > open, not because it's stable.
 
-Aithericon turns a process into a **durable, executable graph**. Workflows run
+Mekhan turns a process into a **durable, executable graph**. Workflows run
 on an event-sourced engine that persists every step as it happens — so a
 long-running process can stretch across hours or days and span flaky networks,
 preemptible HPC nodes, and intermittently-connected lab hardware **without
@@ -48,11 +50,16 @@ provenance.
   (Python, containers, HTTP, SQL, ROS, …), and LLM / agent nodes across every
   execution target below — people, HPC clusters, elastic pools, and edge runners.
 - **Capture & manage data.** Built-in file-metadata extraction and a searchable,
-  workspace-scoped **data catalogue** over S3-backed artifacts — outputs become
-  first-class, queryable data, not loose files.
+  workspace-scoped **data catalogue** over pluggable storage — S3, GCS, Azure
+  Blob, filesystem, SFTP, and more via [OpenDAL](https://opendal.apache.org) —
+  so outputs become first-class, queryable data, not loose files.
 - **Provenance & reproducibility.** Every run has an auditable causality trail
   you can inspect and replay — wired into the same event log that makes
   execution durable.
+- **Multi-tenant by workspace.** Templates, runs, resources, data, and members
+  are isolated per **workspace**, with role-based access (viewer / editor /
+  admin / owner) and sharing; shared infrastructure (worker and runner groups,
+  the model pool) lives in a global **platform** scope visible across tenants.
 
 ## Execution targets & feature highlights
 
@@ -83,11 +90,11 @@ One workflow can mix all of these — the platform is a single plane over them:
   concurrency limits, instrument time, or **third-party floating licenses** — so
   the engine only dispatches work when a slot is genuinely free and releases it
   (even on failure) when the work is done.
-- **Local LLM serving.** A self-hosted model pool behind an industry-standard,
-  **OpenAI-compatible** serving API: model **autoscaling and eviction**, load
-  balancing across replicas, admission control, usage metering, and model
-  lifecycle management — so `llm` and agent steps run against your own
-  infrastructure.
+- **Local LLM serving.** A self-hosted, **vLLM- or Ollama-backed** model pool
+  behind an industry-standard, **OpenAI-compatible** serving API: model
+  **autoscaling and eviction**, load balancing across replicas, admission
+  control, usage metering, and model lifecycle management — so `llm` and agent
+  steps run against your own infrastructure.
 
 ## Quick start
 
@@ -133,8 +140,38 @@ everything.
 | [`demos/`](./demos/) | 80+ runnable demo workflows, seeded automatically by `just dev` |
 | [`docs/`](./docs/) | Architecture & design notes — start at [`docs/README.md`](./docs/README.md) |
 
-For the high-level architecture and how the pieces talk to each other, see
-[`CLAUDE.md`](./CLAUDE.md) and [`docs/README.md`](./docs/README.md).
+## Moving parts
+
+- **Control plane — `mekhan` (`service/`).** Authors, compiles, versions, and
+  governs workflows; owns tenancy, the data catalogue, and the real-time
+  collaboration server. Its HTTP API is OpenAPI-described.
+- **Engine (`engine/`).** A colored-Petri-net, event-sourced execution core:
+  runs the net, journals every step (so runs are durable and replayable), and
+  bridges out to schedulers and runners.
+- **Executors (`executor/`).** The workers that actually perform the steps —
+  assembled from pluggable backends (Python, containers, HTTP, LLM, …) and
+  configured per deployment.
+- **Frontend (`app/`).** A single-page app — the visual workflow editor and
+  operator surfaces — generated against the control plane's OpenAPI contract.
+- **Integrations.** Schedulers, object storage, model servers, lab runners, and
+  external triggers/webhooks, each plugged in per deployment.
+
+Backend services are written in **Rust** and expose **OpenAPI** specs; the
+frontend is **Svelte / SvelteKit**. For the full architecture and how the pieces
+fit together, see [`docs/README.md`](./docs/README.md).
+
+**Backing services** (all wired up for you by `just dev`):
+
+- **PostgreSQL** — control-plane state
+- **NATS / JetStream** — event and job streaming
+- **Object store** — artifacts (S3 / GCS / Azure / filesystem via OpenDAL)
+- **Vault** — secrets
+
+Optional per deployment:
+
+- **Nomad** or **Slurm** — HPC scheduling
+- **Ollama** or **vLLM** — LLM serving
+- **Docker** — container steps
 
 ## ⚠️ Security & maturity
 
