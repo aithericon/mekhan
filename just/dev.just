@@ -247,7 +247,7 @@ gc-targets days="30":
     #!/usr/bin/env bash
     set -euo pipefail
     command -v cargo-sweep >/dev/null 2>&1 || {
-      echo "✗ cargo-sweep not on PATH — brew install cargo-sweep" >&2; exit 1; }
+      echo "✗ cargo-sweep not on PATH — $(bash just/scripts/install-hint.sh cargo-sweep)" >&2; exit 1; }
     for ws in . engine executor; do
       echo "▶ sweeping $ws/target (older than {{days}} days)…"
       (cd "$ws" && cargo sweep --time {{days}} || true)
@@ -405,10 +405,9 @@ _wait-infra:
 # Ollama adapter supports vision-capable models via the native /api/chat
 # image-payload field; see executor/crates/executor-llm/src/adapters/ollama.rs.
 #
-# Prerequisite (per-machine, one-time): install Ollama. Either the macOS app
-# (https://ollama.com/download) or the CLI:
-#
-#   brew install ollama
+# Prerequisite (per-machine, one-time): install Ollama.
+#   macOS:  brew install ollama   (or the app: https://ollama.com/download)
+#   Linux:  curl -fsSL https://ollama.com/install.sh | sh
 #
 # The dev stack OWNS this daemon (load-bearing for the model pool + router +
 # `provider:ollama` steps): the recipe runs a MANAGED, pidfiled `ollama serve`
@@ -456,7 +455,7 @@ up-ollama:
     else
       if ! command -v ollama >/dev/null 2>&1; then
         echo "  · ollama not installed — skipping"
-        echo "    install:  brew install ollama   (or https://ollama.com/download for the macOS app)"
+        echo "    install:  $(bash just/scripts/install-hint.sh ollama)"
         echo "    (the rest of the dev stack still comes up; only LLM-using workflows would fail)"
         exit 0
       fi
@@ -1771,7 +1770,7 @@ scheduler-up:
       echo "▶ nomad: already running"
     else
       command -v nomad >/dev/null 2>&1 || {
-        echo "✗ nomad binary not on PATH — brew install hashicorp/tap/nomad" >&2; exit 1; }
+        echo "✗ nomad binary not on PATH — $(bash just/scripts/install-hint.sh nomad)" >&2; exit 1; }
       echo "▶ starting nomad dev agent…"
       nohup nomad agent -dev -log-level WARN -config engine/infra/nomad/dev.hcl \
         > "{{log_dir}}/nomad.log" 2>&1 &

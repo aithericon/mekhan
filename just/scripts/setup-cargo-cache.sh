@@ -30,6 +30,10 @@
 
 set -euo pipefail
 
+# OS-aware install hints (macOS Homebrew / Linux apt|dnf|pacman|apk / cargo).
+HINT="$(cd "$(dirname "$0")" && pwd)/install-hint.sh"
+hint() { bash "$HINT" "$1"; }
+
 CLEAN_SHARED=0
 SLOT_ARG=""   # per-worktree dev-stack slot; empty = "keep existing / default 0"
 while [[ $# -gt 0 ]]; do
@@ -51,18 +55,18 @@ if [[ -n "$SLOT_ARG" ]] && ! [[ "$SLOT_ARG" =~ ^[0-9]+$ ]]; then
 fi
 
 if ! command -v direnv >/dev/null 2>&1; then
-    echo "direnv not found. Install with: brew install direnv" >&2
+    echo "direnv not found. Install with: $(hint direnv)" >&2
     echo "Then add 'eval \"\$(direnv hook bash)\"' (or zsh) to your shell rc." >&2
     exit 1
 fi
 
 if ! command -v sccache >/dev/null 2>&1; then
-    echo "sccache not found. Install with: brew install sccache" >&2
+    echo "sccache not found. Install with: $(hint sccache)" >&2
     exit 1
 fi
 
 if ! command -v cargo-sweep >/dev/null 2>&1; then
-    echo "cargo-sweep not found (used by 'just dev gc-targets'). Install with: brew install cargo-sweep" >&2
+    echo "cargo-sweep not found (used by 'just dev gc-targets'). Install with: $(hint cargo-sweep)" >&2
     # Not fatal — sccache itself is what makes the build cache work; cargo-sweep
     # is only needed for the periodic target/ GC recipe.
 fi
