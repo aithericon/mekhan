@@ -323,13 +323,14 @@ async fn run_nats_daemon(
 
     if config.cancel.nats {
         NatsCancelListener::start(
-            nats_client_for_cancel.clone(),
+            jetstream.clone(),
             cancel_registry.clone(),
-            None,
+            config.subject_prefix.as_deref(),
+            config.status_replicas,
             cancel_shutdown.clone(),
         )
         .await?;
-        info!("NATS cancel listener started");
+        info!("JetStream cancel listener started");
     }
 
     #[cfg(feature = "http-cancel")]
@@ -671,13 +672,14 @@ async fn run_nats_drain(
 
     if config.cancel.nats {
         NatsCancelListener::start(
-            nats_client_for_cancel.clone(),
+            jetstream.clone(),
             cancel_registry.clone(),
-            None,
+            config.subject_prefix.as_deref(),
+            config.status_replicas,
             cancel_shutdown.clone(),
         )
         .await?;
-        info!("NATS cancel listener started");
+        info!("JetStream cancel listener started");
     }
 
     // Data-plane byte transport REGISTRY (see `run_nats_daemon` for the rationale).

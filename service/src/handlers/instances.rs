@@ -1118,9 +1118,11 @@ pub async fn cancel_instance(
     // the net from firing new transitions, but AutomatedSteps already dispatched
     // to the executor run on a separate process (NATS-decoupled) and never see
     // NetCancelled — they'd otherwise run to completion. Publish a best-effort
-    // cancel per running execution_id; the executor's `executor.cancel.*`
-    // listener flips the job's CancellationToken. Cooperative: cancellation only
-    // takes effect for backends that observe the token mid-run.
+    // cancel per running execution_id onto the `EXECUTOR_CANCEL` JetStream stream;
+    // the runner's cancel consumer flips the job's CancellationToken. JetStream
+    // (not core NATS) because core interest doesn't reach runners on the
+    // WebSocket front door. Cooperative: cancellation only takes effect for
+    // backends that observe the token mid-run.
     let running_executions: Vec<String> = sqlx::query_scalar(
         r#"
         SELECT execution_id FROM step_execution
@@ -1134,13 +1136,7 @@ pub async fn cancel_instance(
     .await?;
 
     for execution_id in running_executions {
-        let subject = aithericon_executor_domain::cancel_subject(&execution_id);
-        if let Err(e) = state
-            .nats
-            .client()
-            .publish(subject, Vec::new().into())
-            .await
-        {
+        if let Err(e) = state.nats.publish_cancel(&execution_id).await {
             tracing::warn!(%execution_id, "failed to publish executor cancel: {e}");
         }
     }

@@ -119,9 +119,13 @@ fn subject_for(
 
 /// NATS-based executor client.
 ///
-/// Submits `ExecutionJob` to the executor's apalis-nats job stream and
-/// cancels running executions via ephemeral NATS publish.
+/// Submits `ExecutionJob` to the executor's apalis-nats job stream and cancels
+/// running executions via the `EXECUTOR_CANCEL` JetStream stream.
 pub struct ExecutorNatsClient {
+    /// Core NATS client. Retained on the constructor's public shape (and for any
+    /// future core-NATS publish); cancel now rides JetStream (`self.jetstream`)
+    /// because core interest doesn't reach WebSocket-front-door runners.
+    #[allow(dead_code)]
     nats_client: async_nats::Client,
     jetstream: async_nats::jetstream::Context,
     net_id: String,
@@ -418,6 +422,50 @@ impl ExecutorNatsClient {
         }
         Ok(())
     }
+
+    /// Idempotently ensure the `EXECUTOR_CANCEL` JetStream stream exists.
+    ///
+    /// Cancels ride JetStream (not core NATS) so the signal reaches runners
+    /// connected over the WebSocket front door — core pub/sub interest never
+    /// propagated across that boundary, so `executor.cancel.*` core publishes
+    /// were silently dropped. `Limits` retention (every runner reads the same
+    /// cancel) + short max-age (transient signal). Cached per stream name.
+    async fn ensure_cancel_stream(&self) -> Result<(), ExecutorError> {
+        let stream_name = aithericon_executor_domain::cancel_stream_name(None);
+
+        if self
+            .streams_ensured
+            .lock()
+            .map(|set| set.contains(&stream_name))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+
+        self.jetstream
+            .get_or_create_stream(async_nats::jetstream::stream::Config {
+                name: stream_name.clone(),
+                subjects: vec![aithericon_executor_domain::cancel_subject_filter(None)],
+                retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
+                storage: async_nats::jetstream::stream::StorageType::File,
+                max_age: Duration::from_secs(
+                    aithericon_executor_domain::CANCEL_STREAM_MAX_AGE_SECS,
+                ),
+                discard: async_nats::jetstream::stream::DiscardPolicy::Old,
+                ..Default::default()
+            })
+            .await
+            .map_err(|e| {
+                ExecutorError::SubmissionFailed(format!(
+                    "Failed to ensure stream '{stream_name}': {e}"
+                ))
+            })?;
+
+        if let Ok(mut set) = self.streams_ensured.lock() {
+            set.insert(stream_name);
+        }
+        Ok(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -527,20 +575,27 @@ impl ExecutorClient for ExecutorNatsClient {
     }
 
     async fn cancel(&self, execution_id: &str) -> Result<(), ExecutorError> {
-        // Cancel uses ephemeral core NATS (not JetStream) — fire-and-forget.
+        // Cancel rides the EXECUTOR_CANCEL JetStream stream, NOT core NATS:
+        // core pub/sub interest does not propagate from this internal connection
+        // to a runner on the WebSocket front door, so a core publish never
+        // reached the runner. JetStream delivery is interest-free.
+        self.ensure_cancel_stream().await?;
+
         let subject = aithericon_executor_domain::cancel_subject(execution_id);
 
-        self.nats_client
+        self.jetstream
             .publish(subject.clone(), Bytes::new())
             .await
+            .map_err(|e| ExecutorError::CancellationFailed(format!("NATS publish failed: {e}")))?
+            .await
             .map_err(|e| {
-                ExecutorError::CancellationFailed(format!("NATS publish failed: {}", e))
+                ExecutorError::CancellationFailed(format!("NATS publish ack failed: {e}"))
             })?;
 
         tracing::info!(
             execution_id = %execution_id,
             subject = %subject,
-            "Published cancellation request"
+            "Published cancellation request (JetStream)"
         );
 
         Ok(())

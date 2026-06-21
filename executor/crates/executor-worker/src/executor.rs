@@ -130,7 +130,6 @@ impl JobExecutor {
             };
 
         let timeout = job.timeout.unwrap_or(self.registry.default_timeout());
-        let cancel = self.cancel_registry.register(execution_id);
 
         // Build initial RunContext
         let run_dir = RunDirectory::new(&self.base_dir, execution_id);
@@ -142,7 +141,6 @@ impl JobExecutor {
         // each other. The loser nacks the NATS message for later redelivery.
         if let Err(e) = tokio::fs::create_dir_all(&run_dir.root).await {
             error!(%execution_id, error = %e, "failed to create run directory for lock");
-            self.cancel_registry.deregister(execution_id);
             return ExecutionStatus::Failed;
         }
         let lock_path = run_dir.root.join(".lock");
@@ -158,10 +156,18 @@ impl JobExecutor {
                     %execution_id,
                     "execution already in progress (lock file exists), skipping duplicate"
                 );
-                self.cancel_registry.deregister(execution_id);
                 return ExecutionStatus::Failed;
             }
         };
+
+        // Register the cancellation token only AFTER winning the run-dir lock.
+        // A duplicate delivery (apalis at-least-once, parallel pool consumers, or
+        // Nomad dispatching multiple allocations for the same execution_id) that
+        // loses the lock must NOT touch the registry: registering before the lock
+        // let a skipped duplicate first replace, then `deregister`, the live token
+        // the winning execution is running under — silently dropping the entry, so
+        // a later cancel found nothing and the job ran to completion.
+        let cancel = self.cancel_registry.register(execution_id);
 
         let initial_ctx = RunContext {
             execution_id: execution_id.clone(),

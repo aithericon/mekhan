@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
+use async_nats::jetstream;
 use futures::StreamExt;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -55,57 +57,136 @@ impl CancellationRegistry {
     }
 }
 
-/// Listens on core NATS `executor.cancel.{execution_id}` subjects and
+/// Listens on the JetStream `EXECUTOR_CANCEL` stream (`executor.cancel.*`) and
 /// triggers cancellation via the registry.
 ///
-/// Uses core NATS subscribe (not JetStream) — cancellation is ephemeral.
-/// If the executor is down when a cancel message is sent, the message is lost.
-/// This is correct: the execution either already finished or will be retried.
+/// Cancels ride JetStream rather than core NATS so the signal survives the
+/// internal-NATS ↔ WebSocket-front-door boundary (core pub/sub interest never
+/// propagated to WS-connected runners, so the old `client.subscribe` saw zero
+/// `executor.cancel.*` messages in prod — see
+/// [`aithericon_executor_domain::cancel_subject`]).
+///
+/// Each runner binds its **own ephemeral** pull consumer with
+/// `DeliverPolicy::New`, so:
+///   - every runner sees every cancel and ignores the ones it doesn't own
+///     (fan-out — the stream is `Limits` retention, NOT `WorkQueue`), and
+///   - a runner that (re)connects never replays a stale cancel onto a reused
+///     execution id (delivery starts at "now").
+///
+/// Like the old core-NATS listener, cancellation is still effectively ephemeral:
+/// a cancel published while the runner is fully down is not redelivered on
+/// restart (fresh `New` consumer) — correct, since that execution isn't running
+/// here anyway.
 pub struct NatsCancelListener;
 
 impl NatsCancelListener {
     /// Start listening for cancel messages. Returns a `JoinHandle` for the listener task.
     ///
     /// `prefix` follows the same convention as `StatusReporter.subject_prefix`:
-    ///   - `None`  → subscribes to `executor.cancel.*`
-    ///   - `Some("pfx")` → subscribes to `pfx.executor.cancel.*`
+    ///   - `None`  → stream `EXECUTOR_CANCEL`, filter `executor.cancel.*`
+    ///   - `Some("pfx")` → stream `EXECUTOR_CANCEL_pfx`, filter `pfx.executor.cancel.*`
+    ///
+    /// Ensures the `EXECUTOR_CANCEL` stream exists (idempotent `get_or_create`)
+    /// before binding, so the runner can start before any publisher.
     pub async fn start(
-        client: async_nats::Client,
+        jetstream: jetstream::Context,
         registry: CancellationRegistry,
         prefix: Option<&str>,
+        replicas: usize,
         shutdown: CancellationToken,
-    ) -> Result<JoinHandle<()>, async_nats::SubscribeError> {
-        let subject = aithericon_executor_domain::cancel_subject_filter(prefix);
+    ) -> Result<JoinHandle<()>, async_nats::Error> {
+        let stream_name = aithericon_executor_domain::cancel_stream_name(prefix);
+        let filter = aithericon_executor_domain::cancel_subject_filter(prefix);
 
-        let mut subscription = client.subscribe(subject.clone()).await?;
-        info!(%subject, "NATS cancel listener started");
+        // Idempotently ensure the cancel stream. Transient signal: short max-age,
+        // `Limits` retention (every runner's consumer reads the same messages —
+        // a `WorkQueue` would hand each cancel to exactly one runner), discard
+        // oldest under pressure.
+        jetstream
+            .get_or_create_stream(jetstream::stream::Config {
+                name: stream_name.clone(),
+                subjects: vec![filter.clone()],
+                retention: jetstream::stream::RetentionPolicy::Limits,
+                max_age: Duration::from_secs(
+                    aithericon_executor_domain::CANCEL_STREAM_MAX_AGE_SECS,
+                ),
+                storage: jetstream::stream::StorageType::File,
+                num_replicas: replicas,
+                discard: jetstream::stream::DiscardPolicy::Old,
+                ..Default::default()
+            })
+            .await?;
+
+        // Bind the first consumer synchronously, BEFORE returning, so a caller
+        // that publishes a cancel immediately after `start()` is not lost: the
+        // `DeliverPolicy::New` consumer only sees messages published after it
+        // exists, so the bind must precede any publish the caller sequences after
+        // us (the integration test relies on this; prod is naturally racey-safe
+        // since a job must already be running to be cancelled).
+        let mut consumer = Self::bind_consumer(&jetstream, &stream_name, &filter).await?;
+
+        info!(%stream_name, %filter, "JetStream cancel listener started");
 
         let handle = tokio::spawn(async move {
+            // Outer (re)bind loop: an ephemeral consumer is dropped server-side on
+            // a connection blip, so on any messages() error we rebuild it. A fresh
+            // `DeliverPolicy::New` consumer is the desired behaviour anyway — never
+            // replay cancels accumulated during the gap.
             loop {
-                tokio::select! {
-                    biased;
-                    _ = shutdown.cancelled() => {
-                        info!("NATS cancel listener shutting down");
-                        break;
-                    }
-                    msg = subscription.next() => {
-                        match msg {
-                            Some(msg) => {
-                                if let Some(execution_id) = msg.subject.as_str().split('.').next_back() {
-                                    let found = registry.cancel(execution_id);
-                                    if found {
-                                        info!(%execution_id, "cancellation triggered via NATS");
-                                    } else {
-                                        debug!(
-                                            %execution_id,
-                                            "cancel request for unknown execution (already finished?)"
-                                        );
-                                    }
-                                }
+                if shutdown.is_cancelled() {
+                    break;
+                }
+
+                let mut messages = match consumer.messages().await {
+                    Ok(m) => m,
+                    Err(e) => {
+                        warn!(error = %e, "failed to open cancel message stream; rebinding");
+                        if Self::sleep_or_shutdown(&shutdown, Duration::from_secs(1)).await {
+                            break;
+                        }
+                        match Self::bind_consumer(&jetstream, &stream_name, &filter).await {
+                            Ok(c) => consumer = c,
+                            Err(e) => {
+                                warn!(error = %e, "failed to rebind cancel consumer; retrying");
                             }
-                            None => {
-                                warn!("NATS cancel subscription closed");
-                                break;
+                        }
+                        continue;
+                    }
+                };
+
+                loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => {
+                            info!("JetStream cancel listener shutting down");
+                            return;
+                        }
+                        next = messages.next() => {
+                            match next {
+                                Some(Ok(msg)) => {
+                                    if let Some(execution_id) =
+                                        msg.subject.as_str().split('.').next_back()
+                                    {
+                                        let found = registry.cancel(execution_id);
+                                        if found {
+                                            info!(%execution_id, "cancellation triggered via JetStream");
+                                        } else {
+                                            debug!(
+                                                %execution_id,
+                                                "cancel request for unknown execution (already finished?)"
+                                            );
+                                        }
+                                    }
+                                    // AckPolicy::None — nothing to ack.
+                                }
+                                Some(Err(e)) => {
+                                    warn!(error = %e, "cancel message error; rebinding consumer");
+                                    break;
+                                }
+                                None => {
+                                    warn!("cancel message stream closed; rebinding consumer");
+                                    break;
+                                }
                             }
                         }
                     }
@@ -114,6 +195,37 @@ impl NatsCancelListener {
         });
 
         Ok(handle)
+    }
+
+    /// Bind a fresh ephemeral pull consumer (no `durable_name`) on the cancel
+    /// stream. `DeliverPolicy::New` + `AckPolicy::None`: deliver only cancels
+    /// published after this bind, fire-and-forget (no redelivery).
+    async fn bind_consumer(
+        jetstream: &jetstream::Context,
+        stream_name: &str,
+        filter: &str,
+    ) -> Result<jetstream::consumer::PullConsumer, async_nats::Error> {
+        let stream = jetstream.get_stream(stream_name).await?;
+        let consumer = stream
+            .create_consumer(jetstream::consumer::pull::Config {
+                filter_subject: filter.to_string(),
+                deliver_policy: jetstream::consumer::DeliverPolicy::New,
+                ack_policy: jetstream::consumer::AckPolicy::None,
+                // Auto-clean the ephemeral consumer shortly after this runner
+                // stops pulling (process exit / connection loss).
+                inactive_threshold: Duration::from_secs(30),
+                ..Default::default()
+            })
+            .await?;
+        Ok(consumer)
+    }
+
+    /// Sleep for `dur`, or return `true` early if shutdown fired.
+    async fn sleep_or_shutdown(shutdown: &CancellationToken, dur: Duration) -> bool {
+        tokio::select! {
+            _ = shutdown.cancelled() => true,
+            _ = tokio::time::sleep(dur) => false,
+        }
     }
 }
 

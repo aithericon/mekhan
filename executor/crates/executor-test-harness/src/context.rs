@@ -14,7 +14,9 @@ use uuid::Uuid;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-use aithericon_executor_domain::{ExecutionEvent, ExecutionJob, RunDirectory, StatusUpdate};
+use aithericon_executor_domain::{
+    ExecutionEvent, ExecutionJob, ExecutionStatus, RunDirectory, StatusUpdate,
+};
 use aithericon_executor_logs::LogSink;
 use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_process::ProcessBackend;
@@ -289,6 +291,46 @@ impl ExecutorTestContext {
         })
     }
 
+    /// Drive a single job through `JobExecutor::execute` directly (no apalis
+    /// monitor), returning its terminal status. Gives a test deterministic
+    /// control over one delivery — used to exercise the duplicate-delivery path.
+    pub async fn execute_once(&self, job: &ExecutionJob) -> ExecutionStatus {
+        let executor = JobExecutor {
+            reporter: self.reporter.clone(),
+            registry: self.registry.clone(),
+            pipeline: self.pipeline.clone(),
+            base_dir: self.base_dir.clone(),
+            artifact_store: None,
+            cleanup_policy: CleanupPolicy::Retain,
+            metric_sink: None,
+            log_sink: None,
+            cancel_registry: self.cancel_registry.clone(),
+            log_config: SidecarLogConfig::default(),
+            completion_tracker: None,
+            transports: self.transports.clone(),
+            serve_group: None,
+            max_output_inline_bytes: aithericon_executor_worker::DEFAULT_MAX_OUTPUT_INLINE_BYTES,
+        };
+        executor.execute(job).await
+    }
+
+    /// Pre-create the run-directory lock for `execution_id`, simulating a
+    /// concurrent "winner" delivery that already holds it. The next `execute()`
+    /// for the same id then takes the duplicate-skip path (lock acquisition
+    /// fails), exactly as a redelivery / parallel pool consumer would.
+    pub async fn precreate_run_lock(&self, execution_id: &str) {
+        let run_dir = RunDirectory::new(&self.base_dir, execution_id);
+        tokio::fs::create_dir_all(&run_dir.root)
+            .await
+            .expect("create run dir for lock");
+        tokio::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(run_dir.root.join(".lock"))
+            .await
+            .expect("create run-dir lock");
+    }
+
     /// Spawn an apalis worker with a specific cleanup policy, artifact store, and backend registry.
     ///
     /// Use this to test error paths like "backend not found" by passing an empty registry.
@@ -547,38 +589,50 @@ impl ExecutorTestContext {
         &self.nats_client
     }
 
-    /// Publish a cancel message to `executor.cancel.{execution_id}` via core NATS.
+    /// Publish a cancel onto this context's prefixed `EXECUTOR_CANCEL` JetStream
+    /// stream. The prefix is the per-test isolation seam (production publishes the
+    /// unprefixed `executor.cancel.{id}`); the stream is ensured by
+    /// [`Self::start_cancel_listener`], which the caller must invoke first.
     pub async fn publish_cancel(&self, execution_id: &str) {
-        self.nats_client
-            .publish(
-                aithericon_executor_domain::cancel_subject(execution_id),
-                bytes::Bytes::new(),
-            )
+        let subject = format!(
+            "{}.{}",
+            self.prefix,
+            aithericon_executor_domain::cancel_subject(execution_id)
+        );
+        self.jetstream
+            .publish(subject, bytes::Bytes::new())
             .await
-            .expect("failed to publish cancel message");
-        self.nats_client
-            .flush()
+            .expect("failed to publish cancel message")
             .await
-            .expect("failed to flush NATS");
+            .expect("failed to ack cancel publish");
     }
 
-    /// Start a `NatsCancelListener` that subscribes to cancel messages
-    /// and triggers cancellation via the shared `cancel_registry`.
+    /// Start a `NatsCancelListener` bound to this context's prefixed
+    /// `EXECUTOR_CANCEL` JetStream stream, triggering cancellation via the shared
+    /// `cancel_registry`. Ensures the stream and binds the consumer before
+    /// returning, so a `publish_cancel` sequenced after this call is delivered.
     pub async fn start_cancel_listener(&self, shutdown: CancellationToken) -> JoinHandle<()> {
         NatsCancelListener::start(
-            self.nats_client.clone(),
+            self.jetstream.clone(),
             self.cancel_registry.clone(),
-            None,
+            Some(&self.prefix),
+            1,
             shutdown,
         )
         .await
-        .expect("failed to start NATS cancel listener")
+        .expect("failed to start JetStream cancel listener")
     }
 
     /// Delete test streams and run directories (best-effort).
     pub async fn cleanup(&self) {
         let _ = self.jetstream.delete_stream(&self.status_stream_name).await;
         let _ = self.jetstream.delete_stream(&self.events_stream_name).await;
+        let _ = self
+            .jetstream
+            .delete_stream(aithericon_executor_domain::cancel_stream_name(Some(
+                &self.prefix,
+            )))
+            .await;
         // apalis creates per-priority streams: {namespace}_{priority}
         for priority in &["high", "medium", "low"] {
             let stream_name = format!("{}_jobs_{priority}", self.prefix);

@@ -105,14 +105,43 @@ impl StatusUpdate {
 }
 
 /// NATS subject a cancel request is published to for a single execution.
-/// Pattern: `executor.cancel.{execution_id}` on core NATS (not JetStream).
+/// Pattern: `executor.cancel.{execution_id}`, carried on the JetStream
+/// [`CANCEL_STREAM`] (NOT core NATS).
+///
+/// Cancels ride JetStream because core pub/sub interest does not propagate from
+/// the internal NATS connection (mekhan/engine) to a runner connected over the
+/// Traefik WebSocket front door — so a core publish to `executor.cancel.*` was
+/// silently dropped before reaching the runner, while jobs/status/events (all
+/// JetStream) crossed the boundary fine. JetStream delivery is interest-free:
+/// the message lands in the stream and the runner's consumer pulls it.
 ///
 /// NOTE: intentionally NOT run through `sanitize_subject_token`, to preserve the
-/// existing publish path byte-for-byte (the engine `CancelClient` and the test
-/// harness both built this bare format). Aligning cancel/status sanitization is
-/// tracked separately as audit item A3.
+/// publish subject byte-for-byte (the engine `CancelClient` and the test harness
+/// both build this bare format). Aligning cancel/status sanitization is tracked
+/// separately as audit item A3.
 pub fn cancel_subject(execution_id: &str) -> String {
     format!("executor.cancel.{execution_id}")
+}
+
+/// JetStream stream that carries cancellation requests (`executor.cancel.*`).
+/// See [`cancel_subject`] for why cancels are on JetStream rather than core NATS.
+pub const CANCEL_STREAM: &str = "EXECUTOR_CANCEL";
+
+/// Max age of a cancel message in [`CANCEL_STREAM`]. A cancel is a transient
+/// "stop now" signal, so a short retention window caps replay: a runner that
+/// (re)connects creates a fresh `DeliverPolicy::New` consumer and never
+/// re-applies a stale cancel to a reused execution id, while the window is still
+/// wide enough to absorb brief publisher↔consumer skew. 5 minutes.
+pub const CANCEL_STREAM_MAX_AGE_SECS: u64 = 300;
+
+/// JetStream stream name for cancellation, honoring the worker's optional
+/// isolation prefix (mirrors the status/events stream naming convention):
+/// `None` → `EXECUTOR_CANCEL`; `Some("pfx")` → `EXECUTOR_CANCEL_pfx`.
+pub fn cancel_stream_name(prefix: Option<&str>) -> String {
+    match prefix {
+        Some(pfx) => format!("{CANCEL_STREAM}_{pfx}"),
+        None => CANCEL_STREAM.to_string(),
+    }
 }
 
 /// NATS subscription filter for the worker's cancel listener.
@@ -217,5 +246,11 @@ mod tests {
             cancel_subject_filter(Some("tenant")),
             "tenant.executor.cancel.*"
         );
+    }
+
+    #[test]
+    fn cancel_stream_names() {
+        assert_eq!(cancel_stream_name(None), "EXECUTOR_CANCEL");
+        assert_eq!(cancel_stream_name(Some("tenant")), "EXECUTOR_CANCEL_tenant");
     }
 }

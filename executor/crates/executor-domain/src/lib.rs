@@ -34,7 +34,8 @@ pub use result::{ExecutionOutcome, ExecutionResult};
 pub use run_context::RunContext;
 pub use run_dir::RunDirectory;
 pub use status::{
-    cancel_subject, cancel_subject_filter, sanitize_subject_token, ExecutionStatus, StatusUpdate,
+    cancel_stream_name, cancel_subject, cancel_subject_filter, sanitize_subject_token,
+    ExecutionStatus, StatusUpdate, CANCEL_STREAM, CANCEL_STREAM_MAX_AGE_SECS,
 };
 
 /// Serde helper for `Option<Duration>` using human-readable strings.
