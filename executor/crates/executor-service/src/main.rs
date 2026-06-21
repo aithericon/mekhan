@@ -322,6 +322,12 @@ async fn run_nats_daemon(
     let cancel_shutdown = CancellationToken::new();
 
     if config.cancel.nats {
+        // FAIL-CLOSED: cancellation is a safety control, not a nicety. If the
+        // cancel listener can't bind, this runner must NOT drain jobs — an
+        // unhonored cancel lets runaway work (a crawl hammering a filesystem, an
+        // expensive compute, a destructive file_op) keep running while the UI
+        // reports it stopped. Abort startup with an ACTIONABLE error rather than
+        // the opaque transport timeout the bind would otherwise surface.
         NatsCancelListener::start(
             jetstream.clone(),
             cancel_registry.clone(),
@@ -329,7 +335,16 @@ async fn run_nats_daemon(
             config.status_replicas,
             cancel_shutdown.clone(),
         )
-        .await?;
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!(
+                "cancel listener failed to start ({e}); refusing to drain uncancellable jobs. \
+                 Likely cause: scoped NATS creds lacking EXECUTOR_CANCEL JetStream perms — \
+                 refresh this runner's creds against an up-to-date mekhan, or set \
+                 EXECUTOR_CANCEL__NATS=false to KNOWINGLY run without cancellation."
+            )
+            .into()
+        })?;
         info!("JetStream cancel listener started");
     }
 
@@ -671,6 +686,9 @@ async fn run_nats_drain(
     let cancel_shutdown = CancellationToken::new();
 
     if config.cancel.nats {
+        // FAIL-CLOSED (see the equivalent block in `run_nats_daemon` for the
+        // full rationale): a runner that can't bind its cancel listener must not
+        // drain uncancellable jobs.
         NatsCancelListener::start(
             jetstream.clone(),
             cancel_registry.clone(),
@@ -678,7 +696,16 @@ async fn run_nats_drain(
             config.status_replicas,
             cancel_shutdown.clone(),
         )
-        .await?;
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format!(
+                "cancel listener failed to start ({e}); refusing to drain uncancellable jobs. \
+                 Likely cause: scoped NATS creds lacking EXECUTOR_CANCEL JetStream perms — \
+                 refresh this runner's creds against an up-to-date mekhan, or set \
+                 EXECUTOR_CANCEL__NATS=false to KNOWINGLY run without cancellation."
+            )
+            .into()
+        })?;
         info!("JetStream cancel listener started");
     }
 
