@@ -173,6 +173,16 @@ Optional per deployment:
 - **Ollama** or **vLLM** — LLM serving
 - **Docker** — container steps
 
+## Project background
+
+~1 year of active development, building on platforms we've designed and operated
+in commercial and academic settings for 6+ years.
+
+**How it's built:** much of the code is LLM-written. We treat that as an
+engineering practice with rigor to match — every subsystem is backed by
+extensive test harnesses and validation suites, alongside comprehensive manual
+testing.
+
 ## ⚠️ Security & maturity
 
 This is an **early alpha** shared for open development. Read before deploying:
@@ -190,9 +200,12 @@ This is an **early alpha** shared for open development. Read before deploying:
 
 ## Licensing
 
-Multi-licensed per crate. **Open-source engine & SDK (Apache-2.0)**,
-**source-available control plane** (FSL-1.1-ALv2, converts to Apache-2.0 two
-years after each release). See [`LICENSING.md`](./LICENSING.md) for the
+Multi-licensed per crate. The **engine & SDK are open source (Apache-2.0)**; the
+**control plane is source-available (FSL-1.1-ALv2)**. In practice the FSL lets
+anyone use, modify, and self-host the platform freely — internal, research, or
+commercial use all included — and only prohibits using it to offer a competing
+commercial product or managed/hosted service. Each release also converts to
+Apache-2.0 two years later. See [`LICENSING.md`](./LICENSING.md) for the
 per-crate table and the rationale.
 
 ## Contributing
