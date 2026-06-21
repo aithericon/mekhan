@@ -12,6 +12,7 @@
 	 * passing in.
 	 */
 	import { untrack } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import type { SchemaNode } from './model';
 	// Self-import for recursion (replaces the deprecated <svelte:self>).
 	import SchemaView from './SchemaView.svelte';
@@ -22,11 +23,15 @@
 		node: SchemaNode;
 		/** Optional field label; shown as the field name when present. */
 		label?: string;
+		/** Optional trailing content for THIS node's header row (not propagated to
+		 *  children) — e.g. catalogue nullable / classification chips that belong
+		 *  on the field line rather than in a separate table column. */
+		trailing?: Snippet;
 		/** Internal — callers leave this absent. */
 		depth?: number;
 	};
 
-	let { node, label, depth = 0 }: Props = $props();
+	let { node, label, trailing, depth = 0 }: Props = $props();
 
 	// depth is a stable, mount-time prop — auto-expand the first two levels.
 	// untrack() makes the $state initializer explicitly snapshot-only so
@@ -149,6 +154,8 @@
 				{node.name}
 			</span>
 		{/if}
+
+		{@render trailing?.()}
 	</div>
 
 	<!-- Children -->

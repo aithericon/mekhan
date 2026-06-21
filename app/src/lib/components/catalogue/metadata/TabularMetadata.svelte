@@ -7,14 +7,15 @@
 	import { pct } from './utils';
 	import DetailTable from '../DetailTable.svelte';
 	import SchemaView from '$lib/schema/SchemaView.svelte';
+	import { fileMetadataDataTypeToSchemaNode } from '$lib/schema/model';
 
 	let { mv, columnSchemas, onSchemaClick }: MetadataProps = $props();
 
-	// A complex (struct/list) column gets a real expandable type tree; scalar
-	// columns keep the compact humanized string — a tree there adds no detail.
-	function complexSchema(name: string) {
-		const node = columnSchemas?.get(name);
-		return node && (node.kind === 'object' || node.kind === 'array') ? node : null;
+	// The type node for a column: the raw nested schema (struct/list capable) when
+	// the probe's columns were threaded through, else parse the humanized scalar
+	// string (`string`, `int64`, …) so even legacy rows render a consistent badge.
+	function nodeFor(col: { name: string; data_type: string }) {
+		return columnSchemas?.get(col.name) ?? fileMetadataDataTypeToSchemaNode(col.data_type);
 	}
 
 	const formatLabel = $derived(mv.format ?? null);
@@ -46,46 +47,29 @@
 	</div>
 
 	{#if columns.length > 0}
-		<div class="mt-2 overflow-hidden rounded-md border border-border bg-background">
-			<div class="overflow-x-auto">
-				<table class="w-full text-xs">
-					<thead>
-						<tr class="border-b border-border text-left text-muted-foreground">
-							<th class="whitespace-nowrap px-2 py-1 font-medium capitalize">Column</th>
-							<th class="whitespace-nowrap px-2 py-1 font-medium capitalize">Type</th>
-							<th class="whitespace-nowrap px-2 py-1 font-medium capitalize">Nullable</th>
-							<th class="whitespace-nowrap px-2 py-1 font-medium capitalize">Tags</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each columns as col}
-							{@const tree = complexSchema(col.name)}
-							<tr class="border-b border-border/40 last:border-0 align-top">
-								<td class="whitespace-nowrap px-2 py-1 font-medium text-foreground" title={col.name}>{col.name}</td>
-								<td class="px-2 py-1 text-muted-foreground">
-									{#if tree}
-										<SchemaView node={tree} />
-									{:else}
-										<span class="whitespace-nowrap">{col.data_type}</span>
-									{/if}
-								</td>
-								<td class="whitespace-nowrap px-2 py-1 text-muted-foreground">{col.nullable ? 'nullable' : '—'}</td>
-								<td class="px-2 py-1">
-									{#if (col.classifications ?? []).length > 0}
-										<span class="flex flex-wrap gap-1">
-											{#each col.classifications ?? [] as tag}
-												<span class="rounded-sm bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400" title="{pct(tag.confidence)} confidence">{tag.category}</span>
-											{/each}
-										</span>
-									{:else}
-										<span class="text-muted-foreground">—</span>
-									{/if}
-								</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
-			</div>
+		<!-- Schema as a tree (our preferred representation): each column is a field
+		     row rendered by the shared SchemaView, with nullable / classification
+		     chips inline on the same line rather than as separate table columns. -->
+		<div class="mt-2 overflow-hidden rounded-md border border-border bg-background text-sm">
+			{#each columns as col}
+				<div class="border-b border-border/40 px-2 py-1.5 last:border-0">
+					<SchemaView node={nodeFor(col)} label={col.name}>
+						{#snippet trailing()}
+							<span class="ml-auto flex items-center gap-1.5 pl-2">
+								{#each col.classifications ?? [] as tag}
+									<span
+										class="rounded-sm bg-amber-500/10 px-1 text-[10px] text-amber-600 dark:text-amber-400"
+										title="{pct(tag.confidence)} confidence">{tag.category}</span
+									>
+								{/each}
+								{#if col.nullable}
+									<span class="text-[10px] text-muted-foreground/50">nullable</span>
+								{/if}
+							</span>
+						{/snippet}
+					</SchemaView>
+				</div>
+			{/each}
 		</div>
 	{/if}
 
