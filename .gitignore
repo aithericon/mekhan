@@ -44,8 +44,10 @@ vite.config.ts.timestamp-*
 # Nix / direnv
 .direnv/
 .cache/
-result
-result-*
+# `nix build` result symlinks — anchored to the repo root so the unscoped glob
+# doesn't swallow legitimately-named files elsewhere (e.g. docs/.../result-ingest.md).
+/result
+/result-*
 
 # Local dev stack runtime state (pidfiles, logs, executor work dir)
 .dev/

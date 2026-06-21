@@ -1,6 +1,8 @@
 # Library / Vendor Nodes + Node Presentation — Implementation Plan
 
-> Status: **PLANNED** (build gated). Branch `library-nodes` off `5049db63`, dev slot 6.
+> Status: **IMPLEMENTED.** Shipped through Phase 5 (upgrade prompt + lifecycle).
+> Retained as design history (see `docs/README.md` status conventions). Originally
+> drafted on branch `library-nodes` off `5049db63`, dev slot 6.
 > Origin: grill-me design session 2026-06-13. 13 decisions resolved — see `Design decisions` below.
 
 ## One-line thesis
