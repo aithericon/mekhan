@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use aithericon_executor_domain::{INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
+use aithericon_executor_domain::{CANCEL_STREAM, INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 use nats_io_jwt::{KeyPair, Permission, ResponsePermission, StringList, Token, User};
 use uuid::Uuid;
 
@@ -310,6 +310,10 @@ impl RunnerNatsSigner {
         // The shared status/events/datastream streams the daemon ensures at boot
         // (STREAM.INFO/CREATE/UPDATE) + the chunked-data publish subject.
         pub_allow.extend(jetstream_shared_stream_pub_allow());
+        // The JetStream `EXECUTOR_CANCEL` stream + ephemeral pull consumer the
+        // cancel listener binds at boot. Without this the listener's
+        // `get_or_create_stream` is denied and the daemon dies at startup.
+        pub_allow.extend(jetstream_cancel_pub_allow());
 
         // This runner's own control subject PLUS the request/reply mux inbox.
         // async-nats subscribes ONCE to `_INBOX.>` (default prefix) and ALL
@@ -477,6 +481,9 @@ impl RunnerNatsSigner {
         // The shared status/events/datastream streams every worker ensures at
         // boot (the StatusReporter runs regardless of grouping).
         pub_allow.extend(jetstream_shared_stream_pub_allow());
+        // The JetStream `EXECUTOR_CANCEL` stream + ephemeral pull consumer the
+        // cancel listener binds at boot (same as the runner path).
+        pub_allow.extend(jetstream_cancel_pub_allow());
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -690,6 +697,41 @@ fn jetstream_shared_stream_pub_allow() -> Vec<String> {
     out
 }
 
+/// Build the `$JS.API.*` allow-list for the JetStream `EXECUTOR_CANCEL` stream
+/// + the ephemeral pull consumer the cancel listener binds.
+///
+/// Cancel no longer rides core NATS: `NatsCancelListener`
+/// (`executor-worker/src/cancel.rs`) `get_or_create_stream`s `EXECUTOR_CANCEL`
+/// (transient, `Limits` retention) BEFORE binding, then creates an EPHEMERAL
+/// pull consumer (`DeliverPolicy::New`, `AckPolicy::None`) filtered on
+/// `executor.cancel.*`. Without these grants the `STREAM.INFO`/`CREATE` is
+/// denied, the listener setup times out, and the whole daemon dies at startup
+/// before it can drain a single job — the regression that bit the first
+/// zero-secret (scoped-JWT) edge runner, invisible in-cluster because the
+/// trusted workers connect with full-perm (`>`) creds. The stale
+/// [`EXECUTOR_CANCEL_FILTER`] core-NATS subscribe (granted at the call site) is
+/// now dead weight kept only for back-compat; JetStream deliveries arrive on
+/// `_INBOX.>`.
+///
+/// The stream is created by whichever side reaches it first (the engine also
+/// ensures it — `core-engine/.../executor/src/client.rs`), so the runner is
+/// granted CREATE/UPDATE like the other [`SHARED_STREAMS`]. The ephemeral
+/// consumer has a server-assigned name, so `CONSUMER.{CREATE,INFO,MSG.NEXT}`
+/// are wildcarded on the tail. `AckPolicy::None` → NO `$JS.ACK` grant.
+fn jetstream_cancel_pub_allow() -> Vec<String> {
+    vec![
+        format!("$JS.API.STREAM.INFO.{CANCEL_STREAM}"),
+        format!("$JS.API.STREAM.CREATE.{CANCEL_STREAM}"),
+        format!("$JS.API.STREAM.UPDATE.{CANCEL_STREAM}"),
+        // Ephemeral pull consumer: server-assigned name → grant the bare 2-token
+        // create AND the 3-token filtered/named forms async-nats may send.
+        format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}"),
+        format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}.>"),
+        format!("$JS.API.CONSUMER.INFO.{CANCEL_STREAM}.>"),
+        format!("$JS.API.CONSUMER.MSG.NEXT.{CANCEL_STREAM}.>"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,6 +860,13 @@ mod tests {
             format!("$JS.API.STREAM.INFO.{RUNNER_JOBS_NAMESPACE}_dlq"),
             "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
             "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
+            // EXECUTOR_CANCEL: the cancel listener `get_or_create`s the stream
+            // and binds an ephemeral pull consumer. A missing grant here is the
+            // exact gap that killed the first scoped-JWT edge runner at startup.
+            format!("$JS.API.STREAM.INFO.{CANCEL_STREAM}"),
+            format!("$JS.API.STREAM.CREATE.{CANCEL_STREAM}"),
+            format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}.>"),
+            format!("$JS.API.CONSUMER.MSG.NEXT.{CANCEL_STREAM}.>"),
         ] {
             assert!(pub_allow.contains(&want), "missing pub grant: {want}");
         }
