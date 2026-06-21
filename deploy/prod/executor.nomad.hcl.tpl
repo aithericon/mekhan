@@ -55,6 +55,9 @@ job "${job_id}" {
         image = "${image}"
         # No port mapping — executor is NATS-driven, cancel HTTP is opt-in
         # via EXECUTOR_CANCEL__HTTP=true and not enabled here.
+        # Cold zot pull-through from Forgejo on a fresh tag can exceed docker's
+        # default 5m pull timeout ("context deadline exceeded"); widen it.
+        image_pull_timeout = "15m"
       }
 
       template {
