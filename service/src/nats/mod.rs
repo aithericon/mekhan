@@ -137,42 +137,6 @@ impl MekhanNats {
         &self.jetstream
     }
 
-    /// Publish a cancellation request for one execution onto the
-    /// `EXECUTOR_CANCEL` JetStream stream (`executor.cancel.{execution_id}`).
-    ///
-    /// Cancels ride JetStream, NOT core NATS: core pub/sub interest does not
-    /// propagate from mekhan's internal NATS connection to a runner connected
-    /// over the Traefik WebSocket front door, so the old `client().publish()`
-    /// was silently dropped before reaching the runner (jobs/status/events all
-    /// already ride JetStream and cross the boundary fine). The stream is ensured
-    /// idempotently here — the runner and engine also `get_or_create` it, so
-    /// whichever publishes/binds first wins and the rest are no-ops.
-    pub async fn publish_cancel(&self, execution_id: &str) -> Result<(), NatsError> {
-        self.jetstream
-            .get_or_create_stream(jetstream::stream::Config {
-                name: aithericon_executor_domain::cancel_stream_name(None),
-                subjects: vec![aithericon_executor_domain::cancel_subject_filter(None)],
-                retention: jetstream::stream::RetentionPolicy::Limits,
-                storage: jetstream::stream::StorageType::File,
-                max_age: Duration::from_secs(
-                    aithericon_executor_domain::CANCEL_STREAM_MAX_AGE_SECS,
-                ),
-                discard: jetstream::stream::DiscardPolicy::Old,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| NatsError(format!("ensure EXECUTOR_CANCEL stream: {e}")))?;
-
-        let subject = aithericon_executor_domain::cancel_subject(execution_id);
-        self.jetstream
-            .publish(subject, Vec::new().into())
-            .await
-            .map_err(|e| NatsError(format!("publish cancel: {e}")))?
-            .await
-            .map_err(|e| NatsError(format!("publish cancel ack: {e}")))?;
-        Ok(())
-    }
-
     /// Resolve a JetStream stream, waiting (bounded) for it to be created.
     ///
     /// `PETRI_GLOBAL` is created by the ENGINE (`petri_nats::stream_config`),

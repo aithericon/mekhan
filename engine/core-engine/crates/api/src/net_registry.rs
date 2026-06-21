@@ -1600,6 +1600,48 @@ where
             .get(net_id)
             .ok_or_else(|| format!("Net '{}' not found", net_id))?;
 
+        // Cancel any in-flight executor jobs this net owns BEFORE tearing it
+        // down. An AutomatedStep dispatched to the executor runs on a separate
+        // process (NATS-decoupled) and parks its control token in `{slug}/running`
+        // while it works; deleting the net never reaches that job, so it would run
+        // to completion after the instance is "cancelled". Scan the marking for
+        // running executor tokens and publish a cancel (JetStream EXECUTOR_CANCEL)
+        // for each — the engine is the single owner of "tear down net ⇒ stop its
+        // jobs", so callers (mekhan) need only call terminate. No-op in HTTP-sync
+        // executor mode (no async job to cancel).
+        #[cfg(feature = "executor")]
+        if let Some(ecfg) = &self.executor_config {
+            let marking = instance.service.get_marking().await;
+            let mut cancelled = 0usize;
+            for (place_id, tokens) in &marking.tokens {
+                if !place_id.0.ends_with("/running") {
+                    continue;
+                }
+                for token in tokens {
+                    let petri_domain::TokenColor::Data(data) = &token.color else {
+                        continue;
+                    };
+                    let Some(eid) = data.get("execution_id").and_then(|v| v.as_str()) else {
+                        continue;
+                    };
+                    if let Err(e) = petri_executor::publish_cancel(&ecfg.jetstream, eid).await {
+                        tracing::warn!(
+                            net_id = %net_id, execution_id = %eid,
+                            "terminate: failed to publish executor cancel: {e}"
+                        );
+                    } else {
+                        cancelled += 1;
+                    }
+                }
+            }
+            if cancelled > 0 {
+                tracing::info!(
+                    net_id = %net_id, count = cancelled,
+                    "terminate: cancelled in-flight executor jobs before teardown"
+                );
+            }
+        }
+
         // Failure-path parity for cancellation: fire any `t_<id>_finally`
         // finalizer BEFORE NetCancelled tears the net down. A leased net's
         // success-path release (`t_<id>_exit`) is gated on the body completing,

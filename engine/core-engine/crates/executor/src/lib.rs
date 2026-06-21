@@ -34,6 +34,6 @@ pub mod client;
 pub mod config;
 pub mod watcher;
 
-pub use client::ExecutorNatsClient;
+pub use client::{ensure_cancel_stream, publish_cancel, ExecutorNatsClient};
 pub use config::ExecutorConfig;
 pub use watcher::{ExecutorSseBuffer, ExecutorSseEvent, ExecutorWatcher, WatcherError};

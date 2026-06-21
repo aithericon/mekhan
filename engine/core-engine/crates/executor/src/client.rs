@@ -422,50 +422,65 @@ impl ExecutorNatsClient {
         }
         Ok(())
     }
+}
 
-    /// Idempotently ensure the `EXECUTOR_CANCEL` JetStream stream exists.
-    ///
-    /// Cancels ride JetStream (not core NATS) so the signal reaches runners
-    /// connected over the WebSocket front door — core pub/sub interest never
-    /// propagated across that boundary, so `executor.cancel.*` core publishes
-    /// were silently dropped. `Limits` retention (every runner reads the same
-    /// cancel) + short max-age (transient signal). Cached per stream name.
-    async fn ensure_cancel_stream(&self) -> Result<(), ExecutorError> {
-        let stream_name = aithericon_executor_domain::cancel_stream_name(None);
+/// Idempotently ensure the `EXECUTOR_CANCEL` JetStream stream exists.
+///
+/// Cancels ride JetStream (not core NATS) so the signal reaches runners
+/// connected over the WebSocket front door — core pub/sub interest never
+/// propagated across that boundary, so `executor.cancel.*` core publishes were
+/// silently dropped. `Limits` retention (every runner reads the same cancel) +
+/// short max-age (transient signal). Free function so both `ExecutorNatsClient`
+/// and net teardown (`NetRegistry::terminate`) share one definition.
+pub async fn ensure_cancel_stream(
+    jetstream: &async_nats::jetstream::Context,
+) -> Result<(), ExecutorError> {
+    let stream_name = aithericon_executor_domain::cancel_stream_name(None);
+    jetstream
+        .get_or_create_stream(async_nats::jetstream::stream::Config {
+            name: stream_name.clone(),
+            subjects: vec![aithericon_executor_domain::cancel_subject_filter(None)],
+            retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
+            storage: async_nats::jetstream::stream::StorageType::File,
+            max_age: Duration::from_secs(aithericon_executor_domain::CANCEL_STREAM_MAX_AGE_SECS),
+            discard: async_nats::jetstream::stream::DiscardPolicy::Old,
+            ..Default::default()
+        })
+        .await
+        .map_err(|e| {
+            ExecutorError::SubmissionFailed(format!("Failed to ensure stream '{stream_name}': {e}"))
+        })?;
+    Ok(())
+}
 
-        if self
-            .streams_ensured
-            .lock()
-            .map(|set| set.contains(&stream_name))
-            .unwrap_or(false)
-        {
-            return Ok(());
-        }
+/// Ensure the cancel stream and publish a cancellation request for a single
+/// execution (`executor.cancel.{execution_id}` on the `EXECUTOR_CANCEL` stream).
+///
+/// The single cancel-publish path: used by the in-net `executor_cancel` effect
+/// (via [`ExecutorNatsClient::cancel`]) and by net teardown
+/// (`NetRegistry::terminate`, which cancels every in-flight executor job by
+/// scanning the marking). Idempotent on the stream; a cancel for an already-
+/// finished/unknown execution is a harmless no-op on the runner.
+pub async fn publish_cancel(
+    jetstream: &async_nats::jetstream::Context,
+    execution_id: &str,
+) -> Result<(), ExecutorError> {
+    ensure_cancel_stream(jetstream).await?;
 
-        self.jetstream
-            .get_or_create_stream(async_nats::jetstream::stream::Config {
-                name: stream_name.clone(),
-                subjects: vec![aithericon_executor_domain::cancel_subject_filter(None)],
-                retention: async_nats::jetstream::stream::RetentionPolicy::Limits,
-                storage: async_nats::jetstream::stream::StorageType::File,
-                max_age: Duration::from_secs(
-                    aithericon_executor_domain::CANCEL_STREAM_MAX_AGE_SECS,
-                ),
-                discard: async_nats::jetstream::stream::DiscardPolicy::Old,
-                ..Default::default()
-            })
-            .await
-            .map_err(|e| {
-                ExecutorError::SubmissionFailed(format!(
-                    "Failed to ensure stream '{stream_name}': {e}"
-                ))
-            })?;
+    let subject = aithericon_executor_domain::cancel_subject(execution_id);
+    jetstream
+        .publish(subject.clone(), Bytes::new())
+        .await
+        .map_err(|e| ExecutorError::CancellationFailed(format!("NATS publish failed: {e}")))?
+        .await
+        .map_err(|e| ExecutorError::CancellationFailed(format!("NATS publish ack failed: {e}")))?;
 
-        if let Ok(mut set) = self.streams_ensured.lock() {
-            set.insert(stream_name);
-        }
-        Ok(())
-    }
+    tracing::info!(
+        execution_id = %execution_id,
+        subject = %subject,
+        "Published cancellation request (JetStream)"
+    );
+    Ok(())
 }
 
 #[async_trait::async_trait]
@@ -579,26 +594,7 @@ impl ExecutorClient for ExecutorNatsClient {
         // core pub/sub interest does not propagate from this internal connection
         // to a runner on the WebSocket front door, so a core publish never
         // reached the runner. JetStream delivery is interest-free.
-        self.ensure_cancel_stream().await?;
-
-        let subject = aithericon_executor_domain::cancel_subject(execution_id);
-
-        self.jetstream
-            .publish(subject.clone(), Bytes::new())
-            .await
-            .map_err(|e| ExecutorError::CancellationFailed(format!("NATS publish failed: {e}")))?
-            .await
-            .map_err(|e| {
-                ExecutorError::CancellationFailed(format!("NATS publish ack failed: {e}"))
-            })?;
-
-        tracing::info!(
-            execution_id = %execution_id,
-            subject = %subject,
-            "Published cancellation request (JetStream)"
-        );
-
-        Ok(())
+        publish_cancel(&self.jetstream, execution_id).await
     }
 
     fn name(&self) -> &str {
