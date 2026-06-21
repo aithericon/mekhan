@@ -7,6 +7,12 @@ authors.workspace = true
 repository.workspace = true
 homepage.workspace = true
 
+# The package keeps its descriptive crate name, but the user-facing binary is
+# `mekhan-runner` (the task executor daemon / "runner").
+[[bin]]
+name = "mekhan-runner"
+path = "src/main.rs"
+
 [dependencies]
 aithericon-executor-domain = { workspace = true }
 aithericon-executor-backend = { workspace = true }

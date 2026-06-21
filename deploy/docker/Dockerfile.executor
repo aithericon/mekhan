@@ -100,11 +100,11 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     set -eux; \
     cd /build/executor; \
     CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} cargo build --release --locked \
-        --bin aithericon-executor-service \
+        --bin mekhan-runner \
         --features "opendal-s3 opendal-gcs opendal-azblob url-inputs docker python http http-cancel llm vault file-ops kreuzberg surya smtp postgres loki prometheus"; \
     mkdir -p /out; \
-    cp target/release/aithericon-executor-service /out/aithericon-executor-service; \
-    strip /out/aithericon-executor-service || true
+    cp target/release/mekhan-runner /out/mekhan-runner; \
+    strip /out/mekhan-runner || true
 
 # -----------------------------------------------------------------------------
 # Runtime — Debian trixie slim (glibc; kreuzberg + libtesseract FFI rule out
@@ -181,8 +181,8 @@ RUN mkdir -p /var/lib/aithericon/executor \
     && chown -R executor:executor /var/lib/aithericon
 
 # Binary.
-COPY --from=builder /out/aithericon-executor-service /usr/local/bin/aithericon-executor-service
-RUN chmod +x /usr/local/bin/aithericon-executor-service
+COPY --from=builder /out/mekhan-runner /usr/local/bin/mekhan-runner
+RUN chmod +x /usr/local/bin/mekhan-runner
 
 # Aithericon Python SDK — needed when ExecutionSpec config has `sdk: true`
 # (the common case). The executor's find_sdk_path() reads AITHERICON_SDK_PATH
@@ -226,6 +226,6 @@ USER executor
 WORKDIR /var/lib/aithericon/executor
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD /usr/local/bin/aithericon-executor-service --help >/dev/null 2>&1 || exit 1
+    CMD /usr/local/bin/mekhan-runner --help >/dev/null 2>&1 || exit 1
 
-ENTRYPOINT ["/usr/local/bin/aithericon-executor-service"]
+ENTRYPOINT ["/usr/local/bin/mekhan-runner"]

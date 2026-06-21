@@ -7,10 +7,10 @@ Pluggable secret resolution for the Aithericon platform. Provides a `SecretStore
 ```toml
 # Cargo.toml
 [dependencies]
-aithericon-secrets = { git = "https://github.com/aithericon/aithericon-secrets" }
+aithericon-secrets = { git = "https://github.com/aithericon/mekhan" }
 
 # Enable Vault backend (KV store + response wrapping)
-aithericon-secrets = { git = "https://github.com/aithericon/aithericon-secrets", features = ["vault"] }
+aithericon-secrets = { git = "https://github.com/aithericon/mekhan", features = ["vault"] }
 ```
 
 ```rust
@@ -202,7 +202,7 @@ This crate is the shared secret-handling layer for the Aithericon platform. A ty
 | Component | Role | Status |
 |-----------|------|--------|
 | `aithericon-secrets` | Secret store traits, resolution, Vault wrapping/unwrapping | **This crate (open source)** |
-| [`aithericon-executor`](https://github.com/aithericon/aithericon-executor) | Worker that unwraps secrets and resolves refs in job spec (`crates/executor-worker/src/staging.rs`) | Open source |
+| [`aithericon-executor`](https://github.com/aithericon/mekhan/tree/main/executor) | Worker that unwraps secrets and resolves refs in job spec (`crates/executor-worker/src/staging.rs`) | Open source |
 | Workflow engine ("petri-lab") | Engine that wraps secrets before NATS publish | Aithericon internal |
 
 The engine side is documented here as a reference for anyone building their own wrapping producer; see the wrap/unwrap flow below.

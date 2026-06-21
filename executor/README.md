@@ -7,35 +7,35 @@ Distributed task executor service. Receives execution jobs via NATS JetStream (t
 - Rust toolchain (stable)
 - Docker (for NATS JetStream)
 - [`just`](https://github.com/casey/just) task runner
-- Sibling clones of these repositories (path-dependencies, see note below):
-  - [`aithericon-secrets`](https://github.com/aithericon/aithericon-secrets) at `../aithericon-secrets`
-  - [`fmeta`](https://github.com/aithericon/fmeta) at `../file-metadata` (the repo is named `fmeta`; clone it as `file-metadata` locally to match the path-dependency)
-  - A fork of [apalis](https://github.com/geofmureithi/apalis) at `../apalis` that provides a NATS backend (`apalis-nats`). This is currently a local fork; see [external dependencies](#external-dependencies) below.
+- Native build deps (HDF5, NetCDF, protobuf, …) — see [`../docs/setup.md`](../docs/setup.md)
+
+This crate lives in the [Mekhan monorepo](https://github.com/aithericon/mekhan).
+Its path-dependencies (`aithericon-secrets`, `fmeta`, and the `apalis` NATS fork)
+are vendored in-tree under `../shared/`, so a single clone of the monorepo is all
+you need — there are no sibling repos to clone.
 
 ## Quick Start
 
 ```bash
-# From a parent directory that will hold all sibling repos:
-git clone https://github.com/aithericon/aithericon-executor
-git clone https://github.com/aithericon/aithericon-secrets
-git clone https://github.com/aithericon/fmeta file-metadata
-# plus the apalis fork with NATS backend at ../apalis
+git clone https://github.com/aithericon/mekhan
+cd mekhan/executor
 
-cd aithericon-executor
 just nats-up        # Start NATS JetStream in Docker
 just run-debug      # Run with RUST_LOG=debug
 ```
 
-See [CLAUDE.md](CLAUDE.md) for the full list of build and development commands.
+Or, from the monorepo root, `just dev` brings up the whole stack (NATS, engine,
+mekhan, app) with the executor already wired in. See [CLAUDE.md](CLAUDE.md) for
+the full list of build and development commands.
 
 ## External Dependencies
 
-This workspace currently uses Cargo path dependencies to three sibling repositories (declared in the root `Cargo.toml` under `[workspace.dependencies]`):
+This workspace uses Cargo path dependencies (declared in the workspace `Cargo.toml` under `[workspace.dependencies]`) to crates vendored elsewhere in the monorepo under `../shared/`:
 
-- `aithericon-secrets` and `aithericon-file-metadata` — the public Aithericon crates linked above.
-- `apalis`, `apalis-core`, `apalis-nats` — a local fork of apalis with a NATS JetStream backend. Upstream apalis does not yet include a NATS backend.
+- `aithericon-secrets` (`../shared/secrets`) and `aithericon-file-metadata` (`../shared/file-metadata`, package `fmeta`) — Apache-2.0 Aithericon crates.
+- `apalis`, `apalis-core`, `apalis-nats` (`../shared/apalis`) — a fork of [apalis](https://github.com/geofmureithi/apalis) with a NATS JetStream backend. Upstream apalis does not yet include a NATS backend.
 
-For use outside the Aithericon monorepo, replace these path dependencies with `git = "..."` or published-crate dependencies as appropriate.
+For use outside the monorepo, replace these path dependencies with `git = "..."` or published-crate dependencies as appropriate.
 
 ## Crates
 
