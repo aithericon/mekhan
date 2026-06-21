@@ -1601,44 +1601,106 @@ where
             .ok_or_else(|| format!("Net '{}' not found", net_id))?;
 
         // Cancel any in-flight executor jobs this net owns BEFORE tearing it
-        // down. An AutomatedStep dispatched to the executor runs on a separate
-        // process (NATS-decoupled) and parks its control token in `{slug}/running`
-        // while it works; deleting the net never reaches that job, so it would run
-        // to completion after the instance is "cancelled". Scan the marking for
-        // running executor tokens and publish a cancel (JetStream EXECUTOR_CANCEL)
-        // for each — the engine is the single owner of "tear down net ⇒ stop its
-        // jobs", so callers (mekhan) need only call terminate. No-op in HTTP-sync
-        // executor mode (no async job to cancel).
+        // down, THROUGH THE NET'S OWN MACHINERY. An AutomatedStep runs
+        // NATS-decoupled and parks its control token in `{slug}/running` while it
+        // works; deleting the net never reaches that job, so it would run to
+        // completion after the instance is "cancelled". Rather than reach around
+        // the net, inject a `cancel_request` signal into each running step's
+        // `{slug}/cancel_request` place and drive evaluation so the in-net
+        // `executor_cancel` effect fires: that effect (a) publishes the cancel to
+        // the runner over JetStream (the same `publish_cancel` path) and (b) is
+        // recorded as an `EffectExecuted` event with the token flowing
+        // `cancel_request → cancelling → cancelled`. Driving it synchronously here
+        // — before NetCancelled/hibernate — closes the race where the net was
+        // deleted before the injected signal could be processed. A direct-publish
+        // fallback covers a net that can't fire it in time. No-op in HTTP-sync
+        // executor mode (no parked async job).
         #[cfg(feature = "executor")]
         if let Some(ecfg) = &self.executor_config {
-            let marking = instance.service.get_marking().await;
-            let mut cancelled = 0usize;
-            for (place_id, tokens) in &marking.tokens {
-                if !place_id.0.ends_with("/running") {
+            use petri_domain::{PlaceId, TokenColor};
+
+            // execution_id → its `{slug}/cancel_request` place, for every parked
+            // in-flight executor job.
+            let in_flight = |marking: &petri_domain::Marking| -> std::collections::HashSet<String> {
+                marking
+                    .tokens
+                    .iter()
+                    .filter(|(p, _)| p.0.ends_with("/running"))
+                    .flat_map(|(_, toks)| {
+                        toks.iter().filter_map(|t| match &t.color {
+                            TokenColor::Data(d) => d
+                                .get("execution_id")
+                                .and_then(|v| v.as_str())
+                                .map(String::from),
+                            _ => None,
+                        })
+                    })
+                    .collect()
+            };
+
+            let mut targets: std::collections::HashMap<String, PlaceId> = Default::default();
+            for (place_id, tokens) in &instance.service.get_marking().await.tokens {
+                let Some(slug) = place_id.0.strip_suffix("/running") else {
                     continue;
-                }
+                };
                 for token in tokens {
-                    let petri_domain::TokenColor::Data(data) = &token.color else {
+                    let TokenColor::Data(data) = &token.color else {
                         continue;
                     };
-                    let Some(eid) = data.get("execution_id").and_then(|v| v.as_str()) else {
-                        continue;
-                    };
-                    if let Err(e) = petri_executor::publish_cancel(&ecfg.jetstream, eid).await {
-                        tracing::warn!(
-                            net_id = %net_id, execution_id = %eid,
-                            "terminate: failed to publish executor cancel: {e}"
-                        );
-                    } else {
-                        cancelled += 1;
+                    if let Some(eid) = data.get("execution_id").and_then(|v| v.as_str()) {
+                        targets.insert(eid.to_string(), PlaceId(format!("{slug}/cancel_request")));
                     }
                 }
             }
-            if cancelled > 0 {
-                tracing::info!(
-                    net_id = %net_id, count = cancelled,
-                    "terminate: cancelled in-flight executor jobs before teardown"
-                );
+
+            if !targets.is_empty() {
+                // Inject cancel_request (idempotent via dedup_id) for each.
+                for (eid, cancel_place) in &targets {
+                    let color = TokenColor::Data(serde_json::json!({ "execution_id": eid }));
+                    if let Err(e) = instance
+                        .service
+                        .create_token_with_meta(
+                            cancel_place.clone(),
+                            color,
+                            None,
+                            None,
+                            Some(format!("terminate-cancel:{eid}")),
+                        )
+                        .await
+                    {
+                        tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: failed to inject cancel_request: {e}");
+                    }
+                }
+
+                // Drive evaluation so `executor_cancel` fires and consumes the
+                // running tokens. Bounded retry covers eval-lock contention with
+                // the net's background loop.
+                let mut pending: std::collections::HashSet<String> =
+                    targets.keys().cloned().collect();
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+                while !pending.is_empty() && tokio::time::Instant::now() < deadline {
+                    let _ = instance.service.evaluate_until_quiescent(1000).await;
+                    let still = in_flight(&instance.service.get_marking().await);
+                    pending.retain(|e| still.contains(e));
+                    if pending.is_empty() {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+
+                let fired = targets.len() - pending.len();
+                if fired > 0 {
+                    tracing::info!(net_id = %net_id, count = fired, "terminate: drove in-net executor_cancel before teardown");
+                }
+                // Fallback: anything the net didn't consume in time still gets a
+                // direct cancel so the remote job always stops (eval-lock
+                // starvation, effect-handler error, missing cancel place).
+                for eid in &pending {
+                    tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: in-net cancel did not fire in time; direct publish fallback");
+                    if let Err(e) = petri_executor::publish_cancel(&ecfg.jetstream, eid).await {
+                        tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: fallback publish_cancel failed: {e}");
+                    }
+                }
             }
         }
 
