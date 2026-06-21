@@ -278,6 +278,57 @@ fn pool_surface_for_node(node: &crate::models::template::WorkflowNode) -> Option
     }
 }
 
+/// The worker-GROUP routing partitions an executor-dispatched graph references —
+/// the implicit `default` group (and any explicit `group` on a fungible
+/// `Executor { capacity: None }` step). Mirrors the head-injection in
+/// [`crate::process::discover`] (Pass 1: "Unified worker dispatch"): every
+/// `AutomatedStep`/`Agent` routes through a worker group, so a step's group (or
+/// `default`) lands in `envelope_heads` and the group's `capacity` resource gets
+/// `envelope_used = true`.
+///
+/// These are NOT user-bindable run-time requirements: the fungible worker target
+/// holds no reservation ("Runs on any worker serving this step's backend") and
+/// the group is resolved + hard-failed at LOWERING against the registry, never
+/// bound per-instance. Their `capacity` resource still rides the `__resources`
+/// splice (the UUID is the routing partition), but [`derive_requirements`]
+/// excludes a routing-ONLY head from becoming a [`SlotRole::DataResource`] slot —
+/// otherwise it surfaces as a phantom "required, used-by-0-nodes" binding in the
+/// run sheet. A genuine `Executor { capacity }` / lease / scheduler binding to
+/// the same alias is a pool slot (derived in pass 1) and is kept.
+fn worker_group_routing_heads(graph: &WorkflowGraph) -> BTreeSet<String> {
+    let mut heads = BTreeSet::new();
+    for node in &graph.nodes {
+        let dm = match &node.data {
+            WorkflowNodeData::AutomatedStep {
+                deployment_model, ..
+            }
+            | WorkflowNodeData::Agent {
+                deployment_model, ..
+            } => deployment_model,
+            _ => continue,
+        };
+        match dm {
+            // Fungible worker pool: the step's explicit `group`, else `default`.
+            DeploymentModel::Executor {
+                capacity: None,
+                group,
+            } => {
+                let alias = group
+                    .as_deref()
+                    .filter(|g| !g.is_empty())
+                    .unwrap_or(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH);
+                heads.insert(alias.to_string());
+            }
+            // Pooled / Scheduled steps default-route their non-lease grant to the
+            // workspace `default` group (same as discover.rs).
+            _ => {
+                heads.insert(crate::worker_groups::DEFAULT_WORKER_GROUP_PATH.to_string());
+            }
+        }
+    }
+    heads
+}
+
 /// Internal mutable slot accumulator — collapses surfaces by alias key.
 struct SlotBuilder {
     resource_type: String,
@@ -400,7 +451,18 @@ pub(crate) fn derive_requirements(
     //    envelope for exactly this set; a resource reached ONLY as a
     //    control-flow constant is NOT in `envelope_used`, bakes no splice, and
     //    so derives NO slot (it launches via its baked constants as today).
+    //
+    //    EXCLUDE worker-group routing partitions (the implicit `default` group
+    //    and explicit fungible-step `group`s): they ride the `__resources`
+    //    splice for their UUID but are resolved at lowering, not bound per-run —
+    //    surfacing one as a slot is a phantom "required, used-by-0-nodes"
+    //    binding. A real pool binding to the same alias already built a pass-1
+    //    slot (`builders.contains_key`) and is preserved.
+    let group_routing_heads = worker_group_routing_heads(graph);
     for (alias, info) in envelope_used {
+        if group_routing_heads.contains(alias) && !builders.contains_key(alias) {
+            continue;
+        }
         let entry = builders.entry(alias.clone()).or_insert_with(|| SlotBuilder {
             resource_type: info.type_name.clone(),
             role: SlotRole::DataResource,
@@ -743,6 +805,65 @@ mod tests {
             addr.resource_keys.is_empty(),
             "admission-only pool records no __resources key: {:?}",
             addr.resource_keys
+        );
+    }
+
+    #[test]
+    fn worker_group_routing_head_derives_no_slot() {
+        // A fungible `Executor { capacity: None }` step routes through the
+        // implicit `default` worker group → discover.rs marks the `default`
+        // capacity `envelope_used`. It must NOT become a bindable requirement
+        // slot (routing infra resolved at lowering, not a per-run binding) — the
+        // phantom "required, used-by-0-nodes" slot the run sheet showed.
+        let grp_id = Uuid::new_v4();
+        let mut envelope_used = KnownResources::new();
+        envelope_used.insert("default".to_string(), capacity_resource(grp_id));
+
+        let g = graph(vec![auto(
+            "step1",
+            DeploymentModel::Executor {
+                capacity: None,
+                group: None,
+            },
+        )]);
+
+        let m = derive_requirements(&g, &envelope_used, &envelope_used).expect("derive");
+        assert!(
+            m.is_empty(),
+            "worker-group routing head derives no slot: {:?}",
+            m.slots
+        );
+    }
+
+    #[test]
+    fn pooled_step_default_route_does_not_leak_default_group_slot() {
+        // A real `Executor { capacity }` pool binding ALSO default-routes its
+        // non-lease grant to the `default` group (discover.rs), so `default`
+        // shows up in `envelope_used` alongside the real pool. Only the pool slot
+        // (`prod_gpu`) should derive — the `default` routing head is excluded.
+        let cap_id = Uuid::new_v4();
+        let grp_id = Uuid::new_v4();
+        let mut known = KnownResources::new();
+        known.insert("prod_gpu".to_string(), capacity_resource(cap_id));
+        known.insert("default".to_string(), capacity_resource(grp_id));
+
+        let g = graph(vec![auto(
+            "step1",
+            DeploymentModel::Executor {
+                capacity: Some(CapacityBinding {
+                    alias: "prod_gpu".to_string(),
+                    request: None,
+                }),
+                group: None,
+            },
+        )]);
+
+        let m = derive_requirements(&g, &known, &known).expect("derive");
+        assert_eq!(m.slots.len(), 1, "only the real pool slot: {:?}", m.slots);
+        assert_eq!(slot(&m, "prod_gpu").role, SlotRole::ExecutorCapacity);
+        assert!(
+            m.slots.iter().all(|s| s.key != "default"),
+            "the `default` worker-group routing head is excluded"
         );
     }
 
