@@ -18,11 +18,17 @@
 	interface Props {
 		storagePath: string | null;
 		mimeType: string | null;
+		/**
+		 * Pre-resolved by-reference fetch URL (bytes served by content hash for a
+		 * crawled / file-server entry). When set it wins over `storagePath`; when
+		 * omitted the component keeps its original storage-path behavior.
+		 */
+		contentUrl?: string | null;
 		filename?: string | null;
 		name?: string | null;
 		sizeBytes?: number | null;
 	}
-	let { storagePath, mimeType, filename, name, sizeBytes }: Props = $props();
+	let { storagePath, contentUrl, mimeType, filename, name, sizeBytes }: Props = $props();
 
 	const kind = $derived<'image' | 'video' | 'audio' | null>(
 		(mimeType ?? '').startsWith('image/')
@@ -34,7 +40,9 @@
 					: null
 	);
 
-	const downloadUrl = $derived(storagePath ? catalogueDownloadUrl(storagePath) : null);
+	// Bytes come from the by-reference URL if given, else the platform store.
+	const fetchUrl = $derived(contentUrl ?? (storagePath ? catalogueDownloadUrl(storagePath) : null));
+	const downloadUrl = $derived(fetchUrl);
 	// Prefer `name` over `filename`: the catalogue's `filename` can carry a
 	// spurious trailing `.json` (artifact-pipeline naming quirk), so as a last
 	// line of defence strip a `.json` suffix that doesn't match the real MIME.
@@ -57,14 +65,14 @@
 
 	$effect(() => {
 		// Re-run whenever the underlying file changes.
-		void storagePath;
+		void fetchUrl;
 		src = null;
 		error = null;
 		playbackError = false;
-		if (!kind || !storagePath) return;
+		if (!kind || !fetchUrl) return;
 		const controller = new AbortController();
 		let objectUrl: string | null = null;
-		authFetch(catalogueDownloadUrl(storagePath), { signal: controller.signal })
+		authFetch(fetchUrl, { signal: controller.signal })
 			.then((r) => {
 				if (!r.ok) throw new Error(`fetch failed: ${r.status}`);
 				return r.blob();
@@ -167,7 +175,7 @@
 		{#if sizeLabel}
 			<span class="text-muted-foreground">{sizeLabel}</span>
 		{/if}
-		{#if !storagePath}
+		{#if !fetchUrl}
 			<span class="text-muted-foreground italic">upload pending…</span>
 		{/if}
 	</div>

@@ -804,6 +804,9 @@ where
         }
 
         let eval_notify = Arc::new(Notify::new());
+        // Bind the waker so `service.create_token` wakes this net's eval loop
+        // directly — no caller has to remember to notify.
+        service.set_eval_notify(eval_notify.clone());
 
         // Woken nets (re-hydrated from NATS) already have topology and marking;
         // they should resume in Running mode so eval fires on token injection.
@@ -1600,6 +1603,38 @@ where
             .get(net_id)
             .ok_or_else(|| format!("Net '{}' not found", net_id))?;
 
+        // Cancel any in-flight executor jobs this net owns BEFORE tearing it
+        // down, THROUGH THE NET'S OWN MACHINERY. An AutomatedStep runs
+        // NATS-decoupled and parks its control token in `{slug}/running` while it
+        // works; deleting the net never reaches that job, so it would run to
+        // completion after the instance is "cancelled". Rather than reach around
+        // the net, inject a `cancel_request` signal into each running step's
+        // `{slug}/cancel_request` place and drive evaluation so the in-net
+        // `executor_cancel` effect fires: that effect (a) cancels the runner via
+        // its handler (`publish_cancel`) and (b) is recorded as an effect event
+        // with the token flowing `cancel_request → cancelling → cancelled`.
+        // Driving it synchronously here — before NetCancelled/hibernate — closes
+        // the race where the net was deleted before the injected signal could be
+        // processed. This is independent of `executor_config` (the registered
+        // `executor_cancel` handler does the work); `executor_config` only feeds
+        // the direct-publish fallback below.
+        let cancel_pending = self.drive_in_net_executor_cancel(&instance, net_id).await;
+
+        // Fallback: anything the net could not fire in time (eval-lock starvation,
+        // effect-handler error, missing cancel place) still gets a direct cancel
+        // so the remote job always stops. Needs the NATS executor client.
+        #[cfg(feature = "executor")]
+        if let Some(ecfg) = &self.executor_config {
+            for eid in &cancel_pending {
+                tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: in-net cancel did not fire in time; direct publish fallback");
+                if let Err(e) = petri_executor::publish_cancel(&ecfg.jetstream, eid).await {
+                    tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: fallback publish_cancel failed: {e}");
+                }
+            }
+        }
+        #[cfg(not(feature = "executor"))]
+        let _ = cancel_pending;
+
         // Failure-path parity for cancellation: fire any `t_<id>_finally`
         // finalizer BEFORE NetCancelled tears the net down. A leased net's
         // success-path release (`t_<id>_exit`) is gated on the body completing,
@@ -1634,6 +1669,97 @@ where
 
         // Cancel and remove
         self.hibernate(net_id)
+    }
+
+    /// Inject `cancel_request` into every in-flight executor step's
+    /// `{slug}/cancel_request` place and drive evaluation so the in-net
+    /// `executor_cancel` effect fires synchronously. Returns the execution_ids
+    /// whose `{slug}/running` token was NOT consumed within the bound (the caller
+    /// may fall back to a direct cancel). Independent of `executor_config` — the
+    /// registered `executor_cancel` handler does the work. See [`Self::terminate`].
+    async fn drive_in_net_executor_cancel(
+        &self,
+        instance: &NetInstance<E, T, S>,
+        net_id: &str,
+    ) -> std::collections::HashSet<String> {
+        use petri_domain::{PlaceId, TokenColor};
+
+        // execution_ids currently parked in a `{slug}/running` place.
+        let in_flight = |marking: &petri_domain::Marking| -> std::collections::HashSet<String> {
+            marking
+                .tokens
+                .iter()
+                .filter(|(p, _)| p.0.ends_with("/running"))
+                .flat_map(|(_, toks)| {
+                    toks.iter().filter_map(|t| match &t.color {
+                        TokenColor::Data(d) => d
+                            .get("execution_id")
+                            .and_then(|v| v.as_str())
+                            .map(String::from),
+                        _ => None,
+                    })
+                })
+                .collect()
+        };
+
+        // execution_id → its `{slug}/cancel_request` place.
+        let mut targets: std::collections::HashMap<String, PlaceId> = Default::default();
+        for (place_id, tokens) in &instance.service.get_marking().await.tokens {
+            let Some(slug) = place_id.0.strip_suffix("/running") else {
+                continue;
+            };
+            for token in tokens {
+                let TokenColor::Data(data) = &token.color else {
+                    continue;
+                };
+                if let Some(eid) = data.get("execution_id").and_then(|v| v.as_str()) {
+                    targets.insert(eid.to_string(), PlaceId(format!("{slug}/cancel_request")));
+                }
+            }
+        }
+
+        if targets.is_empty() {
+            return std::collections::HashSet::new();
+        }
+
+        // Inject cancel_request (idempotent via dedup_id) for each.
+        for (eid, cancel_place) in &targets {
+            let color = TokenColor::Data(serde_json::json!({ "execution_id": eid }));
+            if let Err(e) = instance
+                .service
+                .create_token_with_meta(
+                    cancel_place.clone(),
+                    color,
+                    None,
+                    None,
+                    Some(format!("terminate-cancel:{eid}")),
+                )
+                .await
+            {
+                tracing::warn!(net_id = %net_id, execution_id = %eid, "terminate: failed to inject cancel_request: {e}");
+            }
+        }
+
+        // Drive evaluation so `executor_cancel` fires and consumes the running
+        // tokens. Bounded retry covers eval-lock contention with the net's
+        // background loop.
+        let mut pending: std::collections::HashSet<String> = targets.keys().cloned().collect();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !pending.is_empty() && tokio::time::Instant::now() < deadline {
+            let _ = instance.service.evaluate_until_quiescent(1000).await;
+            let still = in_flight(&instance.service.get_marking().await);
+            pending.retain(|e| still.contains(e));
+            if pending.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let fired = targets.len() - pending.len();
+        if fired > 0 {
+            tracing::info!(net_id = %net_id, count = fired, "terminate: drove in-net executor_cancel before teardown");
+        }
+        pending
     }
 }
 
@@ -2910,6 +3036,193 @@ mod tests {
                 .iter()
                 .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCancelled { .. })),
             "terminate must journal NetCancelled"
+        );
+    }
+
+    /// `terminate` must cancel in-flight executor jobs THROUGH THE NET: inject a
+    /// `cancel_request` into each running step's `{slug}/cancel_request` place and
+    /// drive the in-net `executor_cancel` effect (which cancels the runner + is
+    /// recorded as an effect event), consuming the `{slug}/running` token — all
+    /// before NetCancelled. Independent of `executor_config` (handler does it).
+    #[tokio::test]
+    async fn terminate_cancels_in_flight_executor_jobs() {
+        use aithericon_sdk::prelude::*;
+        use petri_application::ExecutorCancelHandler;
+        use petri_domain::ExecutorClient;
+        use std::sync::Mutex;
+
+        // Recording executor client — captures cancel(execution_id) calls.
+        struct RecordingExecutorClient {
+            cancelled: Arc<Mutex<Vec<String>>>,
+        }
+        #[async_trait::async_trait]
+        impl ExecutorClient for RecordingExecutorClient {
+            async fn submit(
+                &self,
+                _request: petri_domain::ExecutionSubmitRequest,
+            ) -> Result<petri_domain::ExecutionSubmitResult, petri_domain::ExecutorError>
+            {
+                Ok(petri_domain::ExecutionSubmitResult {
+                    execution_id: "unused".into(),
+                })
+            }
+            async fn cancel(&self, execution_id: &str) -> Result<(), petri_domain::ExecutorError> {
+                self.cancelled
+                    .lock()
+                    .unwrap()
+                    .push(execution_id.to_string());
+                Ok(())
+            }
+            fn name(&self) -> &str {
+                "recording"
+            }
+        }
+
+        // Minimal executor-lifecycle cancel shape, place ids carrying the `{slug}/`
+        // prefix exactly as the mekhan compiler emits, so terminate's `*/running`
+        // scan + `{slug}/cancel_request` injection match.
+        let mut sdk = Context::new("registry-executor-cancel-test");
+        let running = sdk.state::<DynamicToken>("sleeper/running", "Running");
+        let cancel_request = sdk.signal::<DynamicToken>("sleeper/cancel_request", "Cancel Request");
+        let cancelling = sdk.state::<DynamicToken>("sleeper/cancelling", "Cancelling");
+        sdk.transition("sleeper/cancel", "Cancel Execution")
+            .auto_input("job", &running)
+            .auto_input("sig", &cancel_request)
+            .guard_rhai("sig.execution_id == job.execution_id")
+            .auto_output("cancelled", &cancelling)
+            .effect("executor_cancel");
+
+        let scenario = petri_test_harness::fixtures::TestScenario::from_sdk(sdk.build());
+        let running_pid = scenario
+            .places
+            .get("sleeper/running")
+            .expect("running place")
+            .clone();
+        let cancelling_pid = scenario
+            .places
+            .get("sleeper/cancelling")
+            .expect("cancelling place")
+            .clone();
+
+        let cancelled = Arc::new(Mutex::new(Vec::new()));
+        let client = Arc::new(RecordingExecutorClient {
+            cancelled: cancelled.clone(),
+        });
+
+        let registry = new_registry();
+        let inst = registry.get_or_create("net-exec-cancel");
+        inst.service
+            .register_effect_handler(
+                "executor_cancel",
+                Arc::new(ExecutorCancelHandler::new(client, "job", "cancelled")),
+            )
+            .expect("register executor_cancel handler");
+        inst.service
+            .initialize(scenario.net.clone())
+            .await
+            .expect("initialize");
+
+        // An in-flight executor job parked in `{slug}/running`.
+        inst.service
+            .create_token(
+                running_pid.clone(),
+                petri_domain::TokenColor::Data(serde_json::json!({ "execution_id": "exec-42" })),
+            )
+            .await
+            .expect("seed running token");
+        *inst.run_mode.write() = RunMode::Running;
+
+        registry
+            .terminate(
+                "net-exec-cancel",
+                Some("Deleted by user".into()),
+                Some("engine-api".into()),
+            )
+            .await
+            .expect("terminate should succeed");
+
+        // The in-net executor_cancel effect fired for the in-flight execution.
+        assert_eq!(
+            *cancelled.lock().unwrap(),
+            vec!["exec-42".to_string()],
+            "terminate must drive the in-net executor_cancel effect for the running job"
+        );
+        // The running token was consumed by the cancel transition (token flowed
+        // to `cancelling`), so no direct-publish fallback was needed.
+        let marking = inst.service.get_marking().await;
+        assert_eq!(
+            marking.token_count(&running_pid),
+            0,
+            "running token must be consumed by executor_cancel"
+        );
+        assert_eq!(
+            marking.token_count(&cancelling_pid),
+            1,
+            "cancel must move the token to `cancelling`"
+        );
+        // ...and the net was torn down.
+        assert!(
+            registry.get("net-exec-cancel").is_none(),
+            "terminate must hibernate the net"
+        );
+    }
+
+    /// A token created via `service.create_token` must wake the net's eval loop on
+    /// its own — without the caller pulsing `eval_notify`. Guards the
+    /// `set_eval_notify`/`create_token`-wakes-the-net wiring: seed an input place
+    /// purely through the service and assert the enabled transition fires.
+    #[tokio::test]
+    async fn create_token_wakes_eval_loop() {
+        use aithericon_sdk::prelude::*;
+
+        let mut sdk = Context::new("create-token-wake-test");
+        let a = sdk.state::<DynamicToken>("a", "A");
+        let b = sdk.state::<DynamicToken>("b", "B");
+        sdk.transition("t", "Passthrough")
+            .auto_input("x", &a)
+            .auto_output("y", &b)
+            .logic_rhai("#{ y: x }")
+            .done();
+        let scenario = petri_test_harness::fixtures::TestScenario::from_sdk(sdk.build());
+        let a_pid = scenario.places.get("a").expect("place a").clone();
+        let b_pid = scenario.places.get("b").expect("place b").clone();
+
+        let registry = new_registry();
+        let inst = registry.get_or_create("net-wake");
+        inst.service
+            .initialize(scenario.net.clone())
+            .await
+            .expect("initialize");
+        *inst.run_mode.write() = RunMode::Running;
+
+        // Seed `a` ONLY through `service.create_token` — no handler, no manual
+        // `eval_notify`. The transition must still fire, proving create_token woke
+        // the loop.
+        inst.service
+            .create_token(
+                a_pid.clone(),
+                petri_domain::TokenColor::Data(serde_json::json!({ "v": 1 })),
+            )
+            .await
+            .expect("seed token a");
+
+        let mut fired = false;
+        for _ in 0..100 {
+            if inst.service.get_marking().await.token_count(&b_pid) > 0 {
+                fired = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(
+            fired,
+            "create_token must wake the eval loop so the enabled transition fires \
+             (token never reached `b`)"
+        );
+        assert_eq!(
+            inst.service.get_marking().await.token_count(&a_pid),
+            0,
+            "the input token must have been consumed by the fired transition"
         );
     }
 }

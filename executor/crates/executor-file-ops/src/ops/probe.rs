@@ -123,10 +123,7 @@ pub async fn execute(
         // Bare digest string (lowercase hex), no algorithm prefix — the exact
         // shape the reconcile path compares against the catalogue's
         // `content_hash` / `legacy_file_index.hash` (`"SHA256:"` stripped).
-        outputs.insert(
-            "checksum_digest".into(),
-            serde_json::json!(checksum.digest),
-        );
+        outputs.insert("checksum_digest".into(), serde_json::json!(checksum.digest));
         outputs.insert(
             "checksum_algorithm".into(),
             serde_json::to_value(&checksum.algorithm)

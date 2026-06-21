@@ -26,14 +26,24 @@
 	type Props = {
 		value: unknown;
 		ty?: TyDescriptor;
+		/** Pre-built schema node. Takes precedence over `ty` — lets callers that
+		 *  already hold a `SchemaNode` (e.g. catalogue file-metadata columns) drive
+		 *  the tree without a round-trip through `TyDescriptor`. */
+		schemaNode?: SchemaNode;
 		ctx: RenderContext;
 		/** Internal: current nesting depth (callers leave this absent). */
 		depth?: number;
 	};
 
-	let { value, ty, ctx, depth = 0 }: Props = $props();
+	let { value, ty, schemaNode, ctx, depth = 0 }: Props = $props();
 
-	const schema = $derived(tyDescriptorToSchemaNode(ty));
+	const schema = $derived(schemaNode ?? tyDescriptorToSchemaNode(ty));
+
+	// Element schema for arrays — propagated to each item so nested object keys
+	// inside array elements stay type-annotated, not just the top level.
+	const elementSchema = $derived<SchemaNode | null>(
+		schema.kind === 'array' ? schema.element : null
+	);
 
 	// Auto-expand the top 2 levels; deeper levels start collapsed.
 	const AUTO_EXPAND_DEPTH = 2;
@@ -170,7 +180,12 @@
 					<!-- Inline value for non-expandable leaves -->
 					{#if !canExpand}
 						<dd class="min-w-0 break-words">
-							<SchemaValueView value={entry.val} {ctx} depth={depth + 1} />
+							<SchemaValueView
+									value={entry.val}
+									schemaNode={entry.childSchema ?? undefined}
+									{ctx}
+									depth={depth + 1}
+								/>
 						</dd>
 					{:else if !open}
 						<!-- Collapsed preview: use a button for accessibility -->
@@ -190,7 +205,12 @@
 				<!-- Expanded nested value -->
 				{#if canExpand && open}
 					<dd class="ml-5 mt-1 border-l border-border/50 pl-3">
-						<SchemaValueView value={entry.val} {ctx} depth={depth + 1} />
+						<SchemaValueView
+									value={entry.val}
+									schemaNode={entry.childSchema ?? undefined}
+									{ctx}
+									depth={depth + 1}
+								/>
 					</dd>
 				{/if}
 			</div>
@@ -229,7 +249,12 @@
 						<span class="shrink-0 font-mono text-xs text-muted-foreground/60">[{item.idx}]</span>
 						{#if !canExpand}
 							<div class="min-w-0 break-words">
-								<SchemaValueView value={item.val} {ctx} depth={depth + 1} />
+								<SchemaValueView
+									value={item.val}
+									schemaNode={elementSchema ?? undefined}
+									{ctx}
+									depth={depth + 1}
+								/>
 							</div>
 						{:else if !open}
 							<button
@@ -244,7 +269,12 @@
 					</div>
 					{#if canExpand && open}
 						<div class="ml-5 mt-1 border-l border-border/50 pl-3">
-							<SchemaValueView value={item.val} {ctx} depth={depth + 1} />
+							<SchemaValueView
+									value={item.val}
+									schemaNode={elementSchema ?? undefined}
+									{ctx}
+									depth={depth + 1}
+								/>
 						</div>
 					{/if}
 				</div>

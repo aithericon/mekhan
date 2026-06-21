@@ -43,8 +43,15 @@ fn fake_hash() -> String {
     format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple())
 }
 
-/// Register a coupled catalogue+inventory copy (so rollups have size to sum).
-async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size: i64) {
+/// Register a coupled catalogue+inventory copy into a specific workspace.
+async fn register_copy_ws(
+    pool: &PgPool,
+    ws: Uuid,
+    server: &str,
+    path: &str,
+    hash: &str,
+    size: i64,
+) {
     let req = InventoryRegisterRequest {
         entries: vec![mekhan_service::inventory::model::InventoryRegisterItem {
             content_hash: Some(hash.to_string()),
@@ -60,9 +67,13 @@ async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size
             gid: None,
         }],
     };
-    inv::register(pool, Uuid::nil(), &req)
-        .await
-        .expect("register copy");
+    inv::register(pool, ws, &req).await.expect("register copy");
+}
+
+/// Register a coupled catalogue+inventory copy under the nil workspace (the
+/// fold fallback for a not-yet-registered server), so rollups have size to sum.
+async fn register_copy(pool: &PgPool, server: &str, path: &str, hash: &str, size: i64) {
+    register_copy_ws(pool, Uuid::nil(), server, path, hash, size).await;
 }
 
 /// Scoped cleanup: only rows whose key/server begins with this test's prefix.
@@ -243,6 +254,79 @@ async fn create_restamps_stranded_nil_inventory_into_workspace() {
     assert_eq!(moved_cat, 2, "catalogue entries re-homed to the workspace");
 
     cleanup(&pool, ws, &prefix, &[h1, h2]).await;
+}
+
+/// Adopt must stay idempotent against a path the workspace already holds. When a
+/// later crawl strands a nil row at a `(key, path)` the workspace already owns
+/// (a deleted-then-recrawled server, or an earlier adopt cycle), re-homing it
+/// blindly would trip `uq_inv_ws_server_path`. The pre-existing copy wins, the
+/// colliding nil duplicate is dropped, and `create` succeeds.
+#[tokio::test]
+async fn create_drops_nil_inventory_colliding_with_existing_workspace_row() {
+    let Some(_) = db_url() else {
+        eprintln!("skip: MEKHAN__DATABASE_URL unset");
+        return;
+    };
+    let pool = connect().await;
+    let ws = Uuid::new_v4(); // a real (non-nil) workspace
+    let prefix = format!("fs-test-{}-", Uuid::new_v4());
+    let key = format!("{prefix}srv");
+    let h_ws = fake_hash();
+    let h_nil = fake_hash();
+    let h_fresh = fake_hash();
+
+    // The workspace already holds a copy at "dup.bin" (a prior crawl/adopt cycle).
+    register_copy_ws(&pool, ws, &key, "dup.bin", &h_ws, 10).await;
+    // A later crawl folded under nil while the server was unregistered: one row
+    // collides on "dup.bin", one is genuinely new at "fresh.bin".
+    register_copy(&pool, &key, "dup.bin", &h_nil, 11).await;
+    register_copy(&pool, &key, "fresh.bin", &h_fresh, 22).await;
+
+    // Register/adopt the server in the workspace → restamp fires in the tx. The
+    // collision on "dup.bin" must NOT abort with a duplicate-key error.
+    queries::create(&pool, ws, &create_req(&key, "local_mount"))
+        .await
+        .expect("create must not collide on the duplicate path");
+
+    // One row per path in the workspace: pre-existing "dup.bin" + re-homed "fresh.bin".
+    let ws_paths: Vec<String> = sqlx::query_scalar(
+        "SELECT path FROM file_inventory WHERE file_server_id = $1 AND workspace_id = $2 ORDER BY path",
+    )
+    .bind(&key)
+    .bind(ws)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ws_paths,
+        vec!["dup.bin".to_string(), "fresh.bin".to_string()],
+        "one row per path; fresh re-homed, no duplicate"
+    );
+
+    // The surviving "dup.bin" is the workspace's pre-existing copy, not the nil one.
+    let surviving_hash: String = sqlx::query_scalar(
+        "SELECT content_hash FROM file_inventory \
+          WHERE file_server_id = $1 AND workspace_id = $2 AND path = 'dup.bin'",
+    )
+    .bind(&key)
+    .bind(ws)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(surviving_hash, h_ws, "pre-existing workspace copy wins");
+
+    // Nothing left stranded in nil: collider dropped, fresh row re-homed.
+    let left_in_nil: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM file_inventory WHERE file_server_id = $1 AND workspace_id = $2",
+    )
+    .bind(&key)
+    .bind(Uuid::nil())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(left_in_nil, 0, "collider dropped, fresh re-homed");
+
+    cleanup(&pool, ws, &prefix, &[h_ws, h_nil, h_fresh]).await;
 }
 
 #[tokio::test]

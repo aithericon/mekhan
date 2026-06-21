@@ -521,7 +521,13 @@ verify-deploy env="dev":
     # Woodpecker step). The Nomad CLI's `deployment status -latest` flag was
     # removed in 1.6+ so we query the HTTP API directly — that endpoint
     # always returns the latest deployment for the job.
-    deadline=$(( $(date +%s) + 300 ))
+    #
+    # Must exceed the job's update.progress_deadline (20m in the mekhan job
+    # spec) — otherwise this poll gives up while Nomad is still legitimately
+    # rolling out (e.g. waiting on a cold zot pull-through to warm), reporting
+    # a false failure for a deploy that goes on to succeed. Kept a few minutes
+    # above 20m for margin.
+    deadline=$(( $(date +%s) + 1500 ))
     while :; do
       status=$(curl -sk --max-time 10 \
                  -H "X-Nomad-Token: ${NOMAD_TOKEN:-}" \

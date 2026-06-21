@@ -157,6 +157,7 @@ async fn openai_resource_secret_is_resolved_into_bearer_token() {
         Some(store.clone() as Arc<dyn SecretStore>),
         None,
         None,
+        None,
     );
 
     // ── Build a spec that mirrors the openai resource shape ──────────
@@ -286,6 +287,7 @@ async fn openai_env_secret_is_resolved_into_bearer_token() {
         Some(store.clone() as Arc<dyn SecretStore>),
         None,
         None,
+        None,
     );
 
     // No `api_key` on the config this time — the adapter must pick it up
@@ -392,6 +394,7 @@ async fn missing_openai_secret_fails_at_staging_not_at_adapter() {
         tmp.clone(),
         None,
         Some(store.clone() as Arc<dyn SecretStore>),
+        None,
         None,
         None,
     );

@@ -8,9 +8,10 @@ use tracing::{debug, error};
 
 use aithericon_executor_domain::{
     ChannelManifestEntry, ControlEmitEvent, ControlKind, EventCategory, ExecutionEvent, LogLevel,
-    StatusDetail,
+    MetricPoint, StatusDetail,
 };
 use aithericon_executor_ipc::proto::ChunkMessage;
+use aithericon_executor_metrics::MetricSink;
 use serde_json::json;
 
 use aithericon_executor_backend::traits::EventStream;
@@ -178,6 +179,12 @@ pub struct StreamContext {
     /// The job's declared streaming-channel manifest, used to resolve a `data`
     /// emit's transport tag (and to ignore an emit naming an undeclared channel).
     pub channels: Vec<ChannelManifestEntry>,
+    /// Metric pipeline for in-process backends that emit metric points via
+    /// [`EventStream::metric`] (the file-ops crawl's files/sec progress). Cloned
+    /// from the worker's `JobExecutor`; the SAME sink the IPC sidecar forwards
+    /// child-process SDK metrics to. `None` when the worker has no metric sink
+    /// configured — `metric()` is then a no-op.
+    pub metric_sink: Option<Arc<dyn MetricSink>>,
 }
 
 impl StreamContext {
@@ -277,6 +284,37 @@ impl EventStream for StreamContext {
             StatusDetail::OutputSet { name, value },
         )
         .await;
+    }
+
+    async fn metric(&self, points: Vec<MetricPoint>) {
+        // Two destinations, mirroring the IPC sidecar's `handle_log_metrics` so
+        // an in-process backend's metrics behave exactly like a child's SDK
+        // `log_metric`:
+        //   (1) the external MetricSink (NATS `executor.metrics.*`) — for
+        //       dashboards/exporters; has no in-repo consumer on its own.
+        //   (2) a per-point `MetricPointLogged` status event on the gated
+        //       `Metric` category — THIS is the path mekhan's causality ingest
+        //       folds into `hpi_metrics` → the run's Metrics tab.
+        // Emitting only (1) (as this method previously did) published into the
+        // void: the crawl's files/sec never reached the process. Emit BOTH.
+        if let Some(sink) = &self.metric_sink {
+            if let Err(e) = sink.record(&self.execution_id, &points).await {
+                debug!(execution_id = %self.execution_id, error = %e, "metric record failed");
+            }
+        }
+        for pt in &points {
+            self.maybe_emit(
+                EventCategory::Metric,
+                StatusDetail::MetricPointLogged {
+                    name: pt.name.clone(),
+                    value: pt.value,
+                    step: pt.step,
+                    metric_type: pt.metric_type,
+                    labels: pt.labels.clone(),
+                },
+            )
+            .await;
+        }
     }
 
     async fn item(
@@ -423,6 +461,91 @@ impl EventStream for StreamContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::sync::Mutex;
+
+    use aithericon_executor_domain::MetricType;
+
+    /// Records every emitted event's (category, detail) so a test can assert
+    /// what `StreamContext` published.
+    #[derive(Default)]
+    struct CapturingEmitter {
+        events: Mutex<Vec<(EventCategory, StatusDetail)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl EventEmitter for CapturingEmitter {
+        async fn emit(&self, event: &ExecutionEvent) {
+            self.events
+                .lock()
+                .unwrap()
+                .push((event.category, event.detail.clone()));
+        }
+        async fn emit_control(&self, _event: &ControlEmitEvent) {}
+    }
+
+    fn ctx_with(categories: &[EventCategory], emitter: Arc<CapturingEmitter>) -> StreamContext {
+        StreamContext {
+            categories: categories.iter().copied().collect(),
+            emitter,
+            sequence: Arc::new(AtomicU64::new(0)),
+            execution_id: "exec-1".to_string(),
+            workspace_id: "ws-1".to_string(),
+            source: "test".to_string(),
+            metadata: HashMap::new(),
+            transports: None,
+            channels: vec![],
+            metric_sink: None,
+        }
+    }
+
+    fn gauge(name: &str, value: f64) -> MetricPoint {
+        MetricPoint {
+            name: name.to_string(),
+            value,
+            step: None,
+            timestamp: Utc::now(),
+            metric_type: MetricType::Gauge,
+            labels: HashMap::new(),
+        }
+    }
+
+    /// `metric()` emits a `MetricPointLogged` status event on the gated `Metric`
+    /// category — the path mekhan's causality ingest folds into `hpi_metrics` →
+    /// the run's Metrics tab — even with NO MetricSink configured. Previously it
+    /// only forwarded to the (un-ingested) sink, so an in-process backend's
+    /// metrics (the crawl's files/sec) never reached the process.
+    #[tokio::test]
+    async fn metric_emits_metricpointlogged_for_ingest() {
+        let emitter = Arc::new(CapturingEmitter::default());
+        ctx_with(&[EventCategory::Metric], emitter.clone())
+            .metric(vec![gauge("crawl/files_per_second", 42.0)])
+            .await;
+
+        let events = emitter.events.lock().unwrap();
+        assert_eq!(events.len(), 1, "one MetricPointLogged per point");
+        match &events[0] {
+            (EventCategory::Metric, StatusDetail::MetricPointLogged { name, value, .. }) => {
+                assert_eq!(name, "crawl/files_per_second");
+                assert_eq!(*value, 42.0);
+            }
+            other => panic!("expected Metric/MetricPointLogged, got {other:?}"),
+        }
+    }
+
+    /// Gated like every other category: a job that didn't opt `Metric` into
+    /// `stream_events` emits nothing.
+    #[tokio::test]
+    async fn metric_is_gated_by_category_opt_in() {
+        let emitter = Arc::new(CapturingEmitter::default());
+        ctx_with(&[EventCategory::Log], emitter.clone())
+            .metric(vec![gauge("crawl/files_per_second", 1.0)])
+            .await;
+        assert!(
+            emitter.events.lock().unwrap().is_empty(),
+            "Metric not opted in → no emit"
+        );
+    }
 
     #[test]
     fn enrich_log_fields_stamps_execution_id_and_metadata() {

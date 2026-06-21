@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use aithericon_executor_domain::{INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
+use aithericon_executor_domain::{CANCEL_STREAM, INVENTORY_FOLD_STREAM, INVENTORY_FOLD_SUBJECT};
 use nats_io_jwt::{KeyPair, Permission, ResponsePermission, StringList, Token, User};
 use uuid::Uuid;
 
@@ -246,7 +246,8 @@ impl RunnerNatsSigner {
     ///   EXECUTION id, not the runner id), `runner.{id}.presence`, and
     ///   `{pool}.claim` (only when pooled), plus the JetStream pull + shared
     ///   stream API (see the helpers below).
-    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`.
+    ///   SUBSCRIBE allow: `runner.{id}.>`, `_INBOX.>`, `executor.cancel.*`, and
+    ///   `fileserve.{id}.read` (the file-handle data plane the daemon serves on).
     ///   Plus a ResponsePermission so async-nats request/reply works.
     /// The JWT carries no expiry (long-lived; rotation = re-mint).
     pub fn mint_runner_jwt(
@@ -272,6 +273,11 @@ impl RunnerNatsSigner {
             // wildcard publish doesn't widen what a runner can actually drain.
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
+            // Metric batches publish to `executor.metrics.{exec_id}` (one token,
+            // dots/spaces in the exec id are `_`-escaped by the sink). Without
+            // this a runner with a metric sink enabled gets a permissions
+            // violation and its files/sec (etc.) never reach the run Metrics tab.
+            "executor.metrics.>".to_string(),
             format!("runner.{runner_id}.presence"),
         ];
         if let Some(pool) = pool {
@@ -304,6 +310,10 @@ impl RunnerNatsSigner {
         // The shared status/events/datastream streams the daemon ensures at boot
         // (STREAM.INFO/CREATE/UPDATE) + the chunked-data publish subject.
         pub_allow.extend(jetstream_shared_stream_pub_allow());
+        // The JetStream `EXECUTOR_CANCEL` stream + ephemeral pull consumer the
+        // cancel listener binds at boot. Without this the listener's
+        // `get_or_create_stream` is denied and the daemon dies at startup.
+        pub_allow.extend(jetstream_cancel_pub_allow());
 
         // This runner's own control subject PLUS the request/reply mux inbox.
         // async-nats subscribes ONCE to `_INBOX.>` (default prefix) and ALL
@@ -316,6 +326,13 @@ impl RunnerNatsSigner {
             "_INBOX.>".to_string(),
             // Receive cancellations for executions this runner drains.
             EXECUTOR_CANCEL_FILTER.to_string(),
+            // File-handle data plane (docs/36): a runner daemon queue-subscribes
+            // `fileserve.<group>.read` to serve cross-executor file reads OUT of
+            // its outputs. A runner's serve_group is exactly its `runner_id`
+            // (`executor-service/src/main.rs` pushes `config.runner_id`), so grant
+            // that one subject — without it the subscribe is denied (Permissions
+            // Violation) and any cross-executor read from this runner stalls.
+            format!("fileserve.{runner_id}.read"),
         ];
 
         let pub_perm: Permission = Permission::builder()
@@ -367,6 +384,8 @@ impl RunnerNatsSigner {
     ///     `worker.{id}.>` subscribe; the anonymous `executor-<wire>` pull path
     ///     is governed by the (dev-open) JetStream pull perms, not a core
     ///     subscribe, exactly as the runner job-delivery comment above explains.
+    ///     A grouped worker also gets `fileserve.<group>.read`, where `group` is
+    ///     the routing partition it serves the file-handle data plane on.
     ///   PUBLISH allow: `worker.{id}.presence` (its heartbeat), and the shared
     ///     status/events fan-in `executor.status.*.>` / `executor.events.*.>`
     ///     (a worker reports on whatever exec-id it is currently draining, so the
@@ -421,6 +440,16 @@ impl RunnerNatsSigner {
                     let ns = aithericon_backends::executor_pool_namespace(wire);
                     sub_allow.push(format!("{ns}-grp.*.{group}.>"));
                 }
+                // File-handle data plane (docs/36): an enrolled worker-pool daemon
+                // queue-subscribes `fileserve.<worker_routing_partition>.read` to
+                // serve cross-executor file reads OUT of its outputs. The `group`
+                // arg here IS the routing partition (the capacity-resource UUID) —
+                // `handlers/workers.rs` mints with `routing_partition.to_string()`,
+                // and the daemon serves on `config.worker_routing_partition`
+                // (populated from `identity.routing_partition`). Grant that one
+                // subject; without it the serve subscribe is denied (Permissions
+                // Violation) and cross-executor reads from this worker stall.
+                sub_allow.push(format!("fileserve.{group}.read"));
             }
         }
 
@@ -431,6 +460,8 @@ impl RunnerNatsSigner {
             format!("worker.{worker_id}.presence"),
             "executor.status.*.>".to_string(),
             "executor.events.*.>".to_string(),
+            // Metric batches → `executor.metrics.{exec_id}` (see runner mint).
+            "executor.metrics.>".to_string(),
         ];
 
         // JetStream pull scope, one stream-family per advertised backend wire. A
@@ -450,6 +481,9 @@ impl RunnerNatsSigner {
         // The shared status/events/datastream streams every worker ensures at
         // boot (the StatusReporter runs regardless of grouping).
         pub_allow.extend(jetstream_shared_stream_pub_allow());
+        // The JetStream `EXECUTOR_CANCEL` stream + ephemeral pull consumer the
+        // cancel listener binds at boot (same as the runner path).
+        pub_allow.extend(jetstream_cancel_pub_allow());
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -663,6 +697,41 @@ fn jetstream_shared_stream_pub_allow() -> Vec<String> {
     out
 }
 
+/// Build the `$JS.API.*` allow-list for the JetStream `EXECUTOR_CANCEL` stream
+/// + the ephemeral pull consumer the cancel listener binds.
+///
+/// Cancel no longer rides core NATS: `NatsCancelListener`
+/// (`executor-worker/src/cancel.rs`) `get_or_create_stream`s `EXECUTOR_CANCEL`
+/// (transient, `Limits` retention) BEFORE binding, then creates an EPHEMERAL
+/// pull consumer (`DeliverPolicy::New`, `AckPolicy::None`) filtered on
+/// `executor.cancel.*`. Without these grants the `STREAM.INFO`/`CREATE` is
+/// denied, the listener setup times out, and the whole daemon dies at startup
+/// before it can drain a single job — the regression that bit the first
+/// zero-secret (scoped-JWT) edge runner, invisible in-cluster because the
+/// trusted workers connect with full-perm (`>`) creds. The stale
+/// [`EXECUTOR_CANCEL_FILTER`] core-NATS subscribe (granted at the call site) is
+/// now dead weight kept only for back-compat; JetStream deliveries arrive on
+/// `_INBOX.>`.
+///
+/// The stream is created by whichever side reaches it first (the engine also
+/// ensures it — `core-engine/.../executor/src/client.rs`), so the runner is
+/// granted CREATE/UPDATE like the other [`SHARED_STREAMS`]. The ephemeral
+/// consumer has a server-assigned name, so `CONSUMER.{CREATE,INFO,MSG.NEXT}`
+/// are wildcarded on the tail. `AckPolicy::None` → NO `$JS.ACK` grant.
+fn jetstream_cancel_pub_allow() -> Vec<String> {
+    vec![
+        format!("$JS.API.STREAM.INFO.{CANCEL_STREAM}"),
+        format!("$JS.API.STREAM.CREATE.{CANCEL_STREAM}"),
+        format!("$JS.API.STREAM.UPDATE.{CANCEL_STREAM}"),
+        // Ephemeral pull consumer: server-assigned name → grant the bare 2-token
+        // create AND the 3-token filtered/named forms async-nats may send.
+        format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}"),
+        format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}.>"),
+        format!("$JS.API.CONSUMER.INFO.{CANCEL_STREAM}.>"),
+        format!("$JS.API.CONSUMER.MSG.NEXT.{CANCEL_STREAM}.>"),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -710,11 +779,14 @@ mod tests {
         // Status/events keyed by exec id, not runner id → wildcard span.
         assert!(pub_allow.contains(&"executor.status.*.>".to_string()));
         assert!(pub_allow.contains(&"executor.events.*.>".to_string()));
+        assert!(pub_allow.contains(&"executor.metrics.>".to_string()));
         assert!(pub_allow.contains(&format!("runner.{id}.presence")));
         assert!(pub_allow.contains(&format!("{pool}.claim")));
 
         let sub_allow = allow_list(&claims, "sub");
         assert!(sub_allow.contains(&format!("runner.{id}.>")));
+        // File-handle data plane (docs/36): a runner serves on its own runner_id.
+        assert!(sub_allow.contains(&format!("fileserve.{id}.read")));
 
         // ResponsePermission present so request/reply works.
         assert!(claims["nats"]["resp"].is_object());
@@ -788,6 +860,13 @@ mod tests {
             format!("$JS.API.STREAM.INFO.{RUNNER_JOBS_NAMESPACE}_dlq"),
             "$JS.API.STREAM.INFO.EXECUTOR_STATUS".to_string(),
             "$JS.API.STREAM.CREATE.EXECUTOR_EVENTS".to_string(),
+            // EXECUTOR_CANCEL: the cancel listener `get_or_create`s the stream
+            // and binds an ephemeral pull consumer. A missing grant here is the
+            // exact gap that killed the first scoped-JWT edge runner at startup.
+            format!("$JS.API.STREAM.INFO.{CANCEL_STREAM}"),
+            format!("$JS.API.STREAM.CREATE.{CANCEL_STREAM}"),
+            format!("$JS.API.CONSUMER.CREATE.{CANCEL_STREAM}.>"),
+            format!("$JS.API.CONSUMER.MSG.NEXT.{CANCEL_STREAM}.>"),
         ] {
             assert!(pub_allow.contains(&want), "missing pub grant: {want}");
         }
@@ -888,6 +967,9 @@ mod tests {
         assert!(sub_allow.contains(&format!("worker.{id}.>")));
         assert!(sub_allow.contains(&format!("executor-python-grp.*.{group}.>")));
         assert!(sub_allow.contains(&format!("executor-docker-grp.*.{group}.>")));
+        // File-handle data plane (docs/36): a grouped worker serves on its
+        // routing partition, which is the `group` arg passed at mint time.
+        assert!(sub_allow.contains(&format!("fileserve.{group}.read")));
 
         // PUBLISH: presence heartbeat + the shared status/events fan-in. NO
         // `.claim` — a worker is a pull competitor, not a presence-push target.
@@ -920,6 +1002,12 @@ mod tests {
         assert!(
             !sub_allow.iter().any(|s| s.starts_with("executor-")),
             "an ungrouped worker gets no group pull filter, got {sub_allow:?}"
+        );
+        // An ungrouped worker has no routing partition to serve on, so it gets
+        // no `fileserve.*.read` grant either (mirrors the pull-filter omission).
+        assert!(
+            !sub_allow.iter().any(|s| s.starts_with("fileserve.")),
+            "an ungrouped worker gets no fileserve subscribe, got {sub_allow:?}"
         );
     }
 

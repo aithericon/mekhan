@@ -178,6 +178,13 @@
 			<code class="font-mono">/resources</code>.
 		</p>
 	{/if}
+	{#if pool}
+		<p class="text-xs italic text-muted-foreground">
+			Sets the <strong>default binding</strong> for this template's home workspace. Forks and other
+			workspaces bind their own provider under <em>Configure resources</em>, and each run can override
+			it in the launch dialog.
+		</p>
+	{/if}
 
 	{#if isPresencePool}
 		<!-- Presence lease: cap-match WHICH runner to hold. -->

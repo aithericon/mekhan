@@ -1109,40 +1109,13 @@ pub async fn cancel_instance(
         )));
     }
 
-    // Terminate the net in petri-lab (pause + delete)
+    // Terminate the net in petri-lab (pause + delete). The engine owns stopping
+    // in-flight work: on terminate it scans the net marking for running executor
+    // jobs and cancels each over the EXECUTOR_CANCEL JetStream stream (an
+    // AutomatedStep runs NATS-decoupled and never sees NetCancelled on its own).
+    // So mekhan need only terminate — no side-channel cancel publish here.
     if let Err(e) = state.petri.terminate_net(&instance.net_id).await {
         tracing::warn!("failed to terminate net in petri-lab: {e}");
-    }
-
-    // Cancel any in-flight executor jobs for this instance. terminate_net stops
-    // the net from firing new transitions, but AutomatedSteps already dispatched
-    // to the executor run on a separate process (NATS-decoupled) and never see
-    // NetCancelled — they'd otherwise run to completion. Publish a best-effort
-    // cancel per running execution_id; the executor's `executor.cancel.*`
-    // listener flips the job's CancellationToken. Cooperative: cancellation only
-    // takes effect for backends that observe the token mid-run.
-    let running_executions: Vec<String> = sqlx::query_scalar(
-        r#"
-        SELECT execution_id FROM step_execution
-        WHERE instance_id = $1
-          AND status IN ('running', 'pending')
-          AND execution_id IS NOT NULL
-        "#,
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
-
-    for execution_id in running_executions {
-        let subject = aithericon_executor_domain::cancel_subject(&execution_id);
-        if let Err(e) = state
-            .nats
-            .client()
-            .publish(subject, Vec::new().into())
-            .await
-        {
-            tracing::warn!(%execution_id, "failed to publish executor cancel: {e}");
-        }
     }
 
     // Update instance status

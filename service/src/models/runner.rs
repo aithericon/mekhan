@@ -182,6 +182,15 @@ pub struct EnrolledRunner {
     /// URL configured; the runner then keeps its own configured/default URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nats_url: Option<String>,
+    /// Public base URL of the storage blob broker the runner should use for
+    /// artifact bytes (e.g. `https://mekhan.dev.aithericon.eu`) — brokered from
+    /// mekhan's `runner_storage_broker_url` config. The runner persists it and
+    /// reads/writes via `{this}/api/storage/blob` (and unwraps secrets via
+    /// `{this}/api/v1/runners/{id}/secrets/unwrap`), so a bare daemon needs no
+    /// S3/Vault credentials. `null` when mekhan has no broker URL configured;
+    /// the runner then falls back to the mekhan base it enrolled against.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub storage_url: Option<String>,
 }
 
 /// Response for `POST /api/v1/runners/{id}/nats-creds` — a freshly-minted

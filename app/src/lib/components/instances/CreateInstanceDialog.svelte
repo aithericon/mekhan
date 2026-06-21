@@ -19,6 +19,7 @@
 		type SlotReadiness
 	} from '$lib/api/client';
 	import { listResources, type ResourceSummary } from '$lib/api/resources';
+	import { bindingTierLabel } from '$lib/api/template-bindings';
 	import type { WorkflowGraph, WorkflowNodeData, StartNodeData } from '$lib/types/editor';
 	import type { components } from '$lib/api/schema';
 	import { fromPortFieldKind } from '$lib/fields/adapters';
@@ -114,6 +115,15 @@
 	// Per resource_type list of candidate resources, loaded lazily per slot type.
 	let resourcesByType = $state<Record<string, ResourceSummary[]>>({});
 	let resourceTypeLoaded = $state<Record<string, boolean>>({});
+	// Node id → human label, from the loaded graph. Lets a slot name the actual
+	// nodes that use it ("used by Crawl, Fold") instead of an opaque count.
+	let nodeLabels = $state<Record<string, string>>({});
+
+	/** The human labels of the nodes a slot is used by (falls back to the raw
+	 *  node id when a label is unknown). Empty for a slot no node references. */
+	function usedByLabels(r: SlotReadiness): string[] {
+		return r.slot.used_by.map((id) => nodeLabels[id] ?? id);
+	}
 
 	/** A platform-auto-bound slot is resolved by the platform tier — its
 	 *  resource is fixed and not workspace-pickable, so we lock it. */
@@ -128,12 +138,14 @@
 		return r.slot.required && !r.satisfied;
 	}
 
-	/** Required, non-platform slots that still have no chosen resource — these
-	 *  gate the Run button. */
+	/** Required slots that genuinely need a choice here AND still have none — these
+	 *  gate the Run button. A slot already satisfied by ANY tier (home baseline,
+	 *  workspace default, platform) does NOT block: the launcher resolves it even
+	 *  when the dialog leaves `bindings[key]` empty (home-baseline slots carry no
+	 *  surfaced resource_id to pre-fill, so we must gate on `satisfied`, not on
+	 *  whether a resource was pre-filled). */
 	const unboundSlots = $derived(
-		slotReadiness.filter(
-			(r) => r.slot.required && !isPlatformBound(r) && !bindings[r.slot.key]
-		)
+		slotReadiness.filter((r) => needsChoice(r) && !bindings[r.slot.key])
 	);
 
 	async function loadResourcesForType(resourceType: string) {
@@ -181,7 +193,28 @@
 
 	function resourceLabel(r: SlotReadiness): string {
 		const chosen = bindings[r.slot.key];
-		if (!chosen) return 'Select a resource…';
+		if (!chosen) {
+			// Satisfied without an explicit pick ⇒ the home-workspace baseline (the
+			// only satisfied tier the readiness surfaces with no resource_id; tiers
+			// 1–3 carry an id and seed `bindings`, so they take the `chosen` path).
+			// A pool/capacity slot's key IS the bound resource's path, so show the
+			// ACTUAL resource from the candidate list rather than the abstract tier
+			// name. Displayed only — not seeded into `bindings`, so the launcher
+			// keeps its byte-identical baseline fast-path unless the user re-picks.
+			if (r.satisfied) {
+				const baseline = (resourcesByType[r.slot.resource_type] ?? []).find(
+					(x) => x.path === r.slot.key
+				);
+				if (baseline) {
+					return `${baseline.path} — ${baseline.display_name} · template default`;
+				}
+				const origin = bindingTierLabel(r.tier) || 'Default';
+				// Platform-auto-bound slots are locked (no picker) — don't invite an
+				// override that isn't offered here.
+				return isPlatformBound(r) ? origin : `${origin} — pick to override`;
+			}
+			return 'Select a resource…';
+		}
 		const list = resourcesByType[r.slot.resource_type] ?? [];
 		const found = list.find((x) => x.id === chosen);
 		return found ? `${found.path} — ${found.display_name}` : chosen;
@@ -218,6 +251,14 @@
 				: ((await getTemplate(id)).graph as WorkflowGraph);
 			const startNodes: { id: string; label: string; initial: Port }[] = [];
 			const seed: Record<string, Record<string, unknown>> = {};
+			// Capture every node's label so resource slots can name the nodes that
+			// use them (the requirements manifest records used_by as node ids).
+			const labels: Record<string, string> = {};
+			for (const node of effectiveGraph.nodes ?? []) {
+				const d = node.data as { label?: string } | undefined;
+				labels[node.id] = d?.label ?? node.id;
+			}
+			nodeLabels = labels;
 			for (const node of effectiveGraph.nodes ?? []) {
 				if ((node.data as WorkflowNodeData)?.type !== 'start') continue;
 				const data = node.data as StartNodeData;
@@ -590,9 +631,12 @@
 								{#each slotReadiness.filter((r) => r.slot.required) as r (r.slot.key)}
 									{@const list = resourcesByType[r.slot.resource_type] ?? []}
 									{@const platform = isPlatformBound(r)}
+									{@const usedBy = usedByLabels(r)}
 									<FormField
 										label={`${r.slot.key} *`}
-										description={`${r.slot.resource_type} · used by ${r.slot.used_by.length} node${r.slot.used_by.length === 1 ? '' : 's'}`}
+										description={usedBy.length > 0
+											? `${r.slot.resource_type} · used by ${usedBy.join(', ')}`
+											: r.slot.resource_type}
 									>
 										{#if platform}
 											<div

@@ -581,6 +581,13 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // authed, self-only (subject == runner:{id}), same boundary as
         // heartbeat. Mints a fresh user JWT from the stored nats_public_key.
         .routes(routes!(handlers::runners::issue_runner_nats_creds))
+        // Phase B (zero-secret broker) — secret-unwrap proxy. Runner-token
+        // authed, self-only (subject == runner:{id}), same boundary as
+        // heartbeat. mekhan unwraps a Vault response-wrapping token on the
+        // runner's behalf so a bare runner needs no Vault credentials. The
+        // `{id}/secrets/unwrap` literal segments register alongside the other
+        // `{id}/...` routes.
+        .routes(routes!(handlers::runners::unwrap_runner_secret))
         // Phase 3 — runner interface catalog (ROS topics/services/actions).
         // POST is runner-token authed, self-only (subject == runner:{id}), same
         // boundary as heartbeat; GET is session/human authed + workspace-scoped
@@ -907,6 +914,36 @@ pub fn build_router(state: AppState) -> Router {
         ))
         .with_state(state.clone());
 
+    // Runner storage broker: binary GET/PUT proxy for the artifact bucket,
+    // mounted INSIDE the auth middleware. NOT OpenAPI-modelled — the consumer
+    // is the executor's `BrokeredArtifactStore` (a Rust reqwest client), not
+    // the generated TS client, exactly like `/api/cloud-layer` and `/api/yjs`.
+    // A `rnr_` bearer resolves to the runner principal; the handler authorizes
+    // every key against that runner's workspace before touching S3.
+    let storage_broker_router: Router = Router::new()
+        .route(
+            "/api/storage/blob",
+            get(handlers::storage::get_blob).put(handlers::storage::put_blob),
+        )
+        // Fold-batch broker: the runner POSTs crawl fold batches here instead of
+        // JetStream-publishing over its WS connection (no reliable publish-ack);
+        // mekhan folds them straight into the inventory via the same ingest path.
+        .route(
+            "/api/storage/fold",
+            axum::routing::post(handlers::storage::fold_ingest),
+        )
+        // This router is `.merge`d in AFTER the `protected` router's
+        // `DefaultBodyLimit` layer, so it does NOT inherit it — without an
+        // explicit layer it falls back to axum's 2 MiB default, which a fold
+        // batch (sized to the 8 MiB NATS `max_payload`) or an artifact blob PUT
+        // overruns with a 413. Match the protected router's 50 MiB ceiling.
+        .layer(DefaultBodyLimit::max(50 * 1024 * 1024))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth::extractor::require_auth_middleware,
+        ))
+        .with_state(state.clone());
+
     // BFF auth endpoints — UNAUTHENTICATED (they establish the very session
     // the protected router requires). Same `/api/auth/*` prefix so the Vite
     // dev proxy and prod same-origin SPA serving work with no new rules.
@@ -944,6 +981,7 @@ pub fn build_router(state: AppState) -> Router {
         .merge(webhook_router)
         .merge(auth_router)
         .merge(cloud_layer_router)
+        .merge(storage_broker_router)
         .merge(petri_proxy);
 
     let swagger = SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", api_spec);

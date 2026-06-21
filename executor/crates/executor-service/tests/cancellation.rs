@@ -1,10 +1,42 @@
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use aithericon_executor_domain::ExecutionStatus;
 use aithericon_executor_test_harness::context::ExecutorTestContext;
 use aithericon_executor_test_harness::helpers::*;
+use aithericon_executor_worker::{CancelListenerTuning, CancellationRegistry};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+/// Poll until `token` is cancelled or `timeout` elapses; returns whether it was.
+async fn await_cancel(token: &CancellationToken, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline && !token.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    token.is_cancelled()
+}
+
+/// Poll until the cancel registry's active count drops to `expected` or `timeout`
+/// elapses; returns the final observed count.
+///
+/// Token deregistration happens in the worker *after* the terminal status is
+/// published (executor publishes status → then `deregister`). A test that
+/// observes the terminal status over NATS therefore cannot assume the worker has
+/// already run its local deregister: that's a separate, slightly-later step, and
+/// under concurrent load the gap is wide enough to lose the race. Poll for it
+/// instead of asserting on a single instant.
+async fn await_active_count(
+    registry: &CancellationRegistry,
+    expected: usize,
+    timeout: Duration,
+) -> usize {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline && registry.active_count() != expected {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    registry.active_count()
+}
 
 /// Cancel a long-running job via NATS and verify the Cancelled terminal status.
 ///
@@ -65,9 +97,11 @@ async fn test_cancel_via_nats() {
         statuses.iter().map(|s| s.status).collect::<Vec<_>>()
     );
 
-    // Token should be deregistered after completion
+    // Token should be deregistered after completion. The worker deregisters
+    // *after* publishing the terminal status we just observed, so poll rather
+    // than asserting on the instant collect_statuses returned.
     assert_eq!(
-        ctx.cancel_registry.active_count(),
+        await_active_count(&ctx.cancel_registry, 0, Duration::from_secs(5)).await,
         0,
         "cancel token not deregistered after cancellation"
     );
@@ -75,6 +109,217 @@ async fn test_cancel_via_nats() {
     shutdown.cancel();
     let _ = listener_handle.await;
     worker.abort();
+    ctx.cleanup().await;
+}
+
+/// Regression guard for the JetStream cancel transport: a cancel published while
+/// no consumer is bound must NOT be replayed onto a freshly-bound consumer
+/// (`DeliverPolicy::New`). Otherwise a runner restart could re-cancel a reused
+/// execution id. A cancel published AFTER the bind must still be delivered.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cancel_deliver_new_ignores_stale() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-stale-{}", Uuid::new_v4().simple());
+
+    // First listener: ensures the EXECUTOR_CANCEL stream + binds a consumer.
+    // Shut it down so no consumer is pulling while we publish the stale cancel.
+    let s1 = CancellationToken::new();
+    let h1 = ctx.start_cancel_listener(s1.clone()).await;
+    s1.cancel();
+    let _ = h1.await;
+
+    // A token as if a job were running.
+    let token = ctx.cancel_registry.register(&eid);
+
+    // Stale cancel: published while no consumer is bound (the stream persists).
+    ctx.publish_cancel(&eid).await;
+
+    // Fresh listener: its `DeliverPolicy::New` consumer must NOT replay the cancel
+    // published before it bound.
+    let s2 = CancellationToken::new();
+    let h2 = ctx.start_cancel_listener(s2.clone()).await;
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert!(
+        !token.is_cancelled(),
+        "DeliverPolicy::New consumer replayed a cancel published before it bound"
+    );
+
+    // Sanity: a cancel published AFTER the bind IS delivered.
+    ctx.publish_cancel(&eid).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline && !token.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(
+        token.is_cancelled(),
+        "cancel published after the consumer bound was not delivered"
+    );
+
+    s2.cancel();
+    let _ = h2.await;
+    ctx.cleanup().await;
+}
+
+/// Regression guard: a duplicate delivery of an already-running execution_id must
+/// NOT evict the live execution's cancellation token.
+///
+/// A duplicate delivery (apalis at-least-once redelivery, parallel pool
+/// consumers, or Nomad dispatching multiple allocations for one execution_id)
+/// loses the run-directory lock and is skipped. Before the fix, the skipped
+/// duplicate had already `register`ed (replacing) then `deregister`ed the token,
+/// emptying the registry — so a later cancel found nothing and the running job
+/// ran to completion. The token is now registered only after the lock is won.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_duplicate_delivery_preserves_live_cancel_token() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-dup-{}", Uuid::new_v4().simple());
+
+    // The WINNER delivery: holds the run-dir lock and has its cancel token registered.
+    let live = ctx.cancel_registry.register(&eid);
+    ctx.precreate_run_lock(&eid).await;
+    assert_eq!(ctx.cancel_registry.active_count(), 1);
+
+    // A DUPLICATE delivery of the same execution_id: must lose the lock and skip
+    // without touching the registry.
+    let status = ctx.execute_once(&long_running_job(&eid, 300)).await;
+    assert_eq!(
+        status,
+        ExecutionStatus::Failed,
+        "duplicate delivery should skip (run-dir lock already held)"
+    );
+
+    // The live token must still be registered and cancellable.
+    assert_eq!(
+        ctx.cancel_registry.active_count(),
+        1,
+        "duplicate delivery deregistered the live execution's cancel token"
+    );
+    assert!(
+        ctx.cancel_registry.cancel(&eid),
+        "live cancel token missing after duplicate delivery"
+    );
+    assert!(
+        live.is_cancelled(),
+        "the registered live token was not the one cancelled"
+    );
+
+    ctx.cleanup().await;
+}
+
+/// Idle-survival: the heartbeated continuous pull keeps the listener's ephemeral
+/// consumer alive across an idle period far longer than its `inactive_threshold`,
+/// so a cancel that arrives after a long quiet stretch is still delivered — on
+/// the SAME consumer, with no rebind churn.
+///
+/// Cancels can be hours apart in prod; if the consumer were reaped during idle
+/// the signal would be silently dropped. Tuned to seconds: a 2s reap window is
+/// idled past by 3× before the cancel is published, and `rebinds == 0` proves
+/// the original consumer was never reaped/replaced.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cancel_consumer_survives_idle() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-idle-{}", Uuid::new_v4().simple());
+
+    let shutdown = CancellationToken::new();
+    let listener = ctx
+        .start_cancel_listener_tuned(
+            shutdown.clone(),
+            CancelListenerTuning {
+                inactive_threshold: Duration::from_secs(2),
+                heartbeat: Duration::from_millis(500),
+                rebind_backoff: Duration::from_millis(200),
+            },
+        )
+        .await;
+
+    // A token as if a job were running.
+    let token = ctx.cancel_registry.register(&eid);
+
+    // Idle well past the 2s reap window. If the continuous pull did not keep the
+    // consumer active, the server would reap it here.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    // A cancel after the long idle must still land.
+    ctx.publish_cancel(&eid).await;
+    assert!(
+        await_cancel(&token, Duration::from_secs(5)).await,
+        "cancel after a long idle was not delivered (consumer reaped during idle?)"
+    );
+
+    // ...and it landed on the original consumer — no reap, no rebind churn.
+    assert_eq!(
+        listener.rebinds.load(Ordering::Relaxed),
+        0,
+        "consumer was rebound during idle; heartbeat pull is not keeping it alive"
+    );
+
+    shutdown.cancel();
+    let _ = listener.handle.await;
+    ctx.cleanup().await;
+}
+
+/// Rebind-on-dead-consumer: if the ephemeral consumer is reaped/deleted
+/// out from under the listener, it rebinds a FRESH consumer rather than
+/// tight-spinning on the dead one ("no responders"), and resumes delivering
+/// cancels.
+///
+/// Simulates the reap by force-deleting the consumer server-side, then asserts
+/// the listener recovers (`rebinds >= 1`) and a cancel published after the
+/// rebind is delivered.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cancel_consumer_rebinds_after_reap() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-rebind-{}", Uuid::new_v4().simple());
+
+    let shutdown = CancellationToken::new();
+    let listener = ctx
+        .start_cancel_listener_tuned(
+            shutdown.clone(),
+            CancelListenerTuning {
+                // Don't auto-reap; we delete the consumer explicitly below.
+                inactive_threshold: Duration::from_secs(300),
+                heartbeat: Duration::from_millis(500),
+                rebind_backoff: Duration::from_millis(200),
+            },
+        )
+        .await;
+
+    let token = ctx.cancel_registry.register(&eid);
+
+    // Let the listener settle into its pull loop, then yank its consumer.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let deleted = ctx.delete_cancel_consumers().await;
+    assert_eq!(deleted, 1, "expected exactly one cancel consumer to delete");
+
+    // The listener must notice the dead consumer (heartbeat/pull error) and bind
+    // a fresh one. Wait for that rebind rather than a fixed sleep.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline && listener.rebinds.load(Ordering::Relaxed) == 0 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        listener.rebinds.load(Ordering::Relaxed) >= 1,
+        "listener did not rebind after its consumer was deleted"
+    );
+
+    // A cancel published after the fresh consumer bound must be delivered.
+    ctx.publish_cancel(&eid).await;
+    assert!(
+        await_cancel(&token, Duration::from_secs(10)).await,
+        "cancel not delivered after the listener rebound its consumer"
+    );
+
+    shutdown.cancel();
+    let _ = listener.handle.await;
     ctx.cleanup().await;
 }
 
@@ -120,8 +365,12 @@ async fn test_cancel_after_completion_is_noop() {
         ],
     );
 
-    // Token should already be deregistered
-    assert_eq!(ctx.cancel_registry.active_count(), 0);
+    // Token should be deregistered after completion (deregister trails the
+    // terminal status publish that collect_statuses just observed).
+    assert_eq!(
+        await_active_count(&ctx.cancel_registry, 0, Duration::from_secs(5)).await,
+        0
+    );
 
     // Cancelling now should be a no-op
     let found = ctx.cancel_registry.cancel(&eid);

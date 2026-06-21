@@ -108,6 +108,13 @@ where
     /// stage_overrides). Mutated by the `load_scenario` handler; consulted
     /// by the firing path. Cleared by `clear()`.
     dispatch_options: RwLock<petri_domain::DispatchOptions>,
+    /// Waker for the owning net's evaluation loop, bound once at
+    /// net-registration time (`set_eval_notify`). `create_token_with_meta` pulses
+    /// it after a successful `TokenCreated` so a token placed by ANY caller wakes
+    /// the net — callers no longer have to remember to notify. The eval loop
+    /// self-gates on `RunMode`, so a wake while not Running is a harmless no-op;
+    /// `None` (tests / batch / replay with no loop) is also a no-op.
+    eval_notify: RwLock<Option<Arc<tokio::sync::Notify>>>,
 }
 
 impl<E, T, S> PetriNetService<E, T, S>
@@ -159,6 +166,7 @@ where
             dedup_index: crate::idempotency_index::DedupIndex::new(),
             pre_dispatch: RwLock::new(None),
             dispatch_options: RwLock::new(petri_domain::DispatchOptions::default()),
+            eval_notify: RwLock::new(None),
         }
     }
 
@@ -310,6 +318,14 @@ where
     /// `petri.{ws}.{net}…`.
     pub fn set_workspace_id(&self, workspace_id: String) {
         *self.workspace_id.write().unwrap() = Some(workspace_id);
+    }
+
+    /// Bind the evaluation-loop waker so token creation wakes the net. Called once
+    /// by the `NetRegistry` at net-instantiation time (the loop's `eval_notify`).
+    /// After this, `create_token` pulses it on every successful `TokenCreated`, so
+    /// no caller has to remember to notify. Last write wins.
+    pub fn set_eval_notify(&self, notify: Arc<tokio::sync::Notify>) {
+        *self.eval_notify.write().unwrap() = Some(notify);
     }
 
     /// Get the current workspace (tenant) ID, if stamped. Routing callers that
@@ -510,6 +526,14 @@ where
                     .insert(self.events.as_ref(), place_id, id, event.clone())
                     .await;
             }
+        }
+
+        // Wake the net's eval loop so the new token is evaluated, without relying
+        // on each caller to remember. The loop self-gates on `RunMode` (a wake
+        // while not Running is a no-op) and this is `None` where there is no loop
+        // (tests / batch / replay). `notify_one` collapses bursts to one pass.
+        if let Some(notify) = self.eval_notify.read().unwrap().clone() {
+            notify.notify_one();
         }
 
         Ok(event)

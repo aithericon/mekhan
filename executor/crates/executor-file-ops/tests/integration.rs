@@ -1478,10 +1478,7 @@ async fn backend_crawl_streams_batches() {
     // can prove per-entry stat populated `size`.
     env.operator.write("nas/a.txt", "aaaa").await.unwrap();
     env.operator.write("nas/b.txt", "bbbbbb").await.unwrap();
-    env.operator
-        .write("nas/sub/c.txt", "cc")
-        .await
-        .unwrap();
+    env.operator.write("nas/sub/c.txt", "cc").await.unwrap();
     env.operator
         .write("nas/sub/deep/d.txt", "dddddddd")
         .await
@@ -1533,11 +1530,18 @@ async fn backend_crawl_streams_batches() {
 
     // -- items: 3 batches, all sharing the close's episode_uid --
     let items = stream.items.lock().unwrap().clone();
-    assert_eq!(items.len(), 3, "expected 3 item batches for 5 files @ batch=2");
+    assert_eq!(
+        items.len(),
+        3,
+        "expected 3 item batches for 5 files @ batch=2"
+    );
     let episode = &closes[0].episode_uid;
     for (i, item) in items.iter().enumerate() {
         assert_eq!(item.channel, "crawl");
-        assert_eq!(&item.episode_uid, episode, "all items share the episode uid");
+        assert_eq!(
+            &item.episode_uid, episode,
+            "all items share the episode uid"
+        );
         assert_eq!(item.idx, i as u64, "item idx is 0-based and monotonic");
     }
 
@@ -1696,7 +1700,10 @@ async fn seed_five(env: &TestEnv) -> u64 {
         .write("nas/sub/deep/d.txt", "dddddddd")
         .await
         .unwrap();
-    env.operator.write("nas/sub/deep/e.txt", "ee").await.unwrap();
+    env.operator
+        .write("nas/sub/deep/e.txt", "ee")
+        .await
+        .unwrap();
     5
 }
 

@@ -1,4 +1,5 @@
 pub mod batch;
+pub mod brokered_batch_sink;
 pub mod cancel;
 pub mod chunks;
 pub mod completion;
@@ -18,7 +19,9 @@ pub mod reporter;
 pub mod staging;
 
 pub use batch::BatchRunner;
-pub use cancel::{CancellationRegistry, NatsCancelListener};
+pub use cancel::{
+    CancelListenerHandle, CancelListenerTuning, CancellationRegistry, NatsCancelListener,
+};
 #[cfg(feature = "opendal")]
 pub use chunks::S3Transport;
 #[cfg(feature = "livekit")]
@@ -38,6 +41,7 @@ pub use fileserve::{
     ServeAck, ServeErrorKind, ServeRequest,
 };
 pub use executor::{JobExecutor, DEFAULT_MAX_OUTPUT_INLINE_BYTES};
+pub use brokered_batch_sink::BrokeredBatchSink;
 pub use fold_sink::NatsBatchSink;
 pub use handler::handle_execution;
 pub use host_probe::{probe_host, HostInfo};

@@ -324,7 +324,10 @@ const NIL_WORKSPACE: Uuid = Uuid::nil();
 ///
 /// Touches three tables, ONLY moving rows currently parked in the nil
 /// workspace (never stealing another tenant's rows):
-///   1. `file_inventory` — the physical copies, keyed by `file_server_id`.
+///   1. `file_inventory` — the physical copies, keyed by `file_server_id`. A nil
+///      row whose `(workspace_id, file_server_id, path)` already exists in the
+///      destination is dropped first (the pre-existing copy wins) so the re-home
+///      can't trip `uq_inv_ws_server_path`.
 ///   2. `inventory_snapshots` — the analytics rollups, same key.
 ///   3. `catalogue_entries` — the logical entries, linked by `content_hash`
 ///      (catalogue rows carry no server id). Only entries whose hash this
@@ -340,6 +343,31 @@ async fn restamp_stranded_nil_rows(
     if workspace_id == NIL_WORKSPACE {
         return Ok(());
     }
+
+    // Drop nil duplicates that would collide with a row this workspace already
+    // holds at the same `(file_server_id, path)` — `uq_inv_ws_server_path` would
+    // otherwise reject the re-home with a duplicate-key error (seen on adopt when
+    // an earlier crawl/adopt cycle already homed the key, or a deleted-then-
+    // recrawled server left orphaned workspace rows). The pre-existing copy wins
+    // and the stranded nil duplicate is removed, mirroring the `catalogue_entries`
+    // handling below (uq_cat_ws_content_hash). The next crawl — the server now
+    // resolves to this workspace, so the fold lands here directly with ON CONFLICT
+    // refresh — re-syncs `last_seen`/`content_hash` onto the surviving row.
+    sqlx::query(
+        "DELETE FROM file_inventory nil \
+          WHERE nil.file_server_id = $2 AND nil.workspace_id = $3 \
+            AND EXISTS ( \
+                  SELECT 1 FROM file_inventory dst \
+                   WHERE dst.workspace_id = $1 \
+                     AND dst.file_server_id = $2 \
+                     AND dst.path = nil.path \
+            )",
+    )
+    .bind(workspace_id)
+    .bind(key)
+    .bind(NIL_WORKSPACE)
+    .execute(&mut **tx)
+    .await?;
 
     sqlx::query(
         "UPDATE file_inventory SET workspace_id = $1 \

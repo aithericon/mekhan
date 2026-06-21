@@ -1047,6 +1047,21 @@ where
             let reopen_backoff = Duration::from_millis(500);
 
             loop {
+                // Stop if the consuming worker is gone: a dropped/aborted worker
+                // drops the `job_rx` receiver, closing `job_tx`. Without this the
+                // task would otherwise spin forever — once the worker's streams
+                // are deleted, every `next()` returns `None`, and the rebuild
+                // branch keeps re-creating consumers against a vanished stream
+                // ("stream not found"). That orphaned spin leaks a task per
+                // dropped worker and, on a shared test broker, starves the
+                // runtime enough to flake unrelated tests. Both the idle-park
+                // exit (a deleted stream wakes `next()` → loop) and the
+                // backoff-`continue` re-enter here, so one check covers all paths.
+                if job_tx.is_closed() {
+                    tracing::debug!("job receiver dropped; exiting fetch task");
+                    return;
+                }
+
                 // Lazily (re)open any missing streams. Each branch logs on
                 // failure so operators see *why* nothing is flowing instead
                 // of observing silent idleness.

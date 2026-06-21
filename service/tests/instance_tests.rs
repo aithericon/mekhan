@@ -320,32 +320,30 @@ async fn cancel_instance_updates_status_in_db() {
 }
 
 // ---------------------------------------------------------------------------
-// Cancel instance -> publishes executor.cancel for each in-flight step
+// Cancel instance -> mekhan does NOT publish executor.cancel (engine owns it)
 // ---------------------------------------------------------------------------
 
-/// When an instance is cancelled, mekhan must signal the executor to stop any
-/// AutomatedSteps already dispatched: they run on a separate process
-/// (NATS-decoupled) and never observe NetCancelled, so terminating the net alone
-/// leaves them running to completion. This asserts the service side of that
-/// contract — `cancel_instance` publishes `executor.cancel.{execution_id}` for
-/// every running/pending step row. The executor side (token flip + SIGTERM ->
-/// Cancelled terminal status) is covered by `executor-service`'s
-/// `tests/cancellation.rs`; both build the subject via the shared
-/// `cancel_subject()`, so they line up by construction.
+/// Phase 2 moved executor-job cancellation INTO the engine: on `terminate_net`
+/// the engine scans the net marking and fires the in-net `executor_cancel`
+/// effect (recorded in the event log) which publishes `executor.cancel.{id}`.
+/// mekhan's `cancel_instance` now ONLY terminates the net — it must NOT publish
+/// the side-channel cancel itself. This guards against re-introducing that
+/// reach-around. The engine-side publish is covered by petri-api's
+/// `terminate_cancels_in_flight_executor_jobs`; the runner side by
+/// `executor-service`'s `tests/cancellation.rs`.
 #[tokio::test]
-async fn cancel_instance_publishes_executor_cancel_for_running_steps() {
+async fn cancel_instance_does_not_publish_executor_cancel_directly() {
     let (app, db) = common::test_app().await;
     let template_id = create_published_template(&app).await;
     let template_uuid: Uuid = template_id.parse().unwrap();
     let instance_id = Uuid::new_v4();
     let net_id = format!("mekhan-{instance_id}");
 
-    // Unique execution_id so we only ever observe OUR cancel on the shared test
-    // NATS (other executors/tests publish to executor.cancel.* too).
+    // Unique execution_id → a subject nothing else on the shared test NATS
+    // publishes to, so observing zero messages is meaningful.
     let execution_id = format!("mekhan-{instance_id}-{}", Uuid::new_v4());
     let subject = aithericon_executor_domain::cancel_subject(&execution_id);
 
-    // Subscribe BEFORE cancelling — cancel is fire-and-forget core NATS, no replay.
     let nats = async_nats::connect(common::nats_url())
         .await
         .expect("connect to test NATS");
@@ -377,8 +375,6 @@ async fn cancel_instance_publishes_executor_cancel_for_running_steps() {
     .await
     .unwrap();
 
-    // Cancel via API (petri-lab terminate fails gracefully; the publish path
-    // runs regardless).
     let resp = app
         .oneshot(
             Request::builder()
@@ -392,12 +388,13 @@ async fn cancel_instance_publishes_executor_cancel_for_running_steps() {
     assert_eq!(resp.status(), StatusCode::OK);
     assert_eq!(body_json(resp.into_body()).await["status"], "cancelled");
 
-    // The cancel signal for our in-flight step must have been published.
-    let msg = tokio::time::timeout(Duration::from_secs(5), sub.next())
-        .await
-        .expect("timed out waiting for executor.cancel publish")
-        .expect("subscription closed before a message arrived");
-    assert_eq!(msg.subject.as_str(), subject);
+    // mekhan must NOT publish a cancel for the step (engine does, on terminate).
+    // The test has no real engine, so the subject must stay silent.
+    let got = tokio::time::timeout(Duration::from_secs(1), sub.next()).await;
+    assert!(
+        got.is_err(),
+        "mekhan must not publish executor.cancel directly — engine owns it (got {got:?})"
+    );
 }
 
 // ---------------------------------------------------------------------------

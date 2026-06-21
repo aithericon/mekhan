@@ -31,16 +31,195 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
+use chrono::Utc;
 use futures::StreamExt;
 use opendal::Operator;
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use aithericon_executor_backend::traits::{BatchSink, EventStream};
-use aithericon_executor_domain::{FoldBatch, FoldItem, FoldMode};
+use aithericon_executor_domain::{
+    FoldBatch, FoldItem, FoldMode, LogLevel, MetricPoint, MetricType,
+};
+
+/// How often the background sampler emits a throughput sample — both a
+/// `MetricPoint` batch (when the worker has a metric sink) and an `info!` log
+/// line (always). A long walk is otherwise silent; this gives live throughput
+/// without spamming.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
+
+/// Live crawl progress, shared between the walk loop and the background sampler
+/// task. The sampler emits on its OWN timer ([`PROGRESS_INTERVAL`]) so samples
+/// keep flowing even while the walk loop is blocked for minutes inside a single
+/// large-file probe — the case the plain per-file emit could never cover (a
+/// 43 GB probe would otherwise look stalled, `files_per_second` pinned at 0).
+#[derive(Default)]
+struct CrawlProgress {
+    /// Cumulative FILE entries observed so far.
+    files: AtomicU64,
+    /// Cumulative bytes ingested. On Linux this is driven by `/proc/self/io`
+    /// `rchar` (see [`proc_rchar`]) so it advances MID-FILE — a 43 GB probe
+    /// reports throughput while it reads, not a flat 0 then a spike at
+    /// completion. On other platforms the walk loop adds each probed file's
+    /// size after the probe returns (file-granular fallback).
+    bytes: AtomicU64,
+}
+
+/// Bytes this process has read via `read(2)`-family syscalls so far, from
+/// `/proc/self/io` `rchar`. This is the read-path-agnostic way to see ingest
+/// progress MID-FILE: whichever code actually reads the bytes (the checksum
+/// loop, fmeta, opendal) bumps the kernel counter, so the sampler sees a 43 GB
+/// probe advancing in real time without threading a progress callback through
+/// every backend. Process-wide (includes the odd NATS/log read), but on a crawl
+/// runner those are negligible against multi-MB/s file reads. `None` off Linux.
+#[cfg(target_os = "linux")]
+fn proc_rchar() -> Option<u64> {
+    let io = std::fs::read_to_string("/proc/self/io").ok()?;
+    io.lines()
+        .find_map(|l| l.strip_prefix("rchar:"))
+        .and_then(|v| v.trim().parse().ok())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn proc_rchar() -> Option<u64> {
+    None
+}
+
+/// Aborts the background sampler when the walk returns — on the happy path AND
+/// on any early `?`/error/panic — so a finished crawl never leaves a task
+/// emitting metrics against a dead execution.
+struct SamplerGuard(JoinHandle<()>);
+impl Drop for SamplerGuard {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Spawn the periodic sampler. It reads the shared [`CrawlProgress`] every
+/// [`PROGRESS_INTERVAL`] and, on Linux, refreshes `bytes` from `rchar` so the
+/// rate reflects mid-file progress. Runs on its own task: the multi-threaded
+/// worker runtime keeps ticking it while the walk task blocks in a probe.
+fn spawn_crawl_sampler(
+    progress: Arc<CrawlProgress>,
+    event_stream: Option<Arc<dyn EventStream>>,
+    file_server: Option<String>,
+    rchar_baseline: Option<u64>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(PROGRESS_INTERVAL);
+        ticker.tick().await; // consume the immediate first tick
+        let mut last = Instant::now();
+        let mut last_files = 0u64;
+        let mut last_bytes = 0u64;
+        loop {
+            ticker.tick().await;
+            // On Linux, derive cumulative bytes from rchar so the gauge climbs
+            // during a long single-file read; elsewhere the walk loop owns it.
+            if let (Some(base), Some(now)) = (rchar_baseline, proc_rchar()) {
+                progress
+                    .bytes
+                    .store(now.saturating_sub(base), Ordering::Relaxed);
+            }
+            let files = progress.files.load(Ordering::Relaxed);
+            let bytes = progress.bytes.load(Ordering::Relaxed);
+            if files == last_files && bytes == last_bytes {
+                continue; // nothing moved — stay quiet, keep accumulating the window
+            }
+            let window = last.elapsed();
+            emit_crawl_progress(
+                &event_stream,
+                file_server.as_deref(),
+                files,
+                files - last_files,
+                bytes,
+                bytes - last_bytes,
+                window,
+            )
+            .await;
+            last = Instant::now();
+            last_files = files;
+            last_bytes = bytes;
+        }
+    })
+}
+
+/// Emit one crawl progress sample: `crawl/files_per_second` +
+/// `crawl/bytes_per_second` (gauges over the window since the last sample) plus
+/// `crawl/files_total` + `crawl/bytes_total` (cumulative gauges), and an
+/// always-on `info!` line. `bytes_per_second` is the liveness signal that keeps
+/// moving through a single huge probe where `files_per_second` would read 0.
+/// Metrics ride [`EventStream::metric`] → the same sink child-process SDK
+/// metrics use, so they surface wherever `train/loss` does. A no-op metric sink
+/// still leaves the log line.
+#[allow(clippy::too_many_arguments)]
+async fn emit_crawl_progress(
+    event_stream: &Option<Arc<dyn EventStream>>,
+    file_server: Option<&str>,
+    total: u64,
+    window_files: u64,
+    bytes_total: u64,
+    window_bytes: u64,
+    window: Duration,
+) {
+    let secs = window.as_secs_f64();
+    let (files_per_sec, bytes_per_sec) = if secs > 0.0 {
+        (window_files as f64 / secs, window_bytes as f64 / secs)
+    } else {
+        (0.0, 0.0)
+    };
+    info!(
+        total,
+        files_per_sec = format!("{files_per_sec:.1}"),
+        mib_per_sec = format!("{:.1}", bytes_per_sec / (1024.0 * 1024.0)),
+        "crawl: progress"
+    );
+    let Some(es) = event_stream else { return };
+    let mut labels = HashMap::new();
+    labels.insert("op".to_string(), "crawl".to_string());
+    if let Some(fs) = file_server {
+        labels.insert("file_server".to_string(), fs.to_string());
+    }
+    let ts = Utc::now();
+    let gauge = |name: &str, value: f64| MetricPoint {
+        name: name.to_string(),
+        value,
+        step: None,
+        timestamp: ts,
+        metric_type: MetricType::Gauge,
+        labels: labels.clone(),
+    };
+    es.metric(vec![
+        gauge("crawl/files_per_second", files_per_sec),
+        gauge("crawl/files_total", total as f64),
+        gauge("crawl/bytes_per_second", bytes_per_sec),
+        gauge("crawl/bytes_total", bytes_total as f64),
+    ])
+    .await;
+}
+
+/// Stream a diagnostic line to the run's log panel (`executor.events.{exec_id}.log`)
+/// when an `EventStream` is wired. Crawl traversal/probe errors otherwise reach
+/// only the runner's LOCAL `warn!` tracing, where a user never sees them — so a
+/// permission-walled crawl looks like it "finished with N files" and silently
+/// drops the rest. No-op without a stream (sink-less unit runs).
+async fn crawl_log(event_stream: &Option<Arc<dyn EventStream>>, level: LogLevel, message: String) {
+    if let Some(es) = event_stream {
+        es.log(level, message, HashMap::new()).await;
+    }
+}
+
+/// Per-class cap on individually-streamed error lines (list errors and probe
+/// errors each get their own budget). A corpus with thousands of unreadable
+/// entries must not flood the run log — beyond the cap the errors are still
+/// counted and reported in the completion summary, and `warn!` tracing stays
+/// uncapped on the runner host.
+const MAX_STREAMED_DIAGNOSTICS: u64 = 25;
 
 use crate::config::CrawlConfig;
 
@@ -388,9 +567,75 @@ pub async fn execute(
     let mut cancelled = false;
     let mut stopped_by_max = false;
     let mut probe_errors: u64 = 0;
+    // Directory `list` failures (EACCES on a restricted subtree, or a dir that
+    // vanished mid-walk) are tolerated like probe errors: a large corpus WILL
+    // contain unreadable dirs, and aborting the whole campaign on one is worse
+    // than skipping it. opendal's `FlatLister` drops the failed subdir and
+    // resumes the parent on the next poll, so we log, count, and continue.
+    // `consecutive_list_errors` guards the rarer mid-read case where the SAME
+    // lister keeps erroring — bail rather than spin forever.
+    let mut list_errors: u64 = 0;
+    let mut consecutive_list_errors: u32 = 0;
+    const MAX_CONSECUTIVE_LIST_ERRORS: u32 = 100;
+
+    // Live throughput sampling — see `spawn_crawl_sampler`/`emit_crawl_progress`.
+    // `file_server` labels the metric in sink mode (the only mode with a server
+    // identity). The sampler runs on its own task so samples keep flowing even
+    // while this loop is blocked for minutes inside one large-file probe.
+    let file_server = config.sink.as_ref().map(|sc| sc.file_server_id.clone());
+    let crawl_start = Instant::now();
+    let progress = Arc::new(CrawlProgress::default());
+    // Capture the rchar baseline BEFORE any probe reads; if present (Linux) the
+    // sampler owns `bytes` from rchar and the loop must not also add to it.
+    let rchar_baseline = proc_rchar();
+    let rchar_active = rchar_baseline.is_some();
+    let _sampler = SamplerGuard(spawn_crawl_sampler(
+        progress.clone(),
+        event_stream.clone(),
+        file_server.clone(),
+        rchar_baseline,
+    ));
 
     while let Some(entry) = lister.next().await {
-        let entry = entry?;
+        let entry = match entry {
+            Ok(e) => {
+                consecutive_list_errors = 0;
+                e
+            }
+            // Skip unreadable / vanished directories instead of failing the
+            // whole walk. opendal's `FlatLister` has already dropped the failed
+            // subdir, so `continue` resumes the parent's remaining entries; the
+            // error message carries the offending path for the operator.
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    opendal::ErrorKind::PermissionDenied | opendal::ErrorKind::NotFound
+                ) =>
+            {
+                list_errors += 1;
+                consecutive_list_errors += 1;
+                if consecutive_list_errors > MAX_CONSECUTIVE_LIST_ERRORS {
+                    warn!(
+                        error = %e,
+                        consecutive = consecutive_list_errors,
+                        "crawl: too many consecutive list errors; aborting walk"
+                    );
+                    return Err(e.into());
+                }
+                warn!(error = %e, "crawl: list error; skipping unreadable path");
+                if list_errors <= MAX_STREAMED_DIAGNOSTICS {
+                    crawl_log(
+                        &event_stream,
+                        LogLevel::Warn,
+                        format!("skipped unreadable directory ({}): {e}", e.kind()),
+                    )
+                    .await;
+                }
+                continue;
+            }
+            // Genuine infrastructure errors still abort the walk.
+            Err(e) => return Err(e.into()),
+        };
         let path = entry.path().to_string();
 
         // Skip directory markers — both the trailing-slash convention and the
@@ -441,12 +686,37 @@ pub async fn execute(
         let (hash, metadata) = if probe_mode == ProbeMode::Off {
             (None, None)
         } else {
-            match probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir).await {
-                Ok(hm) => hm,
-                Err(e) => {
-                    warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
-                    probe_errors += 1;
-                    (None, None)
+            // Race the probe against cancellation. A single `probe=full` probe of
+            // a multi-GB file blocks for minutes (a 43 GB NetCDF reads for ~12 min
+            // at ~57 MB/s), and the walk otherwise only checks the token between
+            // BATCHES — so a UI cancel sat unhonored for the whole read, the
+            // JetStream job stayed un-acked, and a force-restart redelivered it.
+            // `biased` checks the token first (a cancel that arrived earlier wins
+            // immediately); on cancel we abandon the in-flight read and stop the
+            // walk promptly. The orphaned blocking read finishes in the
+            // background and its result is dropped; the file is re-probed on the
+            // resume pass (`last_path` cursor), so nothing is lost.
+            tokio::select! {
+                biased;
+                _ = cancel.cancelled() => {
+                    cancelled = true;
+                    break;
+                }
+                res = probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir) => match res {
+                    Ok(hm) => hm,
+                    Err(e) => {
+                        warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
+                        probe_errors += 1;
+                        if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
+                            crawl_log(
+                                &event_stream,
+                                LogLevel::Warn,
+                                format!("indexed without metadata (probe failed): {user_path} — {e}"),
+                            )
+                            .await;
+                        }
+                        (None, None)
+                    }
                 }
             }
         };
@@ -463,6 +733,14 @@ pub async fn execute(
         });
         total += 1;
         last_path = Some(user_path);
+
+        // Feed the background sampler. `files` is exact; `bytes` is owned by the
+        // sampler (from rchar) on Linux, so only add it here on the non-rchar
+        // fallback — the bytes were read by the probe regardless of hash result.
+        progress.files.store(total, Ordering::Relaxed);
+        if !rchar_active {
+            progress.bytes.fetch_add(size, Ordering::Relaxed);
+        }
 
         if batch.len() >= batch_cap {
             emitter
@@ -529,6 +807,29 @@ pub async fn execute(
             .await;
     }
 
+    // Stop the periodic sampler and emit one final sample, so every walk reports
+    // at least once (incl. a sub-`PROGRESS_INTERVAL` crawl the sampler never
+    // ticked) and the run closes on the cumulative totals. The rates here are the
+    // crawl-wide averages over `crawl_start.elapsed()`.
+    drop(_sampler);
+    if let (Some(base), Some(now)) = (rchar_baseline, proc_rchar()) {
+        progress
+            .bytes
+            .store(now.saturating_sub(base), Ordering::Relaxed);
+    }
+    let final_files = progress.files.load(Ordering::Relaxed);
+    let final_bytes = progress.bytes.load(Ordering::Relaxed);
+    emit_crawl_progress(
+        &event_stream,
+        file_server.as_deref(),
+        final_files,
+        final_files,
+        final_bytes,
+        final_bytes,
+        crawl_start.elapsed(),
+    )
+    .await;
+
     let exhausted = !cancelled && !stopped_by_max;
 
     debug!(
@@ -537,8 +838,37 @@ pub async fn execute(
         batches = batch_idx,
         cancelled,
         exhausted,
+        probe_errors,
+        list_errors,
         "crawl complete"
     );
+
+    // Surface a completion summary to the RUN log — anomalies especially. Without
+    // this the user only sees `count` in the output token and can't tell a clean
+    // `count=1` from one where a permission wall silently swallowed the rest. WARN
+    // when anything was skipped so it stands out; INFO on a clean walk.
+    let mut summary = format!("crawl complete: {total} files indexed");
+    if probe_errors > 0 {
+        summary.push_str(&format!(
+            ", {probe_errors} indexed without metadata (unreadable content)"
+        ));
+    }
+    if list_errors > 0 {
+        summary.push_str(&format!(
+            ", {list_errors} directories skipped (permission denied / vanished)"
+        ));
+    }
+    if cancelled {
+        summary.push_str(", cancelled — will resume");
+    } else if stopped_by_max {
+        summary.push_str(", paused at max_batches");
+    }
+    let level = if probe_errors > 0 || list_errors > 0 {
+        LogLevel::Warn
+    } else {
+        LogLevel::Info
+    };
+    crawl_log(&event_stream, level, summary).await;
 
     Ok(HashMap::from([
         ("prefix".into(), serde_json::json!(config.prefix)),
@@ -549,6 +879,7 @@ pub async fn execute(
         ("exhausted".into(), serde_json::json!(exhausted)),
         ("endpoint_root".into(), serde_json::json!(endpoint_root)),
         ("probe_errors".into(), serde_json::json!(probe_errors)),
+        ("list_errors".into(), serde_json::json!(list_errors)),
     ]))
 }
 
@@ -562,7 +893,7 @@ mod tests {
     use serde_json::Value;
 
     use aithericon_executor_backend::traits::EventStream;
-    use aithericon_executor_domain::LogLevel;
+    use aithericon_executor_domain::{LogLevel, MetricPoint};
     use aithericon_executor_storage::{StorageBackend, StorageConfig};
 
     use crate::config::CrawlConfig;
@@ -570,14 +901,22 @@ mod tests {
     #[derive(Default)]
     struct CapturingStream {
         items: Mutex<Vec<Value>>,
+        logs: Mutex<Vec<(LogLevel, String)>>,
+        metrics: Mutex<Vec<MetricPoint>>,
     }
 
     #[async_trait]
     impl EventStream for CapturingStream {
-        async fn log(&self, _level: LogLevel, _message: String, _fields: HashMap<String, String>) {}
+        async fn log(&self, level: LogLevel, message: String, _fields: HashMap<String, String>) {
+            self.logs.lock().unwrap().push((level, message));
+        }
 
         async fn item(&self, _channel: String, _episode_uid: String, _idx: u64, payload: Value) {
             self.items.lock().unwrap().push(payload);
+        }
+
+        async fn metric(&self, points: Vec<MetricPoint>) {
+            self.metrics.lock().unwrap().extend(points);
         }
     }
 
@@ -655,8 +994,120 @@ mod tests {
             );
             // Probing off (default) — no content identity captured.
             assert!(e["hash"].is_null(), "hash absent when probe off: {e}");
-            assert!(e["metadata"].is_null(), "metadata absent when probe off: {e}");
+            assert!(
+                e["metadata"].is_null(),
+                "metadata absent when probe off: {e}"
+            );
         }
+    }
+
+    /// Every probing crawl emits the throughput metrics — including the
+    /// `crawl/bytes_*` pair added so a long single-file probe shows live
+    /// progress. The final sample always fires (even for this sub-interval
+    /// walk), and `bytes_total` reflects the content actually read.
+    #[tokio::test]
+    async fn crawl_emits_bytes_throughput_metrics() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), vec![b'x'; 4096]).unwrap();
+        std::fs::write(dir.path().join("nas/b.txt"), vec![b'y'; 2048]).unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["count"], serde_json::json!(2));
+
+        let metrics = stream.metrics.lock().unwrap();
+        let names: std::collections::HashSet<&str> =
+            metrics.iter().map(|m| m.name.as_str()).collect();
+        for expected in [
+            "crawl/files_per_second",
+            "crawl/files_total",
+            "crawl/bytes_per_second",
+            "crawl/bytes_total",
+        ] {
+            assert!(
+                names.contains(expected),
+                "missing metric {expected}: {names:?}"
+            );
+        }
+        // The final cumulative sample must reflect the bytes actually ingested by
+        // the probe (≥ the 6 KiB of file content on the per-file fallback path; on
+        // Linux the rchar basis is ≥ that too).
+        let bytes_total = metrics
+            .iter()
+            .filter(|m| m.name == "crawl/bytes_total")
+            .map(|m| m.value)
+            .next_back()
+            .expect("a bytes_total sample");
+        assert!(
+            bytes_total >= 6144.0,
+            "bytes_total should cover read content, got {bytes_total}"
+        );
+        let files_total = metrics
+            .iter()
+            .filter(|m| m.name == "crawl/files_total")
+            .map(|m| m.value)
+            .next_back()
+            .unwrap();
+        assert_eq!(files_total, 2.0, "files_total final sample");
+    }
+
+    /// A cancel stops a PROBING crawl at the probe boundary instead of waiting
+    /// out the in-flight read — the walk races each `probe_entry` against the
+    /// token (a real crawl's multi-GB probe would otherwise block for minutes,
+    /// leaving the cancel unhonored and the JetStream job un-acked). Pre-cancel
+    /// proves the biased cancel arm wins before the first probe runs: the walk
+    /// returns `cancelled=true` having indexed nothing.
+    #[tokio::test]
+    async fn crawl_cancel_during_probe_stops_walk() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas")).unwrap();
+        std::fs::write(dir.path().join("nas/a.txt"), "data").unwrap();
+        std::fs::write(dir.path().join("nas/b.txt"), "more").unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let cancel = CancellationToken::new();
+        cancel.cancel(); // cancelled before the walk reaches its first probe
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            None,
+            None,
+            "exec-test",
+            run_dir.path(),
+            &cancel,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result["cancelled"], serde_json::json!(true));
+        assert_eq!(
+            result["count"],
+            serde_json::json!(0),
+            "a pre-cancelled probing walk indexes nothing"
+        );
     }
 
     fn local_storage(dir: &std::path::Path) -> StorageConfig {
@@ -792,13 +1243,90 @@ mod tests {
             .find(|e| e["path"].as_str().unwrap().ends_with("locked.txt"))
             .unwrap();
         if errs == 1 {
-            assert!(locked_entry["hash"].is_null(), "failed probe emits hashless");
+            assert!(
+                locked_entry["hash"].is_null(),
+                "failed probe emits hashless"
+            );
         } else {
             assert_eq!(errs, 0, "either counted or readable, never fatal");
         }
 
         // Restore perms so TempDir cleanup works everywhere.
         let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644));
+    }
+
+    /// A permission-denied directory is skipped (counted in `list_errors`) AND
+    /// surfaced to the RUN log: a streamed WARN names the skipped directory and
+    /// the completion summary reports the count — so a permission wall is never
+    /// the silent "finished with N files" the old crawl produced. The walk still
+    /// completes and includes the readable sibling. A completion summary streams
+    /// unconditionally (INFO on a clean walk, WARN when anything was skipped).
+    #[tokio::test]
+    async fn crawl_permission_denied_dir_streams_warning_and_summary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("nas/secret")).unwrap();
+        std::fs::write(dir.path().join("nas/ok.txt"), "fine").unwrap();
+        std::fs::write(dir.path().join("nas/secret/hidden.txt"), "nope").unwrap();
+        // Lock the subdir so the recursive lister can't read its entries.
+        let secret = dir.path().join("nas/secret");
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let storage = local_storage(dir.path());
+        let operator = aithericon_executor_storage::build_operator(&storage).unwrap();
+        let endpoint_root = storage.endpoint_root();
+        let config = crawl_config(storage, "hash");
+        let stream = Arc::new(CapturingStream::default());
+        let run_dir = tempfile::tempdir().unwrap();
+        let result = execute(
+            &config,
+            &operator,
+            "",
+            &endpoint_root,
+            Some(stream.clone()),
+            None,
+            "exec-test",
+            run_dir.path(),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect("a permission-denied subdir must not fail the walk");
+
+        // The readable sibling is always crawled (≥1; root reads the locked dir too).
+        assert!(result["count"].as_u64().unwrap() >= 1);
+
+        let logs = stream.logs.lock().unwrap();
+        assert!(
+            logs.iter().any(|(_, m)| m.starts_with("crawl complete:")),
+            "a completion summary must always stream: {logs:?}"
+        );
+
+        let list_errors = result["list_errors"].as_u64().unwrap();
+        if list_errors > 0 {
+            // Non-root: the locked dir is skipped and surfaced — a per-error WARN
+            // plus the summary naming the skipped count, both at WARN.
+            assert!(
+                logs.iter().any(|(l, m)| matches!(l, LogLevel::Warn)
+                    && m.contains("skipped unreadable directory")),
+                "permission-denied dir must stream a WARN line: {logs:?}"
+            );
+            assert!(
+                logs.iter()
+                    .any(|(l, m)| matches!(l, LogLevel::Warn) && m.contains("directories skipped")),
+                "completion summary must flag skipped dirs at WARN: {logs:?}"
+            );
+        } else {
+            // Root (CI) reads everything → clean INFO summary, no skip warnings.
+            assert!(
+                logs.iter()
+                    .any(|(l, m)| matches!(l, LogLevel::Info) && m.starts_with("crawl complete:")),
+                "a clean walk streams an INFO summary: {logs:?}"
+            );
+        }
+
+        // Restore perms so TempDir cleanup works everywhere.
+        let _ = std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o755));
     }
 
     /// Unknown probe values are a config error (caught at execute too, not

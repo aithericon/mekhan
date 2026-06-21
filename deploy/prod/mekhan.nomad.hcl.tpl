@@ -29,8 +29,15 @@ job "${job_id}" {
     canary            = 1
     health_check      = "checks"
     min_healthy_time  = "30s"
-    healthy_deadline  = "3m"
-    progress_deadline = "5m"
+    # A fresh deploy always ships a new image tag (= commit SHA), so zot has a
+    # cold cache and pull-through-fetches every layer from Forgejo on demand.
+    # That first pull can blow past the docker driver's 5m image_pull_timeout
+    # ("context deadline exceeded") and only succeeds once zot has warmed its
+    # blob cache across a few restart attempts. These deadlines must therefore
+    # be wide enough to span several pull attempts before auto_revert fires —
+    # otherwise Nomad reverts the deploy while zot is still warming.
+    healthy_deadline  = "10m"
+    progress_deadline = "20m"
     auto_revert       = true
     auto_promote      = true
   }
@@ -115,9 +122,13 @@ job "${job_id}" {
     }
 
     restart {
-      attempts = 3
+      # More in-place pull attempts within the (now wider) progress_deadline so
+      # a cold zot pull-through gets several shots at warming before the deploy
+      # is declared failed. interval spans the whole window so attempts aren't
+      # capped early.
+      attempts = 5
       delay    = "15s"
-      interval = "5m"
+      interval = "20m"
       mode     = "delay"
     }
 
@@ -142,6 +153,10 @@ job "${job_id}" {
       config {
         image = "${image}"
         ports = ["http"]
+        # Cold zot pull-through from Forgejo on a fresh tag can far exceed the
+        # docker driver's default 5m pull timeout ("context deadline exceeded").
+        # Give a single pull room to complete instead of aborting mid-fetch.
+        image_pull_timeout = "15m"
       }
 
 
@@ -276,6 +291,9 @@ EOH
       config {
         image = "${engine_image}"
         ports = ["engine"]
+        # See the service task: cold zot pull-through can exceed docker's default
+        # 5m pull timeout. Widen it so a slow first pull doesn't abort.
+        image_pull_timeout = "15m"
       }
 
       template {

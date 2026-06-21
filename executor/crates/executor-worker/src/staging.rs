@@ -99,6 +99,7 @@ pub fn default_pipeline(
     store: Option<Arc<dyn ArtifactStore>>,
     secret_store: Option<Arc<dyn SecretStore>>,
     vault_addr: Option<String>,
+    broker: Option<BrokerSecretsConfig>,
     nix_hook: Option<crate::nix::NixEnvironmentHook>,
 ) -> StagingPipeline {
     let mut pipeline = StagingPipeline::new()
@@ -122,6 +123,7 @@ pub fn default_pipeline(
         pipeline = pipeline.add_hook(PlanSecretsHook {
             store: secrets,
             vault_addr,
+            broker,
         });
     }
 
@@ -684,6 +686,76 @@ pub struct PlanSecretsHook {
     /// Vault address for unwrapping wrapped secrets. Only `VAULT_ADDR` is needed,
     /// not `VAULT_TOKEN` — the wrapping token itself is used as auth.
     pub vault_addr: Option<String>,
+    /// Brokered secret-unwrap config for a zero-secret runner. When set AND
+    /// `vault_addr` is `None`, a job's `wrapped_secrets` token is unwrapped by
+    /// POSTing to mekhan's `{base}/api/v1/runners/{runner_id}/secrets/unwrap`
+    /// (bearer-authed with the runner token) instead of talking to Vault
+    /// directly. In-cluster workers (which have `VAULT_ADDR`) keep the direct
+    /// path. `None` on a worker with no broker configured.
+    pub broker: Option<BrokerSecretsConfig>,
+}
+
+/// Brokered secret-unwrap configuration threaded into [`PlanSecretsHook`] for a
+/// zero-secret runner. All three are required to reroute the unwrap through
+/// mekhan; built from the runner identity + bearer token at daemon boot.
+#[derive(Debug, Clone)]
+pub struct BrokerSecretsConfig {
+    /// Effective broker base URL (`storage_url ?? mekhan_url`, trailing slash
+    /// trimmed). The unwrap endpoint is appended to this.
+    pub base_url: String,
+    /// `rnr_<uuid>.<secret>` bearer credential (self-only on the unwrap handler).
+    pub runner_token: String,
+    /// This runner's control-plane id; the unwrap path is self-scoped.
+    pub runner_id: String,
+}
+
+/// POST `{base}/api/v1/runners/{runner_id}/secrets/unwrap` with the Vault
+/// response-wrapping token and parse the returned `{ "secrets": {..} }` map.
+///
+/// This is the zero-secret runner's counterpart to `vault_unwrap_secrets`: the
+/// runner never holds a `VAULT_ADDR`; mekhan unwraps server-side (it calls
+/// `aithericon_secrets::vault_unwrap_secrets` internally) and returns plaintext
+/// over the bearer-authed, self-scoped HTTP endpoint.
+async fn broker_unwrap_secrets(
+    broker: &BrokerSecretsConfig,
+    wrapping_token: &str,
+) -> Result<std::collections::HashMap<String, String>, ExecutorError> {
+    #[derive(serde::Serialize)]
+    struct UnwrapRequest<'a> {
+        wrapping_token: &'a str,
+    }
+    #[derive(serde::Deserialize)]
+    struct UnwrapResponse {
+        secrets: std::collections::HashMap<String, String>,
+    }
+
+    let url = format!(
+        "{}/api/v1/runners/{}/secrets/unwrap",
+        broker.base_url.trim_end_matches('/'),
+        broker.runner_id
+    );
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(&broker.runner_token)
+        .json(&UnwrapRequest { wrapping_token })
+        .send()
+        .await
+        .map_err(|e| {
+            ExecutorError::SecretResolutionFailed(format!("brokered unwrap request to {url}: {e}"))
+        })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(ExecutorError::SecretResolutionFailed(format!(
+            "brokered unwrap rejected by {url}: HTTP {status}: {body}"
+        )));
+    }
+
+    let parsed: UnwrapResponse = resp.json().await.map_err(|e| {
+        ExecutorError::SecretResolutionFailed(format!("parse brokered unwrap response: {e}"))
+    })?;
+    Ok(parsed.secrets)
 }
 
 #[async_trait]
@@ -700,10 +772,17 @@ impl StagingHook for PlanSecretsHook {
         // Determine which store to use for resolving {{secret:KEY}} patterns.
         // If the job carries a Vault wrapping token, unwrap it to get an in-memory
         // store. Otherwise, fall back to the configured store (env, vault, etc.).
-        let effective_store: Arc<dyn SecretStore> = match (&job.wrapped_secrets, &self.vault_addr) {
+        let effective_store: Arc<dyn SecretStore> = match (
+            &job.wrapped_secrets,
+            &self.vault_addr,
+            &self.broker,
+        ) {
+            // In-cluster worker: a wrapping token + a direct VAULT_ADDR → unwrap
+            // against Vault directly. Vault wins over the broker when both are
+            // present (an in-cluster worker should not round-trip through mekhan).
             #[cfg(feature = "vault")]
-            (Some(wrapping_token), Some(vault_addr)) => {
-                debug!("unwrapping Vault wrapping token for secrets");
+            (Some(wrapping_token), Some(vault_addr), _) => {
+                debug!("unwrapping Vault wrapping token for secrets (direct Vault)");
                 let unwrapped =
                     aithericon_secrets::vault_unwrap_secrets(vault_addr, wrapping_token)
                         .await
@@ -712,6 +791,17 @@ impl StagingHook for PlanSecretsHook {
                                 "failed to unwrap secrets: {e}"
                             ))
                         })?;
+                Arc::new(aithericon_secrets::InMemorySecretStore::new(unwrapped))
+            }
+            // Zero-secret runner: a wrapping token + a configured broker + NO
+            // direct Vault → unwrap through mekhan's self-scoped HTTP endpoint.
+            // Not feature-gated (plain HTTP, no `vault` feature needed).
+            (Some(wrapping_token), None, Some(broker)) => {
+                debug!(
+                    runner_id = %broker.runner_id,
+                    "unwrapping wrapping token for secrets via mekhan broker"
+                );
+                let unwrapped = broker_unwrap_secrets(broker, wrapping_token).await?;
                 Arc::new(aithericon_secrets::InMemorySecretStore::new(unwrapped))
             }
             _ => self.store.clone(),
@@ -1029,6 +1119,7 @@ mod tests {
         let hook = PlanSecretsHook {
             store,
             vault_addr: None,
+            broker: None,
         };
 
         let tmp = PathBuf::from("/tmp/staging-plan-env-test");
@@ -1082,6 +1173,7 @@ mod tests {
         let ctx = PlanSecretsHook {
             store,
             vault_addr: None,
+            broker: None,
         }
         .stage(&test_job(), ctx)
         .await
@@ -1197,6 +1289,7 @@ mod tests {
         let hook = PlanSecretsHook {
             store,
             vault_addr: None,
+            broker: None,
         };
 
         let tmp = PathBuf::from("/tmp/staging-plan-fail-test");
@@ -1227,6 +1320,7 @@ mod tests {
         let hook = PlanSecretsHook {
             store,
             vault_addr: None,
+            broker: None,
         };
 
         let tmp = PathBuf::from("/tmp/staging-plan-no-pattern");

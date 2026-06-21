@@ -21,7 +21,7 @@ use axum::{
     Json,
 };
 use chrono::Utc;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::auth::extractor::CookieAuthUser;
@@ -154,6 +154,22 @@ fn runner_nats_public_url(state: &AppState) -> Option<String> {
     state
         .config
         .runner_nats_public_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|u| !u.is_empty())
+        .map(str::to_owned)
+}
+
+/// The public storage-broker base URL brokered to enrolled runners (the
+/// `{base}/api/storage/blob` + secret-unwrap front door), or `None` when
+/// unconfigured. Treats an empty `runner_storage_broker_url` — e.g. an unset
+/// `MEKHAN__RUNNER_STORAGE_BROKER_URL` rendered as `""` — as absent so the
+/// runner falls back to the mekhan base it enrolled against rather than
+/// persisting a blank one.
+fn runner_storage_broker_url(state: &AppState) -> Option<String> {
+    state
+        .config
+        .runner_storage_broker_url
         .as_deref()
         .map(str::trim)
         .filter(|u| !u.is_empty())
@@ -341,6 +357,7 @@ pub async fn enroll_runner(
             group: claimed.group,
             nats_jwt,
             nats_url: runner_nats_public_url(&state),
+            storage_url: runner_storage_broker_url(&state),
         }),
     ))
 }
@@ -440,6 +457,91 @@ pub async fn issue_runner_nats_creds(
         account_public_key: state.runner_nats_signer.account_public_key().to_string(),
         nats_url: runner_nats_public_url(&state),
     }))
+}
+
+// ── b2b. Secret unwrap proxy (runner-token authed, self-only) ──────────────
+
+/// Request body for `POST /api/v1/runners/{id}/secrets/unwrap` — the Vault
+/// response-wrapping token (`hvs.*` / `s.*`) the engine handed the runner with
+/// its job. Single-use: Vault invalidates it on the unwrap.
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+pub struct UnwrapSecretRequest {
+    /// The Vault response-wrapping token to unwrap. Single-use.
+    pub wrapping_token: String,
+}
+
+/// Response for the secret-unwrap proxy — the unwrapped secret key/value pairs.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct UnwrapSecretResponse {
+    /// The unwrapped secrets (`KEY` → `value`), e.g. injected as env into the
+    /// runner's task. Empty when the wrapped payload carried no entries.
+    pub secrets: std::collections::HashMap<String, String>,
+}
+
+/// Resolve the Vault address mekhan should unwrap against. There is no
+/// dedicated `AppConfig` field (Vault is selected from the environment for the
+/// resource/secret stores in `main.rs`), so read `VAULT_ADDR` directly — the
+/// same env var `VaultSecretStore::from_env` keys on. Returns 503 when unset so
+/// a runner gets an actionable "broker unconfigured" rather than a 502.
+fn unwrap_vault_addr() -> Result<String, ApiError> {
+    std::env::var("VAULT_ADDR")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "secret broker unavailable: VAULT_ADDR is not configured on mekhan",
+            )
+        })
+}
+
+/// `POST /api/v1/runners/{id}/secrets/unwrap` — unwrap a Vault response-wrapping
+/// token on the runner's behalf so a bare runner needs no `VAULT_ADDR`/token of
+/// its own. Runner-token authed, self-only: the principal's subject MUST be
+/// `runner:{id}` (same boundary as heartbeat / nats-creds). mekhan calls
+/// `vault_unwrap_secrets` with its own reachability to Vault; the wrapping token
+/// itself authenticates the unwrap, so mekhan never needs a Vault service token
+/// for this path.
+#[utoipa::path(
+    post,
+    path = "/api/v1/runners/{id}/secrets/unwrap",
+    params(("id" = Uuid, Path, description = "Runner id")),
+    request_body = UnwrapSecretRequest,
+    responses(
+        (status = 200, description = "Unwrapped secrets", body = UnwrapSecretResponse),
+        (status = 401, description = "Wrong / foreign / revoked runner token", body = ErrorResponse),
+        (status = 502, description = "Vault unwrap failed (bad/expired wrapping token)", body = ErrorResponse),
+        (status = 503, description = "Secret broker unconfigured (no VAULT_ADDR)", body = ErrorResponse),
+    ),
+    tag = "runners",
+)]
+pub async fn unwrap_runner_secret(
+    State(_state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+    Json(req): Json<UnwrapSecretRequest>,
+) -> Result<Json<UnwrapSecretResponse>, ApiError> {
+    // A runner principal may only unwrap secrets for itself.
+    if user.subject != runner_subject(id) {
+        return Err(ApiError::new(
+            StatusCode::UNAUTHORIZED,
+            "this token may not unwrap secrets for that runner",
+        ));
+    }
+
+    let vault_addr = unwrap_vault_addr()?;
+
+    let secrets = aithericon_secrets::vault_unwrap_secrets(&vault_addr, &req.wrapping_token)
+        .await
+        .map_err(|e| {
+            ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("vault unwrap failed: {e}"),
+            )
+        })?;
+
+    Ok(Json(UnwrapSecretResponse { secrets }))
 }
 
 // ── b3. Interface catalog (runner-token authed push / human read) ──────────
