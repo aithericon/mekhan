@@ -309,4 +309,42 @@ impl MekhanNats {
             .await?;
         Ok(())
     }
+
+    /// Ensure the shared lab-runner-fleet **priority job streams**
+    /// (`runner-jobs_{high,medium,low}`) exist — same CLUSTER-OWNED rationale as
+    /// [`Self::ensure_runner_jobs_dlq_stream`].
+    ///
+    /// apalis-nats normally creates these on the PRODUCER side — the engine, the
+    /// first time it dispatches to a runner (`core-engine .../executor/src/client.rs`
+    /// `ensure_stream`). But on a FRESH cluster a runner can connect *before* any
+    /// job has ever been dispatched, and a scoped consumer-only
+    /// (`STREAM.INFO`-only) runner cannot create a fleet-shared stream itself — so
+    /// its apalis `get_or_create` is denied `$JS.API.STREAM.CREATE.runner-jobs_high`
+    /// and the daemon crash-loops at startup. Pre-creating them here closes that
+    /// window: the runner's `get_or_create` resolves via INFO and never attempts a
+    /// create.
+    ///
+    /// Config mirrors apalis-nats' priority streams
+    /// (`apalis-nats/src/storage.rs::new_with_config`): subjects
+    /// `runner-jobs.{prio}.>`, 7-day WorkQueue retention, file storage, 2-minute
+    /// duplicate window, discard-old — so the runner (and the engine producer) see
+    /// a compatible existing stream. WorkQueue subjects are disjoint per priority,
+    /// so there is no cross-stream overlap.
+    pub async fn ensure_runner_jobs_priority_streams(&self) -> Result<(), async_nats::Error> {
+        for prio in ["high", "medium", "low"] {
+            self.jetstream
+                .get_or_create_stream(jetstream::stream::Config {
+                    name: format!("runner-jobs_{prio}"),
+                    subjects: vec![format!("runner-jobs.{prio}.>")],
+                    retention: jetstream::stream::RetentionPolicy::WorkQueue,
+                    discard: jetstream::stream::DiscardPolicy::Old,
+                    max_age: std::time::Duration::from_secs(7 * 24 * 60 * 60), // 7 days
+                    duplicate_window: std::time::Duration::from_secs(120),
+                    storage: jetstream::stream::StorageType::File,
+                    ..Default::default()
+                })
+                .await?;
+        }
+        Ok(())
+    }
 }
