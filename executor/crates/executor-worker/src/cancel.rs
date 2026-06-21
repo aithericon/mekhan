@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -77,6 +78,50 @@ impl CancellationRegistry {
 /// a cancel published while the runner is fully down is not redelivered on
 /// restart (fresh `New` consumer) — correct, since that execution isn't running
 /// here anyway.
+/// Timing knobs for the cancel listener's consumer lifecycle.
+///
+/// Production uses [`CancelListenerTuning::default`] (15s heartbeat, 5min
+/// inactive-reap backstop, 1s rebind backoff). Tests shrink these so the
+/// idle-survival and rebind-on-dead-consumer behaviours are observable in
+/// seconds rather than minutes.
+#[derive(Clone, Copy, Debug)]
+pub struct CancelListenerTuning {
+    /// Ephemeral consumer idle-reap window (`inactive_threshold`). The continuous
+    /// heartbeated pull keeps the consumer active, so this backstop is
+    /// effectively never hit in normal operation.
+    pub inactive_threshold: Duration,
+    /// Heartbeat interval on the message stream. Surfaces a silently-stalled or
+    /// reaped consumer as an error so the listener rebinds instead of hanging,
+    /// and the continuous pull it drives keeps the consumer's inactivity timer
+    /// reset.
+    pub heartbeat: Duration,
+    /// Backoff before rebinding a fresh consumer after a stream error/close.
+    pub rebind_backoff: Duration,
+}
+
+impl Default for CancelListenerTuning {
+    fn default() -> Self {
+        Self {
+            inactive_threshold: Duration::from_secs(300),
+            heartbeat: Duration::from_secs(15),
+            rebind_backoff: Duration::from_secs(1),
+        }
+    }
+}
+
+/// Handle to a running cancel listener: its task plus an observable rebind
+/// counter.
+///
+/// `rebinds` is the number of times the listener replaced a reaped/errored
+/// consumer with a fresh one — 0 in steady state. Tests assert on it to
+/// distinguish "the heartbeat kept the original consumer alive" (idle-survival,
+/// `rebinds == 0`) from "the consumer died and the listener recovered"
+/// (rebind-on-dead-consumer, `rebinds >= 1`).
+pub struct CancelListenerHandle {
+    pub handle: JoinHandle<()>,
+    pub rebinds: Arc<AtomicU64>,
+}
+
 pub struct NatsCancelListener;
 
 impl NatsCancelListener {
@@ -88,6 +133,9 @@ impl NatsCancelListener {
     ///
     /// Ensures the `EXECUTOR_CANCEL` stream exists (idempotent `get_or_create`)
     /// before binding, so the runner can start before any publisher.
+    ///
+    /// Thin wrapper over [`Self::start_with_tuning`] with production timings;
+    /// discards the rebind counter and returns just the task handle.
     pub async fn start(
         jetstream: jetstream::Context,
         registry: CancellationRegistry,
@@ -95,6 +143,29 @@ impl NatsCancelListener {
         replicas: usize,
         shutdown: CancellationToken,
     ) -> Result<JoinHandle<()>, async_nats::Error> {
+        Ok(Self::start_with_tuning(
+            jetstream,
+            registry,
+            prefix,
+            replicas,
+            shutdown,
+            CancelListenerTuning::default(),
+        )
+        .await?
+        .handle)
+    }
+
+    /// Like [`Self::start`] but with caller-supplied [`CancelListenerTuning`] and
+    /// a [`CancelListenerHandle`] exposing the rebind counter — used by tests to
+    /// drive the consumer lifecycle deterministically.
+    pub async fn start_with_tuning(
+        jetstream: jetstream::Context,
+        registry: CancellationRegistry,
+        prefix: Option<&str>,
+        replicas: usize,
+        shutdown: CancellationToken,
+        tuning: CancelListenerTuning,
+    ) -> Result<CancelListenerHandle, async_nats::Error> {
         let stream_name = aithericon_executor_domain::cancel_stream_name(prefix);
         let filter = aithericon_executor_domain::cancel_subject_filter(prefix);
 
@@ -123,9 +194,14 @@ impl NatsCancelListener {
         // exists, so the bind must precede any publish the caller sequences after
         // us (the integration test relies on this; prod is naturally racey-safe
         // since a job must already be running to be cancelled).
-        let mut consumer = Self::bind_consumer(&jetstream, &stream_name, &filter).await?;
+        let mut consumer =
+            Self::bind_consumer(&jetstream, &stream_name, &filter, tuning.inactive_threshold)
+                .await?;
 
         info!(%stream_name, %filter, "JetStream cancel listener started");
+
+        let rebinds = Arc::new(AtomicU64::new(0));
+        let rebinds_task = rebinds.clone();
 
         let handle = tokio::spawn(async move {
             'outer: loop {
@@ -136,7 +212,7 @@ impl NatsCancelListener {
                 // between cancels, which can be hours apart).
                 let mut messages = match consumer
                     .stream()
-                    .heartbeat(Duration::from_secs(15))
+                    .heartbeat(tuning.heartbeat)
                     .messages()
                     .await
                 {
@@ -149,6 +225,8 @@ impl NatsCancelListener {
                             &filter,
                             &shutdown,
                             &mut consumer,
+                            tuning,
+                            &rebinds_task,
                         )
                         .await
                         {
@@ -202,33 +280,47 @@ impl NatsCancelListener {
 
                 // Inner loop exited on a stream error/close: back off, then replace
                 // the consumer with a fresh bind before looping.
-                if !Self::rebind(&jetstream, &stream_name, &filter, &shutdown, &mut consumer).await
+                if !Self::rebind(
+                    &jetstream,
+                    &stream_name,
+                    &filter,
+                    &shutdown,
+                    &mut consumer,
+                    tuning,
+                    &rebinds_task,
+                )
+                .await
                 {
                     break 'outer;
                 }
             }
         });
 
-        Ok(handle)
+        Ok(CancelListenerHandle { handle, rebinds })
     }
 
     /// Back off (interruptible by shutdown), then replace `consumer` with a fresh
     /// ephemeral bind. Returns `false` if shutdown fired during the backoff (the
     /// caller should stop). A failed rebind leaves the stale consumer in place;
-    /// the next `messages()` call errors and routes back here, so the 1s backoff
-    /// bounds the retry rate.
+    /// the next `messages()` call errors and routes back here, so the backoff
+    /// bounds the retry rate. Increments `rebinds` on each successful rebind.
     async fn rebind(
         jetstream: &jetstream::Context,
         stream_name: &str,
         filter: &str,
         shutdown: &CancellationToken,
         consumer: &mut jetstream::consumer::PullConsumer,
+        tuning: CancelListenerTuning,
+        rebinds: &AtomicU64,
     ) -> bool {
-        if Self::sleep_or_shutdown(shutdown, Duration::from_secs(1)).await {
+        if Self::sleep_or_shutdown(shutdown, tuning.rebind_backoff).await {
             return false;
         }
-        match Self::bind_consumer(jetstream, stream_name, filter).await {
-            Ok(c) => *consumer = c,
+        match Self::bind_consumer(jetstream, stream_name, filter, tuning.inactive_threshold).await {
+            Ok(c) => {
+                *consumer = c;
+                rebinds.fetch_add(1, Ordering::Relaxed);
+            }
             Err(e) => warn!(error = %e, "failed to rebind cancel consumer; will retry"),
         }
         true
@@ -237,10 +329,16 @@ impl NatsCancelListener {
     /// Bind a fresh ephemeral pull consumer (no `durable_name`) on the cancel
     /// stream. `DeliverPolicy::New` + `AckPolicy::None`: deliver only cancels
     /// published after this bind, fire-and-forget (no redelivery).
+    ///
+    /// `inactive_threshold` is a backstop only — the continuous pull keeps the
+    /// consumer active, so this idle-reap window is effectively never hit during
+    /// normal operation (generous in prod so a brief rebind gap can't
+    /// orphan-reap it; tiny in tests to exercise the reap path).
     async fn bind_consumer(
         jetstream: &jetstream::Context,
         stream_name: &str,
         filter: &str,
+        inactive_threshold: Duration,
     ) -> Result<jetstream::consumer::PullConsumer, async_nats::Error> {
         let stream = jetstream.get_stream(stream_name).await?;
         let consumer = stream
@@ -248,10 +346,7 @@ impl NatsCancelListener {
                 filter_subject: filter.to_string(),
                 deliver_policy: jetstream::consumer::DeliverPolicy::New,
                 ack_policy: jetstream::consumer::AckPolicy::None,
-                // Backstop only — the continuous pull keeps the consumer active,
-                // so this idle-reap window is effectively never hit during normal
-                // operation. Generous so a brief rebind gap can't orphan-reap it.
-                inactive_threshold: Duration::from_secs(300),
+                inactive_threshold,
                 ..Default::default()
             })
             .await?;

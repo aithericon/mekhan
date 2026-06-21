@@ -1,10 +1,21 @@
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use aithericon_executor_domain::ExecutionStatus;
 use aithericon_executor_test_harness::context::ExecutorTestContext;
 use aithericon_executor_test_harness::helpers::*;
+use aithericon_executor_worker::CancelListenerTuning;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+
+/// Poll until `token` is cancelled or `timeout` elapses; returns whether it was.
+async fn await_cancel(token: &CancellationToken, timeout: Duration) -> bool {
+    let deadline = tokio::time::Instant::now() + timeout;
+    while tokio::time::Instant::now() < deadline && !token.is_cancelled() {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    token.is_cancelled()
+}
 
 /// Cancel a long-running job via NATS and verify the Cancelled terminal status.
 ///
@@ -174,6 +185,118 @@ async fn test_duplicate_delivery_preserves_live_cancel_token() {
         "the registered live token was not the one cancelled"
     );
 
+    ctx.cleanup().await;
+}
+
+/// Idle-survival: the heartbeated continuous pull keeps the listener's ephemeral
+/// consumer alive across an idle period far longer than its `inactive_threshold`,
+/// so a cancel that arrives after a long quiet stretch is still delivered — on
+/// the SAME consumer, with no rebind churn.
+///
+/// Cancels can be hours apart in prod; if the consumer were reaped during idle
+/// the signal would be silently dropped. Tuned to seconds: a 2s reap window is
+/// idled past by 3× before the cancel is published, and `rebinds == 0` proves
+/// the original consumer was never reaped/replaced.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cancel_consumer_survives_idle() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-idle-{}", Uuid::new_v4().simple());
+
+    let shutdown = CancellationToken::new();
+    let listener = ctx
+        .start_cancel_listener_tuned(
+            shutdown.clone(),
+            CancelListenerTuning {
+                inactive_threshold: Duration::from_secs(2),
+                heartbeat: Duration::from_millis(500),
+                rebind_backoff: Duration::from_millis(200),
+            },
+        )
+        .await;
+
+    // A token as if a job were running.
+    let token = ctx.cancel_registry.register(&eid);
+
+    // Idle well past the 2s reap window. If the continuous pull did not keep the
+    // consumer active, the server would reap it here.
+    tokio::time::sleep(Duration::from_secs(6)).await;
+
+    // A cancel after the long idle must still land.
+    ctx.publish_cancel(&eid).await;
+    assert!(
+        await_cancel(&token, Duration::from_secs(5)).await,
+        "cancel after a long idle was not delivered (consumer reaped during idle?)"
+    );
+
+    // ...and it landed on the original consumer — no reap, no rebind churn.
+    assert_eq!(
+        listener.rebinds.load(Ordering::Relaxed),
+        0,
+        "consumer was rebound during idle; heartbeat pull is not keeping it alive"
+    );
+
+    shutdown.cancel();
+    let _ = listener.handle.await;
+    ctx.cleanup().await;
+}
+
+/// Rebind-on-dead-consumer: if the ephemeral consumer is reaped/deleted
+/// out from under the listener, it rebinds a FRESH consumer rather than
+/// tight-spinning on the dead one ("no responders"), and resumes delivering
+/// cancels.
+///
+/// Simulates the reap by force-deleting the consumer server-side, then asserts
+/// the listener recovers (`rebinds >= 1`) and a cancel published after the
+/// rebind is delivered.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_cancel_consumer_rebinds_after_reap() {
+    let _ = tracing_subscriber::fmt().with_test_writer().try_init();
+
+    let ctx = ExecutorTestContext::new().await;
+    let eid = format!("cancel-rebind-{}", Uuid::new_v4().simple());
+
+    let shutdown = CancellationToken::new();
+    let listener = ctx
+        .start_cancel_listener_tuned(
+            shutdown.clone(),
+            CancelListenerTuning {
+                // Don't auto-reap; we delete the consumer explicitly below.
+                inactive_threshold: Duration::from_secs(300),
+                heartbeat: Duration::from_millis(500),
+                rebind_backoff: Duration::from_millis(200),
+            },
+        )
+        .await;
+
+    let token = ctx.cancel_registry.register(&eid);
+
+    // Let the listener settle into its pull loop, then yank its consumer.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let deleted = ctx.delete_cancel_consumers().await;
+    assert_eq!(deleted, 1, "expected exactly one cancel consumer to delete");
+
+    // The listener must notice the dead consumer (heartbeat/pull error) and bind
+    // a fresh one. Wait for that rebind rather than a fixed sleep.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+    while tokio::time::Instant::now() < deadline && listener.rebinds.load(Ordering::Relaxed) == 0 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        listener.rebinds.load(Ordering::Relaxed) >= 1,
+        "listener did not rebind after its consumer was deleted"
+    );
+
+    // A cancel published after the fresh consumer bound must be delivered.
+    ctx.publish_cancel(&eid).await;
+    assert!(
+        await_cancel(&token, Duration::from_secs(10)).await,
+        "cancel not delivered after the listener rebound its consumer"
+    );
+
+    shutdown.cancel();
+    let _ = listener.handle.await;
     ctx.cleanup().await;
 }
 

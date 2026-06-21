@@ -22,9 +22,9 @@ use aithericon_executor_metrics::MetricSink;
 use aithericon_executor_process::ProcessBackend;
 use aithericon_executor_storage::ArtifactStore;
 use aithericon_executor_worker::{
-    handle_execution, BackendRegistry, CancellationRegistry, CleanupPolicy, JetStreamTransport,
-    JobExecutor, NatsCancelListener, SidecarLogConfig, StagingPipeline, StatusReporter,
-    TransportRegistry,
+    handle_execution, BackendRegistry, CancelListenerHandle, CancelListenerTuning,
+    CancellationRegistry, CleanupPolicy, JetStreamTransport, JobExecutor, NatsCancelListener,
+    SidecarLogConfig, StagingPipeline, StatusReporter, TransportRegistry,
 };
 
 use crate::nats::shared_nats_url;
@@ -621,6 +621,52 @@ impl ExecutorTestContext {
         )
         .await
         .expect("failed to start JetStream cancel listener")
+    }
+
+    /// Like [`Self::start_cancel_listener`] but with caller-supplied
+    /// [`CancelListenerTuning`], returning the full [`CancelListenerHandle`] so a
+    /// test can observe the rebind counter. Used to exercise the consumer
+    /// idle-survival and rebind-on-dead-consumer paths in seconds.
+    pub async fn start_cancel_listener_tuned(
+        &self,
+        shutdown: CancellationToken,
+        tuning: CancelListenerTuning,
+    ) -> CancelListenerHandle {
+        NatsCancelListener::start_with_tuning(
+            self.jetstream.clone(),
+            self.cancel_registry.clone(),
+            Some(&self.prefix),
+            1,
+            shutdown,
+            tuning,
+        )
+        .await
+        .expect("failed to start tuned JetStream cancel listener")
+    }
+
+    /// Force-delete every consumer currently bound to this context's cancel
+    /// stream, simulating a server-side idle-reap of the listener's ephemeral
+    /// consumer. The listener's next pull/heartbeat then errors and it must
+    /// rebind a fresh consumer. Returns the number of consumers deleted.
+    pub async fn delete_cancel_consumers(&self) -> usize {
+        let stream_name = aithericon_executor_domain::cancel_stream_name(Some(&self.prefix));
+        let stream = self
+            .jetstream
+            .get_stream(&stream_name)
+            .await
+            .expect("get cancel stream");
+
+        let mut names = stream.consumer_names();
+        let mut deleted = 0;
+        while let Some(name) = names.next().await {
+            let name = name.expect("list cancel consumer");
+            stream
+                .delete_consumer(&name)
+                .await
+                .expect("delete cancel consumer");
+            deleted += 1;
+        }
+        deleted
     }
 
     /// Delete test streams and run directories (best-effort).

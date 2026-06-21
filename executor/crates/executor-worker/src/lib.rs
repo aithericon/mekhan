@@ -19,7 +19,9 @@ pub mod reporter;
 pub mod staging;
 
 pub use batch::BatchRunner;
-pub use cancel::{CancellationRegistry, NatsCancelListener};
+pub use cancel::{
+    CancelListenerHandle, CancelListenerTuning, CancellationRegistry, NatsCancelListener,
+};
 #[cfg(feature = "opendal")]
 pub use chunks::S3Transport;
 #[cfg(feature = "livekit")]
