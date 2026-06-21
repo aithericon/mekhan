@@ -57,6 +57,13 @@ async fn main() -> anyhow::Result<()> {
     if let Err(e) = mekhan_nats.ensure_runner_jobs_dlq_stream().await {
         tracing::warn!(error = %e, "could not ensure runner-jobs_dlq stream at startup");
     }
+    // The per-priority job streams are normally created by the engine on its
+    // first dispatch, but a fresh cluster can have a runner connect before any
+    // job exists; pre-create them so the scoped (INFO-only) runner can bind
+    // immediately instead of crash-looping on a denied STREAM.CREATE. Non-fatal.
+    if let Err(e) = mekhan_nats.ensure_runner_jobs_priority_streams().await {
+        tracing::warn!(error = %e, "could not ensure runner-jobs priority streams at startup");
+    }
     if let Some(drain_rx) = mekhan_service::observability::install_drainer() {
         let drain_nats = mekhan_nats.clone();
         tokio::spawn(async move {

@@ -131,6 +131,37 @@ Native build deps (HDF5, NetCDF, protobuf, etc.) and per-OS install one-liners
 are in [`docs/setup.md`](./docs/setup.md). Nix users: `nix develop` gives you
 everything.
 
+## CLI & tools
+
+Alongside the server components, the monorepo ships command-line tools. Build any
+of them with `cargo build`, or `cargo install --path …` to put them on your PATH:
+
+- **`mekhan`** — the GitOps CLI for workflows: author them as files, then
+  `pull` / `diff` / `apply` against a running control plane, plus `run`,
+  `status`, and `logs`.
+
+  ```bash
+  cargo install --path service --bin mekhan        # from the repo root
+  mekhan --server http://localhost:13100 status    # talk to a running stack
+  ```
+
+- **`mekhan-runner`** — the task executor daemon that performs the work. `just
+  dev` runs one for you; to build/run a standalone runner against your own NATS,
+  see [`executor/README.md`](./executor/README.md):
+
+  ```bash
+  cargo install --path executor/crates/executor-service   # installs `mekhan-runner`
+  mekhan-runner                                            # config via executor.toml / EXECUTOR_* env
+  ```
+
+- **`mekhan-debug`** *(advanced)* — a low-level CLI for inspecting net/engine
+  internals (`status`, `state <net>`, `events`, `trace`). Most users never need
+  it.
+
+  ```bash
+  cargo install --path engine/cli                          # installs `mekhan-debug`
+  ```
+
 ## What's here
 
 | Directory | What it is |

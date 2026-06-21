@@ -198,7 +198,7 @@ executor:
     echo ""
     echo "3. Starting aithericon-executor..."
     set -a; source infra/executor/aithericon-executor.env; set +a
-    RUST_LOG=info "$EXECUTOR_REPO/target/debug/aithericon-executor-service" &
+    RUST_LOG=info "$EXECUTOR_REPO/target/debug/mekhan-runner" &
     EXECUTOR_PID=$!
     disown
 
@@ -327,7 +327,7 @@ vault-secrets:
     EXECUTOR_SOURCE=nats_queue \
     EXECUTOR_LIFETIME=daemon \
     RUST_LOG=info \
-    "$EXECUTOR_REPO/target/debug/aithericon-executor-service" &
+    "$EXECUTOR_REPO/target/debug/mekhan-runner" &
     EXECUTOR_PID=$!
     disown
 
@@ -431,7 +431,7 @@ three-layer-register-template:
     #!/usr/bin/env bash
     set -euo pipefail
     EXECUTOR_REPO="{{executor_repo}}"
-    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/aithericon-executor-service"
+    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/mekhan-runner"
     if [ ! -f "$EXECUTOR_BIN" ]; then
         echo "ERROR: executor binary not found at $EXECUTOR_BIN"
         echo "Build it first: cargo build --manifest-path $EXECUTOR_REPO/Cargo.toml -p aithericon-executor-service"
@@ -564,7 +564,7 @@ slurm-three-layer:
     cargo build -p aithericon-sdk --example executor_net
     cargo zigbuild --manifest-path "$EXECUTOR_REPO/Cargo.toml" -p aithericon-executor-service --target x86_64-unknown-linux-gnu
 
-    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/mekhan-runner"
     if [ ! -f "$EXECUTOR_LINUX_BIN" ]; then
         echo "ERROR: Linux executor binary not found at $EXECUTOR_LINUX_BIN"
         exit 1
@@ -769,7 +769,7 @@ slurm-workflow:
     cargo build -p aithericon-sdk --example executor_net
     cargo zigbuild --manifest-path "$EXECUTOR_REPO/Cargo.toml" -p aithericon-executor-service --target x86_64-unknown-linux-gnu
 
-    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/mekhan-runner"
     if [ ! -f "$EXECUTOR_LINUX_BIN" ]; then
         echo "ERROR: Linux executor binary not found at $EXECUTOR_LINUX_BIN"
         exit 1
@@ -990,7 +990,7 @@ slurm-campaign:
     cargo build -p aithericon-sdk --example executor_net
     cargo zigbuild --manifest-path "$EXECUTOR_REPO/Cargo.toml" -p aithericon-executor-service --target x86_64-unknown-linux-gnu
 
-    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/mekhan-runner"
     if [ ! -f "$EXECUTOR_LINUX_BIN" ]; then
         echo "ERROR: Linux executor binary not found at $EXECUTOR_LINUX_BIN"
         exit 1
@@ -1196,7 +1196,7 @@ slurm-python:
     cargo build -p aithericon-sdk --example executor_net
     cargo zigbuild --manifest-path "$EXECUTOR_REPO/Cargo.toml" -p aithericon-executor-service --features python,file-metadata --target x86_64-unknown-linux-gnu
 
-    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/aithericon-executor-service"
+    EXECUTOR_LINUX_BIN="$EXECUTOR_REPO/target/x86_64-unknown-linux-gnu/debug/mekhan-runner"
     if [ ! -f "$EXECUTOR_LINUX_BIN" ]; then
         echo "ERROR: Linux executor binary not found at $EXECUTOR_LINUX_BIN"
         exit 1
@@ -1459,7 +1459,7 @@ expense:
     echo "2. Cleaning up stale processes..."
     lsof -ti :3030 | xargs kill 2>/dev/null || true
     lsof -ti :5173 | xargs kill 2>/dev/null || true
-    pkill -f "aithericon-executor-service" 2>/dev/null || true
+    pkill -f "mekhan-runner" 2>/dev/null || true
 
     echo ""
     echo "3. Starting NATS..."
@@ -1486,7 +1486,7 @@ expense:
     echo "5. Starting aithericon-executor..."
     set -a; source infra/executor/aithericon-executor.env; set +a
     RUST_LOG=info \
-    "$EXECUTOR_REPO/target/debug/aithericon-executor-service" > /tmp/expense-executor.log 2>&1 &
+    "$EXECUTOR_REPO/target/debug/mekhan-runner" > /tmp/expense-executor.log 2>&1 &
     EXECUTOR_PID=$!
     disown
     sleep 2
@@ -1697,7 +1697,7 @@ research-brief:
     # -- Register Nomad executor template (with VAULT_ADDR for secret unwrapping) --
     echo ""
     echo "7. Registering executor job template..."
-    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/aithericon-executor-service"
+    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/mekhan-runner"
     jq --arg bin "$EXECUTOR_BIN" \
        '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
         | .Job.TaskGroups[0].Tasks[0].Env.VAULT_ADDR = "http://localhost:8200"
@@ -1719,7 +1719,7 @@ research-brief:
     EXECUTOR_SOURCE=nats_queue \
     EXECUTOR_LIFETIME=daemon \
     RUST_LOG=info \
-    "$EXECUTOR_REPO/target/debug/aithericon-executor-service" > /tmp/research-executor.log 2>&1 &
+    "$EXECUTOR_REPO/target/debug/mekhan-runner" > /tmp/research-executor.log 2>&1 &
     EXECUTOR_PID=$!
     disown
     sleep 2
@@ -2060,7 +2060,7 @@ invoice-processing:
     # -- Register Nomad executor template (with VAULT_ADDR for secret unwrapping) --
     echo ""
     echo "8. Registering executor job template..."
-    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/aithericon-executor-service"
+    EXECUTOR_BIN="$(cd "$EXECUTOR_REPO" && pwd)/target/debug/mekhan-runner"
     jq --arg bin "$EXECUTOR_BIN" \
        '.Job.TaskGroups[0].Tasks[0].Config.command = $bin
         | .Job.TaskGroups[0].Tasks[0].Env.VAULT_ADDR = "http://localhost:8200"
@@ -2082,7 +2082,7 @@ invoice-processing:
     EXECUTOR_SOURCE=nats_queue \
     EXECUTOR_LIFETIME=daemon \
     RUST_LOG=info \
-    "$EXECUTOR_REPO/target/debug/aithericon-executor-service" > /tmp/invoice-executor.log 2>&1 &
+    "$EXECUTOR_REPO/target/debug/mekhan-runner" > /tmp/invoice-executor.log 2>&1 &
     EXECUTOR_PID=$!
     disown
     sleep 2
@@ -2424,7 +2424,7 @@ invoice-processing-spawn:
     EXECUTOR_SOURCE=nats_queue \
     EXECUTOR_LIFETIME=daemon \
     RUST_LOG=info \
-    "$EXECUTOR_REPO/target/debug/aithericon-executor-service" > /tmp/invoice-executor.log 2>&1 &
+    "$EXECUTOR_REPO/target/debug/mekhan-runner" > /tmp/invoice-executor.log 2>&1 &
     EXECUTOR_PID=$!
     disown
     sleep 2

@@ -58,8 +58,8 @@ start_trace_exporter() {
 
 # Kill stale executor processes.
 kill_stale_executor() {
-    if pgrep -f "aithericon-executor-service" > /dev/null 2>&1; then
-        pkill -f "aithericon-executor-service" 2>/dev/null || true
+    if pgrep -f "mekhan-runner" > /dev/null 2>&1; then
+        pkill -f "mekhan-runner" 2>/dev/null || true
         sleep 1
     fi
     pkill -f "mock_executor" 2>/dev/null || true

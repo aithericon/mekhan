@@ -654,7 +654,7 @@ pg-demo-seed:
     psql "{{database_url}}" -v ON_ERROR_STOP=1 -f demos/19-postgres-node/seed.sql
     echo "  ✓ demo_pg.widgets seeded (schema demo_pg, 3 baseline rows)"
 
-# ── Executor (aithericon-executor-service, daemon mode) ──────────────────────
+# ── Executor (mekhan-runner binary, daemon mode) ─────────────────────────────
 #
 # The dev executor is the platform's WORKER. Workers are no longer anonymous:
 # every worker enrolls into a worker GROUP and binds its consumer to that
@@ -807,7 +807,7 @@ up-executor:
     # redirect cargo did. Shared-target setups (umbrella .envrc) put
     # everything under `~/.cache/cargo-targets/...`; the bare workspace
     # fallback is what cargo uses when no env var is set.
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     # Robust launch: fully detached + early-crash detection (no phantom ✓ /
     # empty-log mystery). spawn-daemon.sh writes the pidfile, prints the live
     # PID, and `exit 1`s with the log tail if the binary dies within 1s —
@@ -865,7 +865,7 @@ up-runner:
       exit 0
     fi
     # Reuse the executor binary the worker-pool daemon built (same features).
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1084,7 +1084,7 @@ up-model-runner n="1":
     fi
     # Reuse the executor binary (same {{executor_features}} — includes `vllm`,
     # which gates the model agent). Build if absent.
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1269,7 +1269,7 @@ ros-up:
 
     # Reuse the executor binary the worker-pool daemon built (same features —
     # `ros` is in {{executor_features}}). Build if absent.
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1444,7 +1444,7 @@ xarm-up:
 
     # Reuse the executor binary the worker-pool / ros daemons built (same features
     # — `ros` is in {{executor_features}}). Build if absent.
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1565,7 +1565,7 @@ isaac-runner-up bridge_url="ws://131.246.221.73:9090":
     just dev::_dirs
 
     # Same executor binary as the other ROS runners (`ros` is in the features).
-    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1785,7 +1785,7 @@ scheduler-up:
     fi
 
     # 2. Executor binary — reused by Nomad per job (run_to_completion).
-    exec_bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/aithericon-executor-service"
+    exec_bin="${CARGO_TARGET_DIR:-$PWD/executor/target}/debug/mekhan-runner"
     if [ ! -x "$exec_bin" ]; then
       echo "▶ building executor (features: {{executor_features}})…"
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
@@ -1864,7 +1864,7 @@ scheduler-up:
     #    scheduler layer is up, INLINE AutomatedSteps cannot run.
     echo "▶ pausing dev executor daemon (Nomad worker takes over `executor` queue)…"
     just dev::down-executor
-    # Defensively kill any UNTRACKED aithericon-executor-service processes —
+    # Defensively kill any UNTRACKED mekhan-runner (executor) processes —
     # `down-executor` only touches the main-repo pidfile, so a stray daemon
     # left over from a worktree session (see [[feedback_worktree_agent_cwd]])
     # would still consume jobs off `executor` and silently shadow the Nomad
@@ -1876,12 +1876,12 @@ scheduler-up:
     # process refused to terminate. Nomad/Slurm-launched executors are short-
     # lived per dispatch and respawned per resource_lease_acquire, so killing them
     # is harmless.
-    pkill -TERM -f aithericon-executor-service 2>/dev/null || true
+    pkill -TERM -f mekhan-runner 2>/dev/null || true
     for _ in $(seq 1 10); do
-      pgrep -f aithericon-executor-service >/dev/null 2>&1 || break
+      pgrep -f mekhan-runner >/dev/null 2>&1 || break
       sleep 0.5
     done
-    pkill -KILL -f aithericon-executor-service 2>/dev/null || true
+    pkill -KILL -f mekhan-runner 2>/dev/null || true
 
     # Apalis-NATS consumer purge. The dev daemon's executor binary creates
     # catch-all (`filter_subject=None`) consumers on the `executor_{high,
@@ -2051,7 +2051,7 @@ slurm-up:
     (cd executor && cargo zigbuild -p aithericon-executor-service \
        --features "python,http,http-cancel,opendal-s3,url-inputs" \
        --target x86_64-unknown-linux-musl)
-    exec_bin="$PWD/executor/target/x86_64-unknown-linux-musl/debug/aithericon-executor-service"
+    exec_bin="$PWD/executor/target/x86_64-unknown-linux-musl/debug/mekhan-runner"
     if [ ! -f "$exec_bin" ]; then
       echo "✗ Linux executor binary not found at $exec_bin" >&2; exit 1; fi
 
@@ -2199,12 +2199,12 @@ slurm-up:
     #    layer is up, INLINE AutomatedSteps cannot run.
     echo "▶ pausing dev executor daemon (Slurm worker takes over `executor` queue)…"
     just dev::down-executor
-    pkill -TERM -f aithericon-executor-service 2>/dev/null || true
+    pkill -TERM -f mekhan-runner 2>/dev/null || true
     for _ in $(seq 1 10); do
-      pgrep -f aithericon-executor-service >/dev/null 2>&1 || break
+      pgrep -f mekhan-runner >/dev/null 2>&1 || break
       sleep 0.5
     done
-    pkill -KILL -f aithericon-executor-service 2>/dev/null || true
+    pkill -KILL -f mekhan-runner 2>/dev/null || true
 
     # Apalis-NATS consumer purge — see scheduler-up's identical block for the
     # rationale. Without this the Slurm-launched executor's per-job filtered

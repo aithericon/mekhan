@@ -175,7 +175,7 @@ if [ -f "$PID_DIR/executor.pid" ]; then
     fi
 fi
 # Also check if any aithericon-executor-service process is running
-if pgrep -f "aithericon-executor-service" > /dev/null 2>&1; then
+if pgrep -f "mekhan-runner" > /dev/null 2>&1; then
     executor_running=true
 fi
 
@@ -192,7 +192,7 @@ else
         source "$PETRI_LAB_DIR/infra/executor/aithericon-executor.env"
         set +a
         RUST_LOG=info \
-        ./target/debug/aithericon-executor-service > /tmp/executor-e2e.log 2>&1 &
+        ./target/debug/mekhan-runner > /tmp/executor-e2e.log 2>&1 &
         echo $! > "$PID_DIR/executor.pid"
     )
 
@@ -312,7 +312,7 @@ done
 # Check executor by PID
 if [ -f "$PID_DIR/executor.pid" ] && kill -0 "$(cat "$PID_DIR/executor.pid")" 2>/dev/null; then
     log "  aithericon-executor: OK (PID $(cat "$PID_DIR/executor.pid"))"
-elif pgrep -f "aithericon-executor-service" > /dev/null 2>&1; then
+elif pgrep -f "mekhan-runner" > /dev/null 2>&1; then
     log "  aithericon-executor: OK (external process)"
 else
     log "  aithericon-executor: FAILED"

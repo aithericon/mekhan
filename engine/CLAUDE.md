@@ -174,36 +174,36 @@ The SDK provides a fluent Rust DSL for defining scenarios that compile to AIR (A
 | `PETRI_VALIDATE_SCHEMAS` | `true` | Set to `false` to disable all schema validation |
 | `RUST_LOG` | `info` | Tracing filter (e.g., `info,petri_application=debug`) |
 
-## Debugging Petri Nets with the Aithericon CLI
+## Debugging Petri Nets with the `mekhan-debug` CLI
 
-**When debugging net behavior, always use the `aithericon` CLI** rather than raw curl or guessing at state. Build with `cargo build -p aithericon-cli`.
+**When debugging net behavior, always use the `mekhan-debug` CLI** rather than raw curl or guessing at state. Build with `cargo build -p aithericon-cli`.
 
 ```bash
 # Overview of all deployed nets
-aithericon status
+mekhan-debug status
 
 # Scan ALL nets for errors (EffectFailed + ErrorOccurred) in one shot
-aithericon errors
-aithericon errors --last 50
+mekhan-debug errors
+mekhan-debug errors --last 50
 
 # Current token marking — where are tokens, which transitions are enabled
-aithericon state <net-id>
+mekhan-debug state <net-id>
 
 # Recent events (last 20 by default)
-aithericon events <net-id>
-aithericon events <net-id> --last 50
-aithericon events <net-id> --type EffectFailed
+mekhan-debug events <net-id>
+mekhan-debug events <net-id> --last 50
+mekhan-debug events <net-id> --type EffectFailed
 
 # Live event stream
-aithericon events <net-id> --tail
+mekhan-debug events <net-id> --tail
 
 # Cross-net tracing by trace ID or signal key
-aithericon trace <trace_id_or_signal_key>
+mekhan-debug trace <trace_id_or_signal_key>
 
 # Interactive: wake, fire, inject
-aithericon wake <net-id>
-aithericon fire <net-id> <transition-id>
-aithericon inject <net-id> <place-id> '{"key": "value"}'
+mekhan-debug wake <net-id>
+mekhan-debug fire <net-id> <transition-id>
+mekhan-debug inject <net-id> <place-id> '{"key": "value"}'
 ```
 
 When something is stuck: `status` -> `errors` -> `state <net>` -> `trace <key>`.

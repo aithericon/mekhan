@@ -7,7 +7,7 @@ authors.workspace = true
 description = "CLI tool for deploying Aithericon Petri Net topologies"
 
 [[bin]]
-name = "aithericon"
+name = "mekhan-debug"
 path = "src/main.rs"
 
 [dependencies]

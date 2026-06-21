@@ -8,7 +8,7 @@ Terraform/OpenTofu layers + Docker context that deploy mekhan-service to the [He
 |---|---|
 | [`docker/Dockerfile.ci-build`](docker/Dockerfile.ci-build) | Fat CI builder image — everything the build pool needs. Pushed to `forge.aithericon.eu/milanender/mekhan-ci-builder:latest`. |
 | [`docker/Dockerfile.service.prebuilt`](docker/Dockerfile.service.prebuilt) | Tiny Alpine runtime image. Takes the prebuilt static `mekhan-service` binary + the SvelteKit `app/build/` bundle. |
-| [`docker/Dockerfile.executor`](docker/Dockerfile.executor) | Comprehensive Debian image for `aithericon-executor-service` (kreuzberg + tesseract + python). Built on demand; not deployed by these layers yet. |
+| [`docker/Dockerfile.executor`](docker/Dockerfile.executor) | Comprehensive Debian image for the `mekhan-runner` executor (kreuzberg + tesseract + python). Built on demand; not deployed by these layers yet. |
 | [`dev/`](dev/) | TF layer that deploys the **dev** environment (`mekhan-service-dev`, `mekhan.dev.aithericon.eu`) to the shared HetznerCluster (10.20.x). |
 | [`prod/`](prod/) | TF layer that deploys the **prod** environment (`mekhan-service-prod`, `mekhan.aithericon.eu`) to the **same** cluster, fully isolated. |
 | [`zitadel/`](zitadel/) | Local-only bootstrap for the docker-compose Zitadel; orthogonal to Nomad deploy. |
