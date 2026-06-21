@@ -779,8 +779,7 @@ mod tests {
             "digest must be bare lowercase hex, got: {digest}"
         );
         assert_eq!(
-            digest,
-            "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+            digest, "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
             "sha256(\"test\") must match the legacy fixture hash"
         );
         // Algorithm tag is reported too.
