@@ -56,10 +56,13 @@ provenance.
 - **Provenance & reproducibility.** Every run has an auditable causality trail
   you can inspect and replay — wired into the same event log that makes
   execution durable.
-- **Multi-tenant by workspace.** Templates, runs, resources, data, and members
-  are isolated per **workspace**, with role-based access (viewer / editor /
-  admin / owner) and sharing; shared infrastructure (worker and runner groups,
-  the model pool) lives in a global **platform** scope visible across tenants.
+- **Multi-tenant, with SSO & 2FA.** Templates, runs, resources, data, and
+  members are isolated per **workspace**, with role-based access (viewer /
+  editor / admin / owner) and sharing; shared infrastructure (worker and runner
+  groups, the model pool) lives in a global **platform** scope. Identity is
+  delegated to **Zitadel** — OIDC single sign-on, **two-factor auth (2FA/MFA)**,
+  and federation to any external provider (Google, Microsoft, GitHub, SAML,
+  LDAP, …).
 
 ## Execution targets & feature highlights
 
@@ -169,6 +172,9 @@ fit together, see [`docs/README.md`](./docs/README.md).
 
 Optional per deployment:
 
+- **Zitadel** — identity & access: OIDC single sign-on, two-factor auth
+  (2FA/MFA), and federation to external providers. Dev defaults to an offline
+  no-op auth; `just dev up-auth` switches to real Zitadel-backed login.
 - **Nomad** or **Slurm** — HPC scheduling
 - **Ollama** or **vLLM** — LLM serving
 - **Docker** — container steps
