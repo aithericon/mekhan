@@ -128,29 +128,33 @@ impl NatsCancelListener {
         info!(%stream_name, %filter, "JetStream cancel listener started");
 
         let handle = tokio::spawn(async move {
-            // Outer (re)bind loop: an ephemeral consumer is dropped server-side on
-            // a connection blip, so on any messages() error we rebuild it. A fresh
-            // `DeliverPolicy::New` consumer is the desired behaviour anyway — never
-            // replay cancels accumulated during the gap.
-            loop {
-                if shutdown.is_cancelled() {
-                    break;
-                }
-
-                let mut messages = match consumer.messages().await {
+            'outer: loop {
+                // Open a heartbeated message stream on the current consumer. The
+                // heartbeat surfaces a silently-stalled delivery as an error so we
+                // rebind instead of hanging; the continuous pull also keeps the
+                // ephemeral consumer's inactivity timer reset (so it is not reaped
+                // between cancels, which can be hours apart).
+                let mut messages = match consumer
+                    .stream()
+                    .heartbeat(Duration::from_secs(15))
+                    .messages()
+                    .await
+                {
                     Ok(m) => m,
                     Err(e) => {
-                        warn!(error = %e, "failed to open cancel message stream; rebinding");
-                        if Self::sleep_or_shutdown(&shutdown, Duration::from_secs(1)).await {
-                            break;
+                        warn!(error = %e, "failed to open cancel message stream");
+                        if !Self::rebind(
+                            &jetstream,
+                            &stream_name,
+                            &filter,
+                            &shutdown,
+                            &mut consumer,
+                        )
+                        .await
+                        {
+                            break 'outer;
                         }
-                        match Self::bind_consumer(&jetstream, &stream_name, &filter).await {
-                            Ok(c) => consumer = c,
-                            Err(e) => {
-                                warn!(error = %e, "failed to rebind cancel consumer; retrying");
-                            }
-                        }
-                        continue;
+                        continue 'outer;
                     }
                 };
 
@@ -159,7 +163,7 @@ impl NatsCancelListener {
                         biased;
                         _ = shutdown.cancelled() => {
                             info!("JetStream cancel listener shutting down");
-                            return;
+                            break 'outer;
                         }
                         next = messages.next() => {
                             match next {
@@ -179,6 +183,10 @@ impl NatsCancelListener {
                                     }
                                     // AckPolicy::None — nothing to ack.
                                 }
+                                // A deleted/stalled ephemeral consumer surfaces here
+                                // (e.g. "no responders"). Break to rebind a FRESH
+                                // consumer rather than reusing the dead one (which
+                                // would tight-loop on the same error).
                                 Some(Err(e)) => {
                                     warn!(error = %e, "cancel message error; rebinding consumer");
                                     break;
@@ -191,10 +199,39 @@ impl NatsCancelListener {
                         }
                     }
                 }
+
+                // Inner loop exited on a stream error/close: back off, then replace
+                // the consumer with a fresh bind before looping.
+                if !Self::rebind(&jetstream, &stream_name, &filter, &shutdown, &mut consumer).await
+                {
+                    break 'outer;
+                }
             }
         });
 
         Ok(handle)
+    }
+
+    /// Back off (interruptible by shutdown), then replace `consumer` with a fresh
+    /// ephemeral bind. Returns `false` if shutdown fired during the backoff (the
+    /// caller should stop). A failed rebind leaves the stale consumer in place;
+    /// the next `messages()` call errors and routes back here, so the 1s backoff
+    /// bounds the retry rate.
+    async fn rebind(
+        jetstream: &jetstream::Context,
+        stream_name: &str,
+        filter: &str,
+        shutdown: &CancellationToken,
+        consumer: &mut jetstream::consumer::PullConsumer,
+    ) -> bool {
+        if Self::sleep_or_shutdown(shutdown, Duration::from_secs(1)).await {
+            return false;
+        }
+        match Self::bind_consumer(jetstream, stream_name, filter).await {
+            Ok(c) => *consumer = c,
+            Err(e) => warn!(error = %e, "failed to rebind cancel consumer; will retry"),
+        }
+        true
     }
 
     /// Bind a fresh ephemeral pull consumer (no `durable_name`) on the cancel
@@ -211,9 +248,10 @@ impl NatsCancelListener {
                 filter_subject: filter.to_string(),
                 deliver_policy: jetstream::consumer::DeliverPolicy::New,
                 ack_policy: jetstream::consumer::AckPolicy::None,
-                // Auto-clean the ephemeral consumer shortly after this runner
-                // stops pulling (process exit / connection loss).
-                inactive_threshold: Duration::from_secs(30),
+                // Backstop only — the continuous pull keeps the consumer active,
+                // so this idle-reap window is effectively never hit during normal
+                // operation. Generous so a brief rebind gap can't orphan-reap it.
+                inactive_threshold: Duration::from_secs(300),
                 ..Default::default()
             })
             .await?;
