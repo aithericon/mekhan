@@ -804,6 +804,9 @@ where
         }
 
         let eval_notify = Arc::new(Notify::new());
+        // Bind the waker so `service.create_token` wakes this net's eval loop
+        // directly — no caller has to remember to notify.
+        service.set_eval_notify(eval_notify.clone());
 
         // Woken nets (re-hydrated from NATS) already have topology and marking;
         // they should resume in Running mode so eval fires on token injection.
