@@ -19,6 +19,8 @@ Mekhan turns a process into a **durable, executable graph** — workflows run on
 an event-sourced engine that persists every step, so long-running work survives
 crashes and spans people, HPC clusters, and lab hardware without losing state.
 
+![The Mekhan workflow editor showing a crawl-campaign workflow: a Start node with typed parameters, a Python step, a cursor-loop region wrapping a sub-workflow, and a Done node — each with per-step run status.](./docs/assets/workflow-editor.jpeg)
+
 ## What it does
 
 - **Durable by default.** Execution state is event-sourced and persisted
