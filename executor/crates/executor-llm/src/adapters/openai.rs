@@ -63,8 +63,18 @@ impl CompletionPort for OpenAiAdapter {
             .unwrap_or_else(|| "https://api.openai.com".into());
 
         let identity = IdentityHeaders::from_env(env);
+        // Org/billing account (OpenAI: `OpenAI-Organization`; HF Inference
+        // Providers: `X-HF-Bill-To`). Staged into env by `backend.rs`.
+        let organization = env.get("OPENAI_ORGANIZATION").cloned();
 
-        openai_complete(request, api_key.as_deref(), &base_url, &identity).await
+        openai_complete(
+            request,
+            api_key.as_deref(),
+            &base_url,
+            &identity,
+            organization.as_deref(),
+        )
+        .await
     }
 
     fn name(&self) -> &str {
@@ -296,6 +306,7 @@ async fn openai_complete(
     api_key: Option<&str>,
     base_url: &str,
     identity: &IdentityHeaders,
+    organization: Option<&str>,
 ) -> Result<CompletionResponse, LlmError> {
     // Decide which json mode to try first based on what we've learned
     // about this model. Default = optimistic strict json_schema; if we
@@ -328,6 +339,16 @@ async fn openai_complete(
         };
         let rb = match &identity.step_id {
             Some(v) => rb.header("X-Step-Id", v),
+            None => rb,
+        };
+        // Org / billing account. OpenAI reads `OpenAI-Organization`; Hugging
+        // Face Inference Providers read `X-HF-Bill-To` to bill the named org
+        // instead of the token owner's depletable personal credits. Send both
+        // — each provider ignores the other's header.
+        let rb = match organization {
+            Some(org) => rb
+                .header("OpenAI-Organization", org)
+                .header("X-HF-Bill-To", org),
             None => rb,
         };
         match &identity.request_id {
