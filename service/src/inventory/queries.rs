@@ -249,12 +249,17 @@ pub async fn upsert_inventory_copy(
 /// path's final segment (empty → NULL), `mime_type`/`file_metadata` from the
 /// probing crawl's fmeta blob when present.
 ///
-/// Conflict posture is ENRICH, never clobber: an existing entry keeps its
-/// name/size/mime and any non-empty `file_metadata` (the register/projector
-/// path stays authoritative); only gaps are filled. Intra-batch duplicate
-/// hashes are collapsed to the first occurrence (`DISTINCT ON` — required
-/// because `DO UPDATE`, unlike the old `DO NOTHING`, errors on touching one
-/// row twice in a statement). Returns rows inserted-or-updated.
+/// Conflict posture is ENRICH-then-UPGRADE, never clobber: an existing entry
+/// keeps its name/size/mime and any non-empty `file_metadata` — EXCEPT a
+/// degraded (checksum-only, `format` = `unknown` sentinel) `file_metadata` blob,
+/// which a real structural extraction supersedes. This lets a re-crawl by a
+/// better-equipped runner (e.g. one with the `netcdf` feature) heal rows the
+/// first crawl could only checksum, without clobbering a concrete extraction
+/// with a poorer probe. See the `file_metadata` CASE in the SQL for the exact
+/// fill/upgrade/keep rules. Intra-batch duplicate hashes are collapsed to the
+/// first occurrence (`DISTINCT ON` — required because `DO UPDATE`, unlike the
+/// old `DO NOTHING`, errors on touching one row twice in a statement). Returns
+/// rows inserted-or-updated.
 pub async fn upsert_catalogue_by_hash_unnest(
     tx: &mut Transaction<'_, Postgres>,
     workspace_id: Uuid,
@@ -281,9 +286,27 @@ pub async fn upsert_catalogue_by_hash_unnest(
             name          = COALESCE(catalogue_entries.name, EXCLUDED.name),
             size_bytes    = COALESCE(catalogue_entries.size_bytes, EXCLUDED.size_bytes),
             mime_type     = COALESCE(catalogue_entries.mime_type, EXCLUDED.mime_type),
-            file_metadata = CASE WHEN catalogue_entries.file_metadata = '{}'::jsonb
-                                 THEN EXCLUDED.file_metadata
-                                 ELSE catalogue_entries.file_metadata END
+            -- file_metadata posture: fill, then UPGRADE a degraded blob, but
+            -- never clobber a real extraction with a poorer one.
+            --   (1) empty slot           -> fill.
+            --   (2) DEGRADED slot         -> upgrade. A checksum-only fallback
+            --       records `format` as the `unknown` sentinel object
+            --       (`{"unknown": "<ext>"}`) — no backend modelled the file
+            --       (e.g. a NetCDF probed by a runner that lacked the `netcdf`
+            --       feature, or any unmodelled binary). A later crawl that DID
+            --       model it (incoming non-empty, `format` not `unknown`)
+            --       supersedes the stub. Re-probing a still-unmodelled file
+            --       (incoming also `unknown`) hits neither branch -> no churn,
+            --       and a concrete extraction is never overwritten by a stub.
+            file_metadata = CASE
+                WHEN catalogue_entries.file_metadata = '{}'::jsonb
+                    THEN EXCLUDED.file_metadata
+                WHEN jsonb_exists(catalogue_entries.file_metadata->'format', 'unknown')
+                     AND EXCLUDED.file_metadata <> '{}'::jsonb
+                     AND NOT jsonb_exists(EXCLUDED.file_metadata->'format', 'unknown')
+                    THEN EXCLUDED.file_metadata
+                ELSE catalogue_entries.file_metadata
+            END
         "#,
     )
     .bind(hashes)
