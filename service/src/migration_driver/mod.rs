@@ -211,6 +211,7 @@ pub async fn index_reconcile(
         max_batches: None,
         sink: None,
         probe: None,
+        probe_concurrency: 8.into(),
     };
 
     let sink = Arc::new(ReconcileSink::new(pool.clone(), file_server_id.to_string()));

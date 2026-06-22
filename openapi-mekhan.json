@@ -19968,6 +19968,11 @@
             ],
             "description": "Opt-in per-entry content probing during the walk:\n* `\"hash\"` — read each file once and emit its SHA-256 (bare lowercase\n  hex — the catalogue `content_hash` / reconcile join shape);\n* `\"full\"` — hash PLUS `fmeta` metadata extraction (format, mime,\n  tabular stats); unsupported formats degrade to checksum-only.\n\nAbsent / empty string = metadata-only walk (the default — integrity\nhashing then remains the separate `probe` op's job). A file that fails\nto probe is emitted hashless and counted in the `probe_errors` output\ninstead of failing the walk. With `\"full\"`, keep `batch_size` modest\n(≤ ~500): each item carries its metadata blob inside one sink publish."
           },
+          "probe_concurrency": {
+            "type": "integer",
+            "description": "Max number of files probed CONCURRENTLY during the walk (`probe` =\n`hash`/`full`). The walk lists + `stat`s sequentially (cheap), but the\nper-file content read + SHA-256 + `fmeta` parse is the expensive,\nfrequently latency-bound step — running several in flight overlaps disk\nseeks (especially many small files on a RAID array) and CPU parse.\nResults are still consumed in listing order, so `last_path` (the resume\ncursor) stays exact. `1` restores the historical one-at-a-time walk.\nDefault 8. Lower it for huge-file corpora — each in-flight `full` probe\nholds its own read/parse buffers, so N concurrent multi-GB probes cost\n~N× the per-probe memory. Has no effect when `probe` is off.\nInterpolation-capable like `batch_size`.",
+            "minimum": 0
+          },
           "resume_from": {
             "type": [
               "string",

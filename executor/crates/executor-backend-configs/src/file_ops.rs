@@ -22,6 +22,10 @@ fn default_crawl_batch_size() -> Interpolable<usize> {
     Interpolable::Value(5000)
 }
 
+fn default_crawl_probe_concurrency() -> Interpolable<usize> {
+    Interpolable::Value(8)
+}
+
 /// Default for `CrawlConfig.stat` — crawl `stat()`s each entry by default
 /// because the OpenDAL `fs` lister returns entries without
 /// `content_length`/`last_modified`, so size+mtime require a per-entry stat.
@@ -212,6 +216,20 @@ pub struct CrawlConfig {
     /// (≤ ~500): each item carries its metadata blob inside one sink publish.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub probe: Option<String>,
+    /// Max number of files probed CONCURRENTLY during the walk (`probe` =
+    /// `hash`/`full`). The walk lists + `stat`s sequentially (cheap), but the
+    /// per-file content read + SHA-256 + `fmeta` parse is the expensive,
+    /// frequently latency-bound step — running several in flight overlaps disk
+    /// seeks (especially many small files on a RAID array) and CPU parse.
+    /// Results are still consumed in listing order, so `last_path` (the resume
+    /// cursor) stays exact. `1` restores the historical one-at-a-time walk.
+    /// Default 8. Lower it for huge-file corpora — each in-flight `full` probe
+    /// holds its own read/parse buffers, so N concurrent multi-GB probes cost
+    /// ~N× the per-probe memory. Has no effect when `probe` is off.
+    /// Interpolation-capable like `batch_size`.
+    #[serde(default = "default_crawl_probe_concurrency")]
+    #[cfg_attr(feature = "schema", schema(value_type = usize))]
+    pub probe_concurrency: Interpolable<usize>,
 }
 
 /// Where (and how) sink-mode crawl batches are folded.
@@ -339,6 +357,7 @@ mod tests {
                     batch_size: 5000.into(),
                     resume_from: None,
                     stat: true,
+                    probe_concurrency: 8.into(),
                 }))
                 .unwrap();
                 assert!(back.get("sink").is_none());
