@@ -2890,6 +2890,81 @@ mod tests {
         );
     }
 
+    /// `suessco-loki-error-alert` is the cross-cluster sibling of
+    /// `loki-error-alert`: the same Cron → Loki → Agent → Decision → SMTP
+    /// chain, but the Loki step pins `deploymentModel.group = "suessco"` (so it
+    /// dispatches to a worker inside the Suessco cluster) and the Agent binds
+    /// Hugging Face Inference (`hf_inference`) instead of the internal router.
+    /// This pins that the alternate resource bindings + routing group compile.
+    #[test]
+    fn suessco_loki_error_alert_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/suessco-loki-error-alert"))
+            .expect("suessco-loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Suessco Loki Error-Log Alert");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000a2"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("suessco-loki-error-alert must compile");
+
+        // The Loki step binds the Suessco cluster resource (not aithericon's).
+        let loki_cfg = node_configs
+            .get("query_logs")
+            .expect("query_logs config must be parked")
+            .to_string();
+        assert!(
+            loki_cfg.contains("suessco_loki"),
+            "loki step must bind the suessco_loki resource: {loki_cfg}"
+        );
+
+        // The SMTP step keeps the literal Tera placeholders and the recipient.
+        let smtp_cfg = node_configs
+            .get("send_alert")
+            .expect("send_alert config must be parked")
+            .to_string();
+        assert!(
+            smtp_cfg.contains("{{ summarize.response }}"),
+            "smtp step must template against the agent summary: {smtp_cfg}"
+        );
+        assert!(
+            smtp_cfg.contains("{{ query_logs.entry_count }}"),
+            "smtp step must template against the upstream entry count: {smtp_cfg}"
+        );
+
+        // The agent binds Hugging Face Inference via the `openai` wire shape,
+        // keeping the `hf_inference` resource_alias that overlays the HF
+        // endpoint + org (X-HF-Bill-To) at fire time.
+        let agent_cfg = node_configs
+            .get("summarize")
+            .expect("summarize config must be parked");
+        assert_eq!(
+            agent_cfg.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "agent must compile to the openai wire shape: {agent_cfg}"
+        );
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("hf_inference"),
+            "the HF-binding alias must survive compile: {agent_cfg}"
+        );
+    }
+
     /// `output-safety-gate` is a SubWorkflow-shaped composable critic:
     /// a low-temperature LLM critic step (with a strict `CriticFlags` `$ref`
     /// response_format) followed by two Python steps (`verify`, `decide`)
