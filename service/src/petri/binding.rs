@@ -89,6 +89,14 @@ pub struct ResolvedBindings {
     /// `required` slots that resolved by NO tier (not even the baseline). The
     /// launcher run-gate rejects the launch when this is non-empty.
     pub unbound_required: Vec<RequirementSlot>,
+    /// Resource ids of HOME-BASELINE (tier-4) pool slots — the `pool-<id>`
+    /// capacity nets the instance bridges to that the launcher leaves baked
+    /// (no substitution). The launcher re-`ensure`s each under the launching
+    /// workspace before deploy so a workspace-owned pool the engine hibernated,
+    /// drifted, or lost is (re)materialized rather than failing the instance's
+    /// activation gate with `BRIDGE_TARGET_NET_MISSING`. Substituted (tier-1–3)
+    /// pools are ensured by the substitution loop instead.
+    pub baseline_pools: Vec<Uuid>,
 }
 
 impl ResolvedBindings {
@@ -215,6 +223,12 @@ pub async fn resolve_effective_bindings(
         // its AIR untouched. Only valid in the baseline's ORIGIN workspace — a
         // fork in another workspace must rebind (tier 1–3) or be gated.
         if is_home && baseline_satisfies(&manifest, slot) {
+            // Record this slot's baked pool net(s) so the launcher re-ensures
+            // them under the launching workspace (self-heal for a hibernated /
+            // drifted / engine-lost workspace-owned pool). DataResource slots
+            // bake `resource_keys` but no `net_ids` → contribute nothing here.
+            out.baseline_pools
+                .extend(baseline_pool_resource_ids(&manifest, slot));
             continue;
         }
 
@@ -256,6 +270,27 @@ fn baseline_satisfies(manifest: &RequirementsManifest, slot: &RequirementSlot) -
         .get(&slot.key)
         .map(|a| !a.net_ids.is_empty() || !a.resource_keys.is_empty())
         .unwrap_or(false)
+}
+
+/// The resource ids of the `pool-<resource_id>` capacity nets a baseline slot
+/// baked. Parsed back out of the slot's baked `net_ids` (the same
+/// `pool_net_id(resource_id)` scheme the compiler emits), so the launcher can
+/// re-ensure each net under the launching workspace. A DataResource slot (no
+/// `net_ids`) yields nothing; an unparseable id is skipped (defensive — a
+/// future net-id scheme change must not strand the launch).
+fn baseline_pool_resource_ids(
+    manifest: &RequirementsManifest,
+    slot: &RequirementSlot,
+) -> Vec<Uuid> {
+    let Some(addresses) = manifest.air_addresses.get(&slot.key) else {
+        return Vec::new();
+    };
+    addresses
+        .net_ids
+        .iter()
+        .filter_map(|net_id| net_id.strip_prefix("pool-"))
+        .filter_map(|raw| Uuid::parse_str(raw).ok())
+        .collect()
 }
 
 /// The workspace the template's baked baseline AIR resolved its resources in —
@@ -610,6 +645,55 @@ mod tests {
         // Slot with no address entry at all → also unsatisfied.
         let m2 = manifest_with(vec![slot("orphan", "capacity", true)], vec![]);
         assert!(!baseline_satisfies(&m2, &m2.slots[0]));
+    }
+
+    #[test]
+    fn baseline_pool_resource_ids_parses_pool_net_ids() {
+        let rid = Uuid::new_v4();
+        let m = manifest_with(
+            vec![slot("prod_gpu", "capacity", true)],
+            vec![(
+                "prod_gpu",
+                SlotAirAddresses {
+                    net_ids: vec![format!("pool-{rid}")],
+                    resource_keys: vec![],
+                },
+            )],
+        );
+        assert_eq!(
+            baseline_pool_resource_ids(&m, &m.slots[0]),
+            vec![rid],
+            "the launcher must recover the pool resource id to re-ensure its net"
+        );
+    }
+
+    #[test]
+    fn baseline_pool_resource_ids_skips_data_resources_and_garbage() {
+        // A DataResource slot bakes resource_keys but no net_ids → no pools.
+        let data = manifest_with(
+            vec![slot("main_db", "postgres", true)],
+            vec![(
+                "main_db",
+                SlotAirAddresses {
+                    net_ids: vec![],
+                    resource_keys: vec!["main_db".to_string()],
+                },
+            )],
+        );
+        assert!(baseline_pool_resource_ids(&data, &data.slots[0]).is_empty());
+
+        // A net id that isn't `pool-<uuid>` is skipped, not panicked on.
+        let garbage = manifest_with(
+            vec![slot("weird", "capacity", true)],
+            vec![(
+                "weird",
+                SlotAirAddresses {
+                    net_ids: vec!["pool-not-a-uuid".to_string(), "staging-xyz".to_string()],
+                    resource_keys: vec![],
+                },
+            )],
+        );
+        assert!(baseline_pool_resource_ids(&garbage, &garbage.slots[0]).is_empty());
     }
 
     #[test]
