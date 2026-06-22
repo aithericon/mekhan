@@ -23,7 +23,13 @@ fn default_crawl_batch_size() -> Interpolable<usize> {
 }
 
 fn default_crawl_probe_concurrency() -> Interpolable<usize> {
-    Interpolable::Value(8)
+    // 2, not 8: with `probe: "full"` and heavy scientific formats (NetCDF-4 /
+    // HDF5 files in the hundreds of MB), 8 concurrent extractions read+parse
+    // several large files at once and can exhaust a modest runner host (a NAS
+    // OOM/swap-thrashed its docker daemon at 8). 2 keeps full-probe crawls of
+    // big binaries survivable; checksum/hash-only probes are light either way.
+    // TODO: surface as a crawl node config so it's tunable per-trigger.
+    Interpolable::Value(2)
 }
 
 /// Default for `CrawlConfig.stat` — crawl `stat()`s each entry by default
