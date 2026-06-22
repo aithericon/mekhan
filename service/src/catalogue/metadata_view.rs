@@ -168,6 +168,11 @@ pub struct FileMetadataView {
     pub size_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub modified_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// The file's real creation/birth time on disk (filesystem btime), extracted
+    /// at probe time. NOT the catalogue ingest time — that's the row's own
+    /// `created_at`. `None` on filesystems/platforms that don't expose btime.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unix_mode: Option<u32>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -224,6 +229,7 @@ impl FileMetadataView {
             num_columns: fm.num_columns,
             size_bytes: fm.file_size_bytes,
             modified_at: fm.modified_at,
+            created_at: fm.created_at,
             unix_mode: fm.unix_mode,
             readonly: fm.readonly,
             encrypted: fm.encrypted,
