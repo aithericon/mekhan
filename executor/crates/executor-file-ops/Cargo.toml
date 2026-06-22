@@ -26,6 +26,14 @@ async-compression = { workspace = true }
 futures = { workspace = true }
 uuid = { workspace = true }
 
+[features]
+default = []
+# Adds NetCDF-4/HDF5 structural metadata to the crawl probe (dimensions,
+# variables, attributes). Pulls fmeta's `netcdf` backend, which links native
+# `libnetcdf` + `libhdf5` — only enable on a target that has those C libs (the
+# glibc container image), NEVER the static-musl edge build.
+netcdf = ["aithericon-file-metadata/netcdf"]
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 opendal = { workspace = true, features = ["services-memory"] }

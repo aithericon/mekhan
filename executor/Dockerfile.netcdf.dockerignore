@@ -1,0 +1,39 @@
+# Per-Dockerfile ignore for executor/Dockerfile.netcdf (BuildKit uses this
+# instead of the repo-root .dockerignore, so the mekhan image build is
+# unaffected). Keep ONLY shared/ + executor/ sources; the executor workspace's
+# path deps reach ../shared/{secrets,backends,apalis,file-metadata}.
+
+# Build artefacts at any depth (executor/target is ~tens of GB).
+**/target
+**/node_modules
+**/.svelte-kit
+**/.output
+
+# Siblings the executor build never touches.
+app
+service
+engine
+docs
+demos
+deploy
+just
+justfile
+Cross.toml
+docker-compose.yml
+
+# VCS / tooling / editor / CI noise.
+.git
+.gitignore
+.dev
+.claude
+.serena
+.agent_status
+.woodpecker
+.github
+.vscode
+.idea
+.zed
+.DS_Store
+*.md
+.env
+.env.*
