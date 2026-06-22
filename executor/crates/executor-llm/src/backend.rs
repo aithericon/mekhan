@@ -223,6 +223,15 @@ impl ExecutionBackend for LlmBackend {
             env.entry(env_key.to_string())
                 .or_insert_with(|| base_url.clone());
         }
+        // Organization / billing account — the OpenAI-compatible adapter
+        // forwards this as `OpenAI-Organization` AND `X-HF-Bill-To` so HF
+        // Inference Provider usage bills to the named org. OpenAI-only key.
+        if let Some(ref organization) = config.organization {
+            if matches!(config.provider, crate::config::Provider::OpenAi) {
+                env.entry("OPENAI_ORGANIZATION".to_string())
+                    .or_insert_with(|| organization.clone());
+            }
+        }
 
         // Stamp inference-attribution identity into env under well-known
         // keys so the OpenAI-compatible adapter can forward them as
@@ -520,6 +529,9 @@ fn overlay_resource(
     }
     if config.base_url.is_none() {
         config.base_url = resource.base_url;
+    }
+    if config.organization.is_none() {
+        config.organization = resource.organization;
     }
     Ok(())
 }
