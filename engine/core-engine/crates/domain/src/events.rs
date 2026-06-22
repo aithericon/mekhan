@@ -377,29 +377,81 @@ impl PersistedEvent {
     }
 }
 
-/// Verify the integrity of an event chain.
+/// Verify the integrity of a FULL event chain starting at genesis (sequence 0).
+///
+/// Requires `events[0]` to be the genesis event: `previous_hash == None` and
+/// `sequence == 0`, with each subsequent event's `sequence` equal to its
+/// position. Use this only when the slice is guaranteed to begin at the start
+/// of the log. For a **contiguous tail** of a bounded log (where the earliest
+/// events have been evicted and `events[0].sequence > 0`), use
+/// [`verify_event_chain_from`] — this function would otherwise false-flag a
+/// perfectly valid tail as broken because its first event is not genesis.
 pub fn verify_event_chain(events: &[PersistedEvent]) -> bool {
+    verify_event_chain_inner(events, true)
+}
+
+/// Verify the integrity of a CONTIGUOUS event chain that may start mid-log.
+///
+/// This is the chain verifier for the bounded event store: it does **not**
+/// require `events[0]` to be the genesis event. It verifies:
+/// - each event's own hash (`verify_hash`),
+/// - intra-slice hash linkage (`events[i].previous_hash == events[i-1].hash`),
+/// - contiguous, monotonically increasing `.sequence` values
+///   (`events[i].sequence == events[i-1].sequence + 1`).
+///
+/// The first event is only required to be genesis (`previous_hash == None`)
+/// when its `.sequence` is `0`; if it starts at a higher sequence (a tail whose
+/// prefix was evicted) its `previous_hash` is expected to be `Some(_)` and is
+/// not cross-checked against the (absent) predecessor.
+///
+/// A `true` result means "this slice is an unbroken, correctly hash-linked
+/// run" — which is exactly what callers serving a partial-but-contiguous tail
+/// of the durable log want, without misreporting a valid tail as corrupt.
+pub fn verify_event_chain_from(events: &[PersistedEvent]) -> bool {
+    verify_event_chain_inner(events, false)
+}
+
+/// Shared chain verifier. `require_genesis_first` toggles whether the slice's
+/// first element must be the genesis event (sequence 0, no previous hash).
+fn verify_event_chain_inner(events: &[PersistedEvent], require_genesis_first: bool) -> bool {
     for (i, event) in events.iter().enumerate() {
         // Verify individual hash
         if !event.verify_hash() {
             return false;
         }
 
-        // Verify chain linkage
         if i == 0 {
-            if event.previous_hash.is_some() {
-                return false; // First event should have no previous hash
+            if require_genesis_first {
+                // Strict mode: the slice must start at genesis.
+                if event.previous_hash.is_some() || event.sequence != 0 {
+                    return false;
+                }
+            } else {
+                // Tail mode: a slice that genuinely starts at genesis still must
+                // have no previous hash; a mid-log tail (sequence > 0) must have
+                // one (we cannot cross-check it — the predecessor was evicted).
+                if event.sequence == 0 {
+                    if event.previous_hash.is_some() {
+                        return false;
+                    }
+                } else if event.previous_hash.is_none() {
+                    return false;
+                }
             }
         } else {
+            // Intra-slice linkage and contiguity (both modes).
             let expected_prev = &events[i - 1].hash;
             match &event.previous_hash {
                 Some(prev) if prev == expected_prev => {}
                 _ => return false,
             }
+            if event.sequence != events[i - 1].sequence + 1 {
+                return false;
+            }
         }
 
-        // Verify sequence numbers
-        if event.sequence != i as u64 {
+        // Strict mode additionally pins absolute positions to sequence numbers.
+        if require_genesis_first && event.sequence != i as u64 {
             return false;
         }
     }
@@ -490,6 +542,76 @@ mod tests {
 
         let events = vec![event1, event2];
         assert!(!verify_event_chain(&events));
+    }
+
+    /// Build a contiguous run of `n` correctly hash-chained events starting at
+    /// `start_seq`. Event 0 of the slice carries `first_prev` as its
+    /// `previous_hash` (use `None` to make it a genesis slice, `Some(_)` to
+    /// model a tail whose evicted predecessor's hash we still know).
+    fn chain_from(start_seq: u64, n: u64, first_prev: Option<String>) -> Vec<PersistedEvent> {
+        let mut out = Vec::new();
+        let mut prev = first_prev;
+        for k in 0..n {
+            let ev = PersistedEvent::new(
+                start_seq + k,
+                DomainEvent::ErrorOccurred {
+                    message: format!("e{}", start_seq + k),
+                },
+                prev.clone(),
+            );
+            prev = Some(ev.hash.clone());
+            out.push(ev);
+        }
+        out
+    }
+
+    #[test]
+    fn verify_event_chain_from_accepts_valid_mid_log_tail() {
+        // A contiguous tail starting at sequence 5 (prefix evicted). Its first
+        // event legitimately carries a previous_hash (the evicted predecessor).
+        let tail = chain_from(5, 4, Some("evicted_predecessor_hash".to_string()));
+
+        // The strict (genesis-anchored) verifier MUST reject this valid tail
+        // (first event is not genesis / sequence != position) — this is the
+        // exact false-break the reviewer flagged.
+        assert!(
+            !verify_event_chain(&tail),
+            "strict verifier should reject a non-genesis tail"
+        );
+
+        // The contiguous verifier MUST accept it.
+        assert!(
+            verify_event_chain_from(&tail),
+            "contiguous verifier should accept a valid evicted-prefix tail"
+        );
+    }
+
+    #[test]
+    fn verify_event_chain_from_accepts_genesis_slice() {
+        let full = chain_from(0, 3, None);
+        assert!(verify_event_chain(&full));
+        assert!(verify_event_chain_from(&full));
+    }
+
+    #[test]
+    fn verify_event_chain_from_rejects_real_breaks() {
+        // Non-contiguous sequence within a tail (gap at index 1).
+        let mut tail = chain_from(5, 3, Some("prev".to_string()));
+        tail[2].sequence = 99; // breaks contiguity
+        assert!(!verify_event_chain_from(&tail));
+
+        // Broken hash linkage within a tail.
+        let mut tail2 = chain_from(5, 3, Some("prev".to_string()));
+        tail2[1].previous_hash = Some("wrong".to_string());
+        assert!(!verify_event_chain_from(&tail2));
+
+        // A genesis-sequenced first event that wrongly carries a previous_hash.
+        let mut g = chain_from(0, 2, None);
+        g[0].previous_hash = Some("should_be_none".to_string());
+        assert!(!verify_event_chain_from(&g));
+
+        // An empty slice is trivially a valid (empty) contiguous chain.
+        assert!(verify_event_chain_from(&[]));
     }
 
     #[test]

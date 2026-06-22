@@ -102,6 +102,8 @@ fn test_registry_router() -> (
                 Box::pin(async {})
                     as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
             }),
+            Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            Arc::new(parking_lot::RwLock::new(None)),
         )
     });
     let registry = Arc::new(NetRegistry::new(factory));

@@ -3504,3 +3504,699 @@ async fn test_per_workspace_metadata_kv_isolation() {
     ctx.jetstream.delete_key_value(&bucket_b).await.ok();
     ctx.cleanup().await.ok();
 }
+
+// =============================================================================
+// Net Snapshot KV Integration Tests (PART C: snapshot-on-hibernate)
+// =============================================================================
+
+#[tokio::test]
+async fn test_net_snapshot_round_trip() {
+    use crate::net_snapshot::NetSnapshotStore;
+    use petri_application::net_snapshot::{NetSnapshot, SnapshotStore, SNAPSHOT_VERSION};
+    use petri_domain::Marking;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url)
+        .await
+        .expect("Failed to create context");
+
+    // Unique per-test workspace so the per-ws bucket can't collide with other
+    // tests sharing the NATS server.
+    let ws = format!("snapws-{}", ctx.prefix);
+    let net_id = "snap-net";
+    let store = NetSnapshotStore::new(ctx.jetstream.clone());
+
+    // Absent → None (no snapshot yet).
+    assert!(
+        store.get(&ws, net_id).await.is_none(),
+        "no snapshot should exist initially"
+    );
+
+    let snap = NetSnapshot {
+        marking: Marking::new(),
+        dedup: vec![],
+        last_hash: Some("deadbeef".to_string()),
+        event_count: 7,
+        next_sequence: 7,
+        last_stream_seq: 42,
+        version: SNAPSHOT_VERSION,
+    };
+    store.put(&ws, net_id, &snap).await;
+
+    let got = store
+        .get(&ws, net_id)
+        .await
+        .expect("snapshot must round-trip");
+    assert_eq!(got.last_hash, Some("deadbeef".to_string()));
+    assert_eq!(got.event_count, 7);
+    assert_eq!(got.next_sequence, 7);
+    assert_eq!(got.last_stream_seq, 42);
+
+    // Delete reclaims it → None again.
+    store.delete(&ws, net_id).await;
+    assert!(
+        store.get(&ws, net_id).await.is_none(),
+        "snapshot must be gone after delete"
+    );
+
+    // Cleanup the per-ws bucket.
+    let bucket = crate::kv_bucket_for(crate::net_snapshot::SNAPSHOT_KV_BUCKET, &ws);
+    ctx.jetstream.delete_key_value(&bucket).await.ok();
+    ctx.cleanup().await.ok();
+}
+
+#[tokio::test]
+async fn test_net_snapshot_future_version_ignored() {
+    use crate::net_snapshot::NetSnapshotStore;
+    use petri_application::net_snapshot::{NetSnapshot, SnapshotStore, SNAPSHOT_VERSION};
+    use petri_domain::Marking;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url)
+        .await
+        .expect("Failed to create context");
+
+    let ws = format!("snapvws-{}", ctx.prefix);
+    let net_id = "snap-net-v";
+    let store = NetSnapshotStore::new(ctx.jetstream.clone());
+
+    // A snapshot written by a NEWER engine (version > supported) must be
+    // ignored on read → wake falls back to full replay.
+    let snap = NetSnapshot {
+        marking: Marking::new(),
+        dedup: vec![],
+        last_hash: None,
+        event_count: 0,
+        next_sequence: 0,
+        last_stream_seq: 0,
+        version: SNAPSHOT_VERSION + 1,
+    };
+    store.put(&ws, net_id, &snap).await;
+    assert!(
+        store.get(&ws, net_id).await.is_none(),
+        "a newer-versioned snapshot must be ignored (→ full replay)"
+    );
+
+    let bucket = crate::kv_bucket_for(crate::net_snapshot::SNAPSHOT_KV_BUCKET, &ws);
+    ctx.jetstream.delete_key_value(&bucket).await.ok();
+    ctx.cleanup().await.ok();
+}
+
+/// MAJOR 2a regression: a snapshot wake with an EMPTY post-snapshot delta must
+/// still seed the NATS store's authoritative write state, so the first live
+/// `append` continues from `snapshot.next_sequence` (NOT 0), and an SSE
+/// broadcast cursor initialized at the post-wake tip emits that event.
+///
+/// Pre-fix reproduction: without `seed_write_state`, `WriteState.next_sequence`
+/// stays at the construction-time `*applied_rx.borrow()` (0) because the
+/// resumed consumer (started at `last_stream_seq + 1`, past the end) applies
+/// nothing and never ticks `applied_rx`. The first append then mints
+/// `.sequence == 0` — colliding with the pre-hibernate prefix and (because the
+/// SSE cursor was anchored on the large pre-wake sequence) never broadcast.
+#[tokio::test]
+async fn snapshot_wake_empty_delta_seeds_write_state_and_sse_cursor() {
+    use crate::event_consumer::EventConsumer;
+    use crate::NatsConfig;
+    use crate::NatsEventStore;
+    use petri_application::{EventRepository, SnapshotInputs};
+    use petri_domain::{DomainEvent, PetriNet, Place, TokenColor};
+    use petri_infrastructure::{MemoryEventStore, MemoryTopologyStore};
+    use std::sync::Arc;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let net_id = format!("snap2a-{}", ctx.prefix);
+
+    // ── Phase 1: publish a prefix of events through a live store. ──
+    let shutdown1 = tokio_util::sync::CancellationToken::new();
+    let cache1 = Arc::new(MemoryEventStore::new());
+    let topo1 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx1, applied_rx1) = tokio::sync::watch::channel(0u64);
+    let (ready_tx1, ready_rx1) = tokio::sync::oneshot::channel();
+    let consumer1 = EventConsumer::new(cache1.clone(), topo1.clone(), applied_tx1, ready_tx1);
+    let js1 = ctx.jetstream.clone();
+    let net_id1 = net_id.clone();
+    let shutdown1c = shutdown1.clone();
+    tokio::spawn(async move {
+        let _ = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx1)
+        .await
+        .expect("ready1")
+        .expect("ready1 rx");
+
+    let mut config1 = NatsConfig::from_env();
+    config1.net_id = Some(net_id.clone());
+    let store1 = NatsEventStore::new(cache1.clone(), ctx.jetstream.clone(), config1, applied_rx1);
+
+    let mut net = PetriNet::new();
+    let place_a = net.add_place(Place::internal("place_a"));
+    store1
+        .append(DomainEvent::NetInitialized { net: net.clone() })
+        .await
+        .expect("init");
+    for v in 0..4u64 {
+        store1
+            .append(DomainEvent::TokenCreated {
+                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": v }))),
+                place_id: place_a.clone(),
+                place_name: Some("place_a".to_string()),
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            })
+            .await
+            .expect("tc");
+    }
+    // 5 events total → next live sequence is 5.
+    let inputs: SnapshotInputs = store1.snapshot_inputs().await;
+    let snapshot = inputs.into_snapshot();
+    assert_eq!(snapshot.next_sequence, 5, "5 events appended → next seq 5");
+    assert!(snapshot.last_stream_seq >= 5, "consumer applied 5 events");
+    let snap_next_seq = snapshot.next_sequence;
+    let snap_last_hash = snapshot.last_hash.clone();
+
+    // ── Phase 2: hibernate — cancel consumer, drop store. ──
+    shutdown1.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(store1);
+
+    // ── Phase 3: wake with an EMPTY delta — seed from snapshot, resume the
+    //    consumer at last_stream_seq + 1 (past the end → nothing replays). ──
+    let shutdown2 = tokio_util::sync::CancellationToken::new();
+    let cache2 = Arc::new(MemoryEventStore::new());
+    let topo2 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx2, applied_rx2) = tokio::sync::watch::channel(0u64);
+    let (ready_tx2, ready_rx2) = tokio::sync::oneshot::channel();
+
+    // Seed the read cache from the snapshot (as the registry wake path does).
+    cache2.seed_from_snapshot(&snapshot);
+
+    let consumer2 = EventConsumer::new(cache2.clone(), topo2.clone(), applied_tx2, ready_tx2)
+        .with_resume_from(snapshot.last_stream_seq);
+    let js2 = ctx.jetstream.clone();
+    let net_id2 = net_id.clone();
+    let shutdown2c = shutdown2.clone();
+    tokio::spawn(async move {
+        let _ = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx2)
+        .await
+        .expect("ready2")
+        .expect("ready2 rx");
+
+    // The delta was empty: applied_rx2 was never ticked past its init (0).
+    assert_eq!(
+        *applied_rx2.borrow(),
+        0,
+        "empty post-snapshot delta → consumer never ticked applied_rx (this is the trap)"
+    );
+
+    let mut config2 = NatsConfig::from_env();
+    config2.net_id = Some(net_id.clone());
+    let store2 = Arc::new(NatsEventStore::new(
+        cache2.clone(),
+        ctx.jetstream.clone(),
+        config2,
+        applied_rx2,
+    ));
+
+    // THE FIX (MAJOR 2a): seed the write authority from the snapshot. Without
+    // this call the next append below mints `.sequence == 0`.
+    store2
+        .seed_write_state(snap_next_seq, snap_last_hash.clone())
+        .await;
+
+    // Compute the SSE broadcast cursor as the eval loop now does: post-wake tip.
+    let sse_cursor = store2.current_sequence().await.saturating_sub(1);
+    assert_eq!(sse_cursor, snap_next_seq - 1, "SSE cursor anchors at the tip");
+
+    // First live append after the empty-delta wake.
+    let appended = store2
+        .append(DomainEvent::TokenCreated {
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": 100 }))),
+            place_id: place_a.clone(),
+            place_name: Some("place_a".to_string()),
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
+        })
+        .await
+        .expect("post-wake append");
+
+    // (a) sequence continues from the snapshot, NOT 0.
+    assert_eq!(
+        appended.sequence, snap_next_seq,
+        "post-wake append must continue from snapshot.next_sequence, not 0 \
+         (pre-fix: minted 0)"
+    );
+    // (b) hash chain links to the snapshot tip.
+    assert_eq!(
+        appended.previous_hash, snap_last_hash,
+        "post-wake append must chain to the snapshot tip"
+    );
+    // (c) the SSE broadcast cursor WOULD emit this event.
+    assert!(
+        appended.sequence > sse_cursor,
+        "post-wake event (seq {}) must be > SSE cursor (seq {}) so it is broadcast",
+        appended.sequence,
+        sse_cursor
+    );
+
+    shutdown2.cancel();
+    ctx.cleanup().await.ok();
+}
+
+/// MAJOR 2b regression: the snapshot's `(marking, last_stream_seq)` pair is
+/// captured coherently under one store lock, so a consumer applying an event in
+/// the window AROUND `write_snapshot` cannot skew them by one event. We exercise
+/// the race by appending an extra "racing" event to the live store and waiting
+/// for the consumer to apply it, then snapshotting: the snapshot's
+/// `last_stream_seq` must reflect the SAME prefix as its marking (i.e. include
+/// the racing event), and a wake that resumes at `last_stream_seq + 1` must
+/// reproduce the full-replay marking with NO duplicate and NO loss.
+#[tokio::test]
+async fn snapshot_last_stream_seq_is_coherent_with_marking_no_dup_no_loss() {
+    use crate::event_consumer::EventConsumer;
+    use crate::NatsConfig;
+    use crate::NatsEventStore;
+    use petri_application::{EventRepository, StateProjection};
+    use petri_domain::{DomainEvent, PetriNet, Place, TokenColor};
+    use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
+    use std::sync::Arc;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let net_id = format!("snap2b-{}", ctx.prefix);
+
+    let shutdown1 = tokio_util::sync::CancellationToken::new();
+    let cache1 = Arc::new(MemoryEventStore::new());
+    let topo1 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx1, applied_rx1) = tokio::sync::watch::channel(0u64);
+    let (ready_tx1, ready_rx1) = tokio::sync::oneshot::channel();
+    let consumer1 = EventConsumer::new(cache1.clone(), topo1.clone(), applied_tx1, ready_tx1);
+    let js1 = ctx.jetstream.clone();
+    let net_id1 = net_id.clone();
+    let shutdown1c = shutdown1.clone();
+    tokio::spawn(async move {
+        let _ = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx1)
+        .await
+        .expect("ready1")
+        .expect("ready1 rx");
+
+    let mut config1 = NatsConfig::from_env();
+    config1.net_id = Some(net_id.clone());
+    let store1 = NatsEventStore::new(cache1.clone(), ctx.jetstream.clone(), config1, applied_rx1);
+
+    let mut net = PetriNet::new();
+    let place_a = net.add_place(Place::internal("place_a"));
+    store1
+        .append(DomainEvent::NetInitialized { net: net.clone() })
+        .await
+        .expect("init");
+    // Park 3 tokens.
+    for v in 0..3u64 {
+        store1
+            .append(DomainEvent::TokenCreated {
+                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": v }))),
+                place_id: place_a.clone(),
+                place_name: Some("place_a".to_string()),
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            })
+            .await
+            .expect("tc");
+    }
+
+    // "Racing" event applied just before the snapshot read. With the under-one-
+    // lock capture, the snapshot's last_stream_seq advances together with the
+    // marking that folds this 4th token — they cannot disagree.
+    store1
+        .append(DomainEvent::TokenCreated {
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": 99 }))),
+            place_id: place_a.clone(),
+            place_name: Some("place_a".to_string()),
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
+        })
+        .await
+        .expect("racing tc");
+
+    // Wait for the consumer to have applied all 5 events (init + 4 tokens) to
+    // cache1, so the snapshot reflects them.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if cache1.len().await == 5 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("cache1 applied all 5 events");
+
+    let snapshot = store1.snapshot_inputs().await.into_snapshot();
+
+    // Full replay marking from the live store's base ⊕ tail.
+    let proj = MarkingProjection::new();
+    let full_marking = {
+        let (b, t, _extent) = store1.marking_base().await;
+        proj.project_onto(&b, &t)
+    };
+    assert_eq!(full_marking.token_count(&place_a), 4, "4 tokens parked");
+
+    // COHERENCE: the snapshot marking equals the full replay marking, AND the
+    // last_stream_seq reflects the SAME prefix (all 5 applied events).
+    assert_eq!(
+        snapshot.marking.token_count(&place_a),
+        4,
+        "snapshot marking must fold the racing event too (coherent capture)"
+    );
+    assert_eq!(
+        snapshot.event_count, 5,
+        "snapshot event_count must include the racing event"
+    );
+    assert!(
+        snapshot.last_stream_seq >= 5,
+        "last_stream_seq must reflect all 5 applied events (coherent with marking), got {}",
+        snapshot.last_stream_seq
+    );
+
+    // ── Wake: seed from snapshot, resume at last_stream_seq + 1. The delta is
+    //    empty (nothing was published after the snapshot), so the woken marking
+    //    must equal the full marking — no double-fold of the racing event, no
+    //    loss. ──
+    shutdown1.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(store1);
+
+    let shutdown2 = tokio_util::sync::CancellationToken::new();
+    let cache2 = Arc::new(MemoryEventStore::new());
+    let topo2 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx2, applied_rx2) = tokio::sync::watch::channel(0u64);
+    let (ready_tx2, ready_rx2) = tokio::sync::oneshot::channel();
+    cache2.seed_from_snapshot(&snapshot);
+    let consumer2 = EventConsumer::new(cache2.clone(), topo2.clone(), applied_tx2, ready_tx2)
+        .with_resume_from(snapshot.last_stream_seq);
+    let js2 = ctx.jetstream.clone();
+    let net_id2 = net_id.clone();
+    let shutdown2c = shutdown2.clone();
+    tokio::spawn(async move {
+        let _ = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx2)
+        .await
+        .expect("ready2")
+        .expect("ready2 rx");
+    let _ = applied_rx2;
+
+    let woken_marking = {
+        let (b, t, _extent) = cache2.marking_base().await;
+        proj.project_onto(&b, &t)
+    };
+    assert_eq!(
+        woken_marking.token_count(&place_a),
+        full_marking.token_count(&place_a),
+        "woken marking must equal full replay — no dup, no loss of the racing event"
+    );
+    assert_eq!(
+        woken_marking.token_count(&place_a),
+        4,
+        "exactly 4 tokens after wake"
+    );
+
+    shutdown2.cancel();
+    ctx.cleanup().await.ok();
+}
+
+/// Regression: a snapshot wake with a NON-EMPTY post-snapshot delta must seed
+/// the write authority from the POST-REPLAY tip, not from the stale snapshot
+/// baseline. This exercises the exact registry wake ordering (PART C):
+/// `seed_from_snapshot` → `seed_write_state(snap.next_sequence, snap.last_hash)`
+/// (called BEFORE hydration, as `net_registry::get_or_create` does) → consumer
+/// resumes at `last_stream_seq + 1` and replays the delta.
+///
+/// After the delta replays, the cache's real chain tip is the LAST DELTA event's
+/// hash and the next free `.sequence` is `snap.next_sequence + delta_len`. But
+/// `seed_write_state` pinned `WriteState.last_hash = Some(snap.last_hash)` (the
+/// PRE-delta tip) and `WriteState.next_sequence = snap.next_sequence`. Because
+/// `last_hash` is now `Some(_)`, the append's lazy hash-chain recovery
+/// (`if next_sequence > 0 && last_hash.is_none()`) is SUPPRESSED — so the first
+/// live append links its `previous_hash` to the stale `snap.last_hash` instead
+/// of the actual post-delta tip, FORKING the hash chain (two events both
+/// pointing at `snap.last_hash`).
+///
+/// Pre-fix this asserts `previous_hash == snap.last_hash` (the bug). Post-fix
+/// (re-seed write state from the post-replay cache AFTER hydration) it links to
+/// the last delta event's hash.
+#[tokio::test]
+async fn snapshot_wake_nonempty_delta_chains_append_to_post_delta_tip() {
+    use crate::event_consumer::EventConsumer;
+    use crate::NatsConfig;
+    use crate::NatsEventStore;
+    use petri_application::EventRepository;
+    use petri_domain::{DomainEvent, PetriNet, Place, TokenColor};
+    use petri_infrastructure::{MemoryEventStore, MemoryTopologyStore};
+    use std::sync::Arc;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url).await.expect("context");
+    petri_test_harness::nats::ensure_global_stream(&ctx.jetstream)
+        .await
+        .expect("ensure stream");
+
+    let net_id = format!("snap-nonempty-{}", ctx.prefix);
+
+    // ── Phase 1: live store, publish a prefix, snapshot, then publish MORE
+    //    events (the "delta" that lands while hibernated). ──
+    let shutdown1 = tokio_util::sync::CancellationToken::new();
+    let cache1 = Arc::new(MemoryEventStore::new());
+    let topo1 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx1, applied_rx1) = tokio::sync::watch::channel(0u64);
+    let (ready_tx1, ready_rx1) = tokio::sync::oneshot::channel();
+    let consumer1 = EventConsumer::new(cache1.clone(), topo1.clone(), applied_tx1, ready_tx1);
+    let js1 = ctx.jetstream.clone();
+    let net_id1 = net_id.clone();
+    let shutdown1c = shutdown1.clone();
+    tokio::spawn(async move {
+        let _ = consumer1
+            .start(
+                &js1,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id1,
+                shutdown1c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx1)
+        .await
+        .expect("ready1")
+        .expect("ready1 rx");
+
+    let mut config1 = NatsConfig::from_env();
+    config1.net_id = Some(net_id.clone());
+    let store1 = NatsEventStore::new(cache1.clone(), ctx.jetstream.clone(), config1, applied_rx1);
+
+    let mut net = PetriNet::new();
+    let place_a = net.add_place(Place::internal("place_a"));
+    store1
+        .append(DomainEvent::NetInitialized { net: net.clone() })
+        .await
+        .expect("init");
+    // Prefix: seq 1,2 (NetInitialized = seq 0).
+    for v in 0..2u64 {
+        store1
+            .append(DomainEvent::TokenCreated {
+                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": v }))),
+                place_id: place_a.clone(),
+                place_name: Some("place_a".to_string()),
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            })
+            .await
+            .expect("prefix tc");
+    }
+    // Wait for the consumer to apply the 3 prefix events to cache1.
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if cache1.len().await == 3 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("cache1 applied 3");
+
+    // SNAPSHOT taken HERE — captures the prefix (3 events). next_sequence == 3.
+    let snapshot = store1.snapshot_inputs().await.into_snapshot();
+    assert_eq!(snapshot.next_sequence, 3, "snapshot at 3 events");
+
+    // ── DELTA: two MORE events land while "hibernated" (bridge/signal inject).
+    //    These get .sequence 3,4 and chain off the prefix tip. ──
+    for v in 100..102u64 {
+        store1
+            .append(DomainEvent::TokenCreated {
+                token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": v }))),
+                place_id: place_a.clone(),
+                place_name: Some("place_a".to_string()),
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            })
+            .await
+            .expect("delta tc");
+    }
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if cache1.len().await == 5 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("cache1 applied 5");
+    // The real post-delta chain tip (what a correct wake must link to).
+    let post_delta_tip = cache1.last_hash();
+    assert_ne!(
+        post_delta_tip, snapshot.last_hash,
+        "delta advanced the chain tip past the snapshot tip"
+    );
+
+    shutdown1.cancel();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    drop(store1);
+
+    // ── Phase 2: wake EXACTLY as net_registry::get_or_create does. ──
+    let shutdown2 = tokio_util::sync::CancellationToken::new();
+    let cache2 = Arc::new(MemoryEventStore::new());
+    let topo2 = Arc::new(MemoryTopologyStore::new());
+    let (applied_tx2, applied_rx2) = tokio::sync::watch::channel(0u64);
+    let (ready_tx2, ready_rx2) = tokio::sync::oneshot::channel();
+
+    // Registry wake: seed store base, then seed write state from the SNAPSHOT
+    // (pre-hydration), then resume the consumer at last_stream_seq + 1.
+    cache2.seed_from_snapshot(&snapshot);
+    let consumer2 = EventConsumer::new(cache2.clone(), topo2.clone(), applied_tx2, ready_tx2)
+        .with_resume_from(snapshot.last_stream_seq);
+    let js2 = ctx.jetstream.clone();
+    let net_id2 = net_id.clone();
+    let shutdown2c = shutdown2.clone();
+
+    let mut config2 = NatsConfig::from_env();
+    config2.net_id = Some(net_id.clone());
+    let store2 = Arc::new(NatsEventStore::new(
+        cache2.clone(),
+        ctx.jetstream.clone(),
+        config2,
+        applied_rx2,
+    ));
+    // This is the registry's pre-hydration seed (MAJOR 2a) — note it seeds the
+    // SNAPSHOT tip/next_seq, which is correct ONLY for an empty delta.
+    store2
+        .seed_write_state(snapshot.next_sequence, snapshot.last_hash.clone())
+        .await;
+
+    tokio::spawn(async move {
+        let _ = consumer2
+            .start(
+                &js2,
+                crate::subjects::Subjects::DEFAULT_WORKSPACE,
+                &net_id2,
+                shutdown2c,
+            )
+            .await;
+    });
+    tokio::time::timeout(Duration::from_secs(5), ready_rx2)
+        .await
+        .expect("ready2")
+        .expect("ready2 rx");
+    // Delta replayed: cache2 now holds the 2 delta events; its tip is the real
+    // post-delta tip and its next sequence is 5.
+    assert_eq!(cache2.len().await, 5, "wake replayed the 2-event delta");
+    assert_eq!(cache2.last_hash(), post_delta_tip, "cache2 tip == post-delta tip");
+
+    // POST-HYDRATION RE-SEED (the fix in net_registry::get_or_create): after the
+    // delta has replayed, re-seed the write authority from the post-replay cache
+    // so the next append links to the REAL chain head, not the stale snapshot
+    // baseline. Comment this block out to reproduce the pre-fix fork.
+    let post_next_seq = store2.current_sequence().await;
+    let post_tip = store2.last_hash().await;
+    store2.seed_write_state(post_next_seq, post_tip).await;
+
+    // First live append after the non-empty-delta wake.
+    let appended = store2
+        .append(DomainEvent::TokenCreated {
+            token: petri_domain::Token::new(TokenColor::Data(serde_json::json!({ "v": 999 }))),
+            place_id: place_a.clone(),
+            place_name: Some("place_a".to_string()),
+            workflow_id: None,
+            signal_key: None,
+            dedup_id: None,
+        })
+        .await
+        .expect("post-wake append");
+
+    // The append MUST chain to the POST-DELTA tip, not the stale snapshot tip.
+    assert_eq!(
+        appended.previous_hash, post_delta_tip,
+        "post-wake append must chain to the post-delta tip (the real chain head), \
+         NOT the stale snapshot tip — otherwise the hash chain forks: both the \
+         first delta event and this append point at snapshot.last_hash"
+    );
+    assert_ne!(
+        appended.previous_hash, snapshot.last_hash,
+        "must NOT link to the stale snapshot tip"
+    );
+    // And the sequence must continue past the delta (5), not collide at 3.
+    assert_eq!(
+        appended.sequence, 5,
+        "post-wake append must continue from the post-delta next_sequence (5), \
+         not the stale snapshot.next_sequence (3)"
+    );
+
+    shutdown2.cancel();
+    ctx.cleanup().await.ok();
+}

@@ -16,7 +16,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use petri_domain::{DomainEvent, PersistedEvent, PlaceId};
+use petri_domain::{PersistedEvent, PlaceId};
 use tokio::sync::{OnceCell, RwLock};
 
 use crate::EventRepository;
@@ -63,19 +63,12 @@ impl DedupIndex {
     async fn ensure<E: EventRepository>(&self, events: &E) -> &Arc<RwLock<Map>> {
         self.cell
             .get_or_init(|| async {
-                let mut m = Map::new();
-                for e in events.all_events().await {
-                    if let DomainEvent::TokenCreated {
-                        place_id,
-                        dedup_id: Some(id),
-                        ..
-                    } = &e.event
-                    {
-                        if !id.is_empty() {
-                            m.insert((place_id.clone(), id.clone()), e.clone());
-                        }
-                    }
-                }
+                // Seed from the repository's dedup seed rather than scanning
+                // `all_events()` directly. A bounded store contributes the
+                // dedup entries of evicted events (folded into its base) here,
+                // so dropped-prefix dedup keys survive; a full-retention store
+                // yields exactly the same `all_events()` scan via the default.
+                let m = events.dedup_seed().await;
                 Arc::new(RwLock::new(m))
             })
             .await

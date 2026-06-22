@@ -3372,6 +3372,7 @@ dependencies = [
  "petri-application",
  "petri-domain",
  "petri-executor",
+ "petri-infrastructure",
  "petri-nomad",
  "petri-scheduler-bridge",
  "petri-slurm",

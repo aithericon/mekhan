@@ -419,6 +419,30 @@ where
         self.topology.get_topology()
     }
 
+    /// Capture the inputs for a hibernation snapshot (full marking, dedup seed,
+    /// chain tip, event count, next sequence) from the event store. The
+    /// registry's hibernate hook pairs this with the consumer-tracked
+    /// `last_stream_seq` to build a [`crate::net_snapshot::NetSnapshot`].
+    pub async fn snapshot_inputs(&self) -> crate::net_snapshot::SnapshotInputs {
+        self.events.snapshot_inputs().await
+    }
+
+    /// The engine `.sequence` the next live append will use. After a snapshot
+    /// wake this reflects the seeded `next_sequence` even when the post-snapshot
+    /// delta was empty — used by the eval loop to initialize the SSE broadcast
+    /// cursor at the post-wake tip (`current_sequence - 1`).
+    pub async fn current_sequence(&self) -> u64 {
+        self.events.current_sequence().await
+    }
+
+    /// The `.sequence` of the earliest event the in-memory store still holds
+    /// verbatim, or `None` if it holds none. For a bounded store whose prefix
+    /// was evicted this is `> 0`; the durable NATS log still has the rest.
+    /// History/backfill endpoints use it to flag a truncated in-memory view.
+    pub async fn earliest_available_sequence(&self) -> Option<u64> {
+        self.events.earliest_available_sequence().await
+    }
+
     /// Update a transition's script and/or guard (hot-reload).
     pub async fn update_transition_script(
         &self,

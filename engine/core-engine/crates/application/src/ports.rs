@@ -1,7 +1,15 @@
+use std::collections::HashMap;
+
 use petri_domain::{
-    apply_event_to_marking, DomainEvent, Marking, PersistedEvent, PetriNet, TransitionId,
+    apply_event_to_marking, DomainEvent, Marking, PersistedEvent, PetriNet, PlaceId, TransitionId,
 };
 use thiserror::Error;
+
+/// `(place_id, dedup_id)` → originating `TokenCreated` event. The idempotency
+/// index ([`crate::idempotency_index::DedupIndex`]) is seeded from this; a
+/// bounded event store contributes the entries of evicted events here so the
+/// dedup window survives prefix eviction.
+pub type DedupSeed = HashMap<(PlaceId, String), PersistedEvent>;
 
 /// Error type for event store operations.
 #[derive(Error, Debug, Clone)]
@@ -61,6 +69,49 @@ pub trait EventRepository: Send + Sync {
         self.all_events().await.len()
     }
 
+    /// The lowest storage-order index that is still materialized verbatim.
+    ///
+    /// For a full-retention store this is always `0` — every event remains
+    /// sliceable by position. A bounded store returns its `base_count`: events
+    /// at positions `[0 .. materialized_floor())` have been **evicted** (folded
+    /// into the base marking) and are no longer returned by
+    /// [`events_from`](Self::events_from).
+    ///
+    /// This is the guard the marking-cache Stale path needs: a remembered
+    /// cursor `i` is only safe to slice with `events_from(i)` while
+    /// `i >= materialized_floor()`. If eviction has advanced the floor past a
+    /// stale cursor (external listeners append+evict thousands of tokens
+    /// between eval cycles), `events_from(i)` would silently clamp to the tail
+    /// start and DROP events `[i .. materialized_floor())`, drifting the cached
+    /// marking away from `f(events)` (the eviction-induced re-fire of
+    /// [[engine-loop-dup-seq]]). The Stale path detects `i < materialized_floor()`
+    /// and rebuilds from `base ⊕ tail` (Miss semantics) instead.
+    ///
+    /// Default returns `0` (full-retention safe). The bounded `MemoryEventStore`
+    /// overrides it to return `base_count`.
+    async fn materialized_floor(&self) -> usize {
+        0
+    }
+
+    /// The `.sequence` of the earliest event still materialized verbatim, or
+    /// `None` if the log is empty.
+    ///
+    /// For a full-retention store this is `0` whenever any event exists (the
+    /// genesis event is always resident). For a **bounded** store whose prefix
+    /// has been evicted, this is the `.sequence` of the oldest event still in
+    /// the resident tail — i.e. the lowest sequence the in-memory view can
+    /// serve. History/inspection endpoints use it to tell a client that a
+    /// requested `from_sequence` falls below what memory holds (the durable
+    /// NATS log still has the evicted prefix), so the response can flag
+    /// `history_truncated` + surface this as `earliest_available_sequence`.
+    ///
+    /// Default reads `all_events().first()` — correct for any impl. Bounded
+    /// stores override it to avoid materializing the tail just to read one
+    /// sequence number.
+    async fn earliest_available_sequence(&self) -> Option<u64> {
+        self.all_events().await.first().map(|e| e.sequence)
+    }
+
     /// Slice the log from the given storage-order index to the end.
     ///
     /// Unlike [`events_since`](Self::events_since) this filters by *position*
@@ -76,6 +127,161 @@ pub trait EventRepository: Send + Sync {
         let all = self.all_events().await;
         let start = idx.min(all.len());
         all[start..].to_vec()
+    }
+
+    /// Like [`events_from`](Self::events_from) but **atomically** rejects a
+    /// cursor that has fallen below the materialized floor.
+    ///
+    /// Returns `Some(slice)` when `idx >= materialized_floor()` (the cursor
+    /// still points into resident, sliceable territory), or `None` when
+    /// `idx < materialized_floor()` (eviction advanced the floor past the
+    /// cursor — slicing would lossily clamp to the tail and DROP events
+    /// `[idx .. floor)`).
+    ///
+    /// The floor-check and the slice happen **under one lock** in the bounded
+    /// store, closing the check-then-slice TOCTOU window: with two separate
+    /// calls (`materialized_floor()` then `events_from()`) a concurrent
+    /// append+evict between them could advance the floor past a cursor that
+    /// passed the guard, and the subsequent `events_from` would silently drop
+    /// the just-evicted events — the exact eviction-induced divergence
+    /// ([[engine-loop-dup-seq]]) the guard exists to prevent. The marking-cache
+    /// Stale path uses this so the decision (slice vs. rebuild) is coherent with
+    /// the data it acts on.
+    ///
+    /// Default delegates to `events_from` because a full-retention store never
+    /// evicts (`materialized_floor() == 0` always, so `idx >= 0` is always
+    /// `Some`). Bounded stores override it to perform the check + slice under
+    /// their single inner lock.
+    async fn events_from_checked(&self, idx: usize) -> Option<Vec<PersistedEvent>> {
+        Some(self.events_from(idx).await)
+    }
+
+    /// Marking-rebuild inputs: a base marking summarizing events that are no
+    /// longer materialized verbatim, plus the still-resident events to fold on
+    /// top. The marking-cache Miss path uses this to rebuild without holding
+    /// the full history in memory.
+    ///
+    /// `project_onto(base, tail)` must equal `project(all_events_ever)`.
+    ///
+    /// The third element is the **storage-order extent** these inputs cover
+    /// (`base_count + tail.len()`), read under the SAME lock as `base`/`tail`.
+    /// The marking-cache Miss/Rebuild paths store it verbatim as the new cursor
+    /// so the cursor always equals the number of events actually folded into the
+    /// returned marking — using the call-site `events.len()` instead would tear
+    /// if a concurrent append landed between the `len()` read and this one,
+    /// leaving a stale cursor that re-folds events on the next call (the
+    /// eviction-induced over-fold variant of [[engine-loop-dup-seq]]).
+    ///
+    /// Default returns `(empty marking, all_events(), all_events().len())` —
+    /// correct for any full-retention impl, which keeps the whole history
+    /// resident. A bounded store overrides this to return its folded base plus
+    /// the resident tail and the coherent extent.
+    async fn marking_base(&self) -> (Marking, Vec<PersistedEvent>, u64) {
+        let all = self.all_events().await;
+        let extent = all.len() as u64;
+        (Marking::new(), all, extent)
+    }
+
+    /// Hash of the last stored event (the chain tip), or `None` if empty.
+    ///
+    /// Default reads `all_events().last()` — correct for any impl. A bounded
+    /// store overrides this so it need not materialize the tail to read one
+    /// hash, and so the tip survives prefix eviction.
+    async fn last_hash(&self) -> Option<String> {
+        self.all_events().await.last().map(|e| e.hash.clone())
+    }
+
+    /// Capture the inputs for a hibernation snapshot: the FULL projected
+    /// marking, the FULL dedup seed, the chain tip, the storage-order event
+    /// count, and the next live sequence. The caller (the registry's hibernate
+    /// hook) pairs this with the consumer-tracked `last_stream_seq` to build a
+    /// [`crate::net_snapshot::NetSnapshot`].
+    ///
+    /// Default folds `all_events()` for the marking — correct for any impl. A
+    /// bounded store overrides this so it folds its already-projected base
+    /// marking plus only the resident tail (never re-walking the dropped
+    /// prefix).
+    async fn snapshot_inputs(&self) -> crate::net_snapshot::SnapshotInputs {
+        let (base, tail, _extent) = self.marking_base().await;
+        let mut marking = base;
+        for p in &tail {
+            apply_event_to_marking(&mut marking, &p.event);
+        }
+        crate::net_snapshot::SnapshotInputs {
+            marking,
+            dedup: self.dedup_seed().await,
+            last_hash: self.last_hash().await,
+            event_count: self.len().await as u64,
+            next_sequence: self.current_sequence().await,
+            // Full-retention stores have no separate JetStream cursor and wake by
+            // full replay (snapshots are disabled for them); `0` is inert.
+            last_stream_seq: 0,
+        }
+    }
+
+    /// Seed the store's base from a hibernation snapshot, so a wake resumes from
+    /// the snapshot baseline instead of replaying the full log. After seeding,
+    /// the consumer replays only the post-snapshot delta
+    /// (`ByStartSequence(snapshot.last_stream_seq + 1)`).
+    ///
+    /// Default is a no-op (full-retention stores wake by full replay; seeding
+    /// would double-apply the prefix). The bounded `MemoryEventStore` overrides
+    /// it to install the snapshot's marking/dedup/hash/count as its base.
+    async fn seed_from_snapshot(&self, _snapshot: &crate::net_snapshot::NetSnapshot) {}
+
+    /// Seed the *write authority* (next live `.sequence` + hash-chain tip) from a
+    /// hibernation snapshot, for stores that keep a write cursor SEPARATE from
+    /// the read cache.
+    ///
+    /// The in-memory `MemoryEventStore` derives `next_sequence`/`last_hash`
+    /// directly from its own `Inner` state, so `seed_from_snapshot` already
+    /// installs them and this is a no-op. But the NATS-backed store
+    /// (`NatsEventStore`) keeps an authoritative `WriteState` that is normally
+    /// seeded from the consumer's `applied_rx` watch channel. On a snapshot wake
+    /// with an EMPTY post-snapshot delta the consumer applies nothing, never
+    /// ticks `applied_rx`, and `WriteState.next_sequence` stays `0` — so the
+    /// first live `append` would assign `.sequence == 0` (colliding with the
+    /// pre-hibernate prefix) instead of continuing from `snapshot.next_sequence`.
+    /// The wake path calls this RIGHT AFTER `seed_from_snapshot` to set the write
+    /// cursor authoritatively, independent of whether the consumer ever ticks.
+    ///
+    /// Default is a no-op (full-retention stores wake by full replay and have no
+    /// separate write cursor to seed).
+    async fn seed_write_state(&self, _next_sequence: u64, _last_hash: Option<String>) {}
+
+    /// Read the write cursor — next live `.sequence` and chain-tip hash — as one
+    /// COHERENT pair (a single lock acquisition on stores that keep them under
+    /// one lock). The snapshot-wake re-seed uses this so a torn read across
+    /// separate `current_sequence()` + `last_hash()` calls cannot pin
+    /// `next_sequence` to the pre-delta baseline while reading a post-delta tip
+    /// — which would mint a colliding `.sequence` chained off a forked tip on the
+    /// common "events landed while hibernated" wake. Default does the two reads
+    /// (acceptable for full-retention stores, which never take the re-seed path).
+    async fn write_cursor(&self) -> (u64, Option<String>) {
+        (self.current_sequence().await, self.last_hash().await)
+    }
+
+    /// Seed map for the `(place_id, dedup_id)` idempotency index.
+    ///
+    /// Default scans `all_events()` for `TokenCreated` events carrying a
+    /// non-empty `dedup_id`. A bounded store overrides this to merge the
+    /// dedup entries of evicted events (folded into its base) with a scan of
+    /// the resident tail, so dropped-prefix dedup keys survive.
+    async fn dedup_seed(&self) -> DedupSeed {
+        let mut m = DedupSeed::new();
+        for e in self.all_events().await {
+            if let DomainEvent::TokenCreated {
+                place_id,
+                dedup_id: Some(id),
+                ..
+            } = &e.event
+            {
+                if !id.is_empty() {
+                    m.insert((place_id.clone(), id.clone()), e.clone());
+                }
+            }
+        }
+        m
     }
 }
 
@@ -106,6 +312,18 @@ pub trait TopologyRepository: Send + Sync {
 pub trait StateProjection: Send + Sync {
     /// Compute the current marking by replaying all events.
     fn project(&self, events: &[PersistedEvent]) -> Marking;
+
+    /// Project starting from an existing base marking, folding only `events`
+    /// on top. `apply_event_to_marking` is a pure left-fold, so
+    /// `project(evs) == project_onto(&Marking::new(), evs)` and
+    /// `project_onto(project(prefix), suffix) == project(prefix ++ suffix)`.
+    fn project_onto(&self, base: &Marking, events: &[PersistedEvent]) -> Marking {
+        let mut marking = base.clone();
+        for persisted in events {
+            apply_event_to_marking(&mut marking, &persisted.event);
+        }
+        marking
+    }
 
     /// Apply a single event to an existing marking (incremental projection).
     ///

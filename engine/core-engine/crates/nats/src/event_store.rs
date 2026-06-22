@@ -291,10 +291,11 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         // last_hash is None. Read the last event's hash from the cache to
         // maintain hash chain continuity across hibernation boundaries.
         if state.next_sequence > 0 && state.last_hash.is_none() {
-            let events = self.cache.all_events().await;
-            if let Some(last) = events.last() {
-                state.last_hash = Some(last.hash.clone());
-            }
+            // Read just the chain tip via the dedicated accessor — the bounded
+            // cache may have evicted the raw prefix, but `last_hash()` returns
+            // the tip from the tail (or the folded base) without materializing
+            // the whole log.
+            state.last_hash = self.cache.last_hash().await;
         }
 
         // 2. Create PersistedEvent with correct sequence and hash chain
@@ -420,7 +421,57 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         self.cache.len().await
     }
 
+    async fn materialized_floor(&self) -> usize {
+        self.cache.materialized_floor().await
+    }
+
+    async fn earliest_available_sequence(&self) -> Option<u64> {
+        self.cache.earliest_available_sequence().await
+    }
+
     async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
         self.cache.events_from(idx).await
+    }
+
+    async fn events_from_checked(&self, idx: usize) -> Option<Vec<PersistedEvent>> {
+        self.cache.events_from_checked(idx).await
+    }
+
+    async fn marking_base(&self) -> (petri_domain::Marking, Vec<PersistedEvent>, u64) {
+        self.cache.marking_base().await
+    }
+
+    async fn last_hash(&self) -> Option<String> {
+        self.cache.last_hash().await
+    }
+
+    async fn write_cursor(&self) -> (u64, Option<String>) {
+        self.cache.write_cursor().await
+    }
+
+    async fn dedup_seed(&self) -> petri_application::DedupSeed {
+        self.cache.dedup_seed().await
+    }
+
+    async fn snapshot_inputs(&self) -> petri_application::SnapshotInputs {
+        self.cache.snapshot_inputs().await
+    }
+
+    async fn seed_from_snapshot(&self, snapshot: &petri_application::NetSnapshot) {
+        self.cache.seed_from_snapshot(snapshot).await
+    }
+
+    /// Seed the authoritative `WriteState` from a snapshot. Without this, a
+    /// snapshot wake with an empty post-snapshot delta leaves `next_sequence` at
+    /// the construction-time `*applied_rx.borrow()` (0) — the consumer never
+    /// ticks `applied_rx` because it applies no events — and the first live
+    /// `append` mints `.sequence == 0`, which (a) collides with the pre-hibernate
+    /// prefix in the hash chain and (b) makes SSE broadcast cursors that were
+    /// initialized from the large pre-wake sequence never emit the new events.
+    /// Seeding both fields here closes that gap regardless of consumer activity.
+    async fn seed_write_state(&self, next_sequence: u64, last_hash: Option<String>) {
+        let mut state = self.write_lock.lock().await;
+        state.next_sequence = next_sequence;
+        state.last_hash = last_hash;
     }
 }

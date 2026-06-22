@@ -66,6 +66,7 @@ mod idempotency;
 mod listener;
 pub mod message_loop;
 pub mod net_metadata;
+pub mod net_snapshot;
 mod publisher;
 pub mod signal_listener;
 pub mod spawn_net_handler;
@@ -101,6 +102,9 @@ pub use message_loop::{
     run_message_loop_cancellable, MessageHandler, MessageLoopError, PreProcessResult, ProcessError,
 };
 pub use net_metadata::{NetMetadata, NetMetadataProjection, NetStatus, METADATA_KV_BUCKET};
+pub use net_snapshot::{
+    max_snapshot_bytes, NetSnapshotStore, DEFAULT_MAX_SNAPSHOT_BYTES, SNAPSHOT_KV_BUCKET,
+};
 pub use petri_domain::ExternalSignal;
 pub use publisher::NatsEventPublisher;
 pub use signal_listener::{SignalListener, SignalListenerError};

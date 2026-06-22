@@ -1,4 +1,6 @@
 mod config;
+#[allow(dead_code)]
+mod hydration;
 
 use std::sync::Arc;
 
@@ -175,8 +177,17 @@ async fn main() {
         // the consumer to a `ConsumerStarter` the registry invokes AFTER the
         // workspace is stamped (per-net `load_scenario` / `create_and_load`),
         // filtering on the real workspace.
+        // Snapshot plumbing (PART C): a shared cell the consumer publishes its
+        // last-applied JetStream `stream_sequence` into (read by hibernate for
+        // the snapshot's `last_stream_seq`), and a resume-from cell the wake
+        // path sets so the consumer hydrates only the post-snapshot delta.
+        let last_stream_seq_cell = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let resume_from_cell: Arc<parking_lot::RwLock<Option<u64>>> =
+            Arc::new(parking_lot::RwLock::new(None));
+
         let consumer =
-            EventConsumer::new(cache.clone(), topology_store.clone(), applied_tx, ready_tx);
+            EventConsumer::new(cache.clone(), topology_store.clone(), applied_tx, ready_tx)
+                .with_last_stream_seq_cell(last_stream_seq_cell.clone());
 
         // Shared per-net workspace cell: the publisher reads it, and
         // `PetriNetService::set_workspace_id` (which the registry builds against
@@ -207,17 +218,25 @@ async fn main() {
         let net_id_consumer = net_id.to_string();
         let shutdown = shutdown_for_factory.clone();
         let consumer_cell = std::sync::Arc::new(std::sync::Mutex::new(Some((consumer, ready_rx))));
+        let resume_cell_for_starter = resume_from_cell.clone();
         let consumer_starter: petri_api::net_registry::ConsumerStarter =
             Arc::new(move |ws: String| {
                 let js_consumer = js_consumer.clone();
                 let net_id_consumer = net_id_consumer.clone();
                 let shutdown = shutdown.clone();
                 let consumer_cell = consumer_cell.clone();
+                let resume_cell = resume_cell_for_starter.clone();
                 Box::pin(async move {
-                    let Some((consumer, ready_rx)) = consumer_cell.lock().unwrap().take() else {
+                    let Some((mut consumer, ready_rx)) = consumer_cell.lock().unwrap().take()
+                    else {
                         // Already started — idempotent no-op.
                         return;
                     };
+                    // Snapshot wake (PART C): if the registry seeded the store and
+                    // set a resume point, hydrate only the post-snapshot delta.
+                    if let Some(resume_from) = *resume_cell.read() {
+                        consumer = consumer.with_resume_from(resume_from);
+                    }
                     tokio::spawn(async move {
                         if let Err(e) = consumer
                             .start(&js_consumer, &ws, &net_id_consumer, shutdown)
@@ -250,6 +269,8 @@ async fn main() {
             applied_rx_for_registry,
             workspace_cell,
             consumer_starter,
+            last_stream_seq_cell,
+            resume_from_cell,
         )
     });
 
@@ -499,6 +520,13 @@ async fn main() {
     };
 
     let registry = Arc::new(registry);
+
+    // Install the wake-snapshot store (PART C). Backed by per-workspace NATS KV
+    // (`KV_NET_SNAPSHOT_{ws}`). With it installed, hibernate captures a snapshot
+    // and the wake path replays only the post-snapshot delta — a cold wake of a
+    // huge net is then O(events since hibernate), not O(total events). Every
+    // failure mode degrades to full replay, so this is a pure fast-path.
+    registry.set_snapshot_store(Arc::new(petri_nats::NetSnapshotStore::new(jetstream.clone())));
 
     // Install the subworkflow_cancel adapter — needs Arc<NetRegistry> so it
     // can call `terminate` on its own registry. The Timeout node's body
@@ -773,7 +801,7 @@ struct RegistryHibernator {
 #[async_trait::async_trait]
 impl petri_nats::NetHibernator for RegistryHibernator {
     async fn hibernate(&self, net_id: &str) -> Result<(), String> {
-        self.registry.hibernate(net_id)
+        self.registry.hibernate(net_id).await
     }
 }
 
