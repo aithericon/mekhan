@@ -18,7 +18,10 @@ struct PaginatedResponse {
 }
 
 pub async fn run(server: &str) -> Result<()> {
-    let url = format!("{}/api/v1/templates?page=1&per_page=50", server);
+    // The templates list endpoint paginates with `page` (0-based) + `page_size`
+    // (the generic list DSL — see handlers/templates.rs). Sending `page=1` asks
+    // for the empty *second* page, and `per_page` is ignored (wrong param name).
+    let url = format!("{}/api/v1/templates?page=0&page_size=50", server);
     let resp: PaginatedResponse = crate::http::auth(reqwest::Client::new().get(&url))
         .send()
         .await

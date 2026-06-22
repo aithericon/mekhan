@@ -180,6 +180,15 @@ pub struct LlmConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_url: Option<String>,
 
+    /// Organization / billing account. Overlaid from the bound `openai`
+    /// resource's `organization` field. For OpenAI it is sent as the
+    /// `OpenAI-Organization` header; for Hugging Face Inference Providers it is
+    /// sent as `X-HF-Bill-To` so usage bills to the named org instead of the
+    /// token owner's depletable personal credits. Sending both is safe — each
+    /// provider ignores the other's header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub organization: Option<String>,
+
     /// Optional workspace resource name (e.g. `openai_prod`) the LLM step is
     /// bound to. When set, the compiler emits a ResourceEnvelope borrow that
     /// stages `<resource_alias>.json` into the run dir; the backend overlays
@@ -277,6 +286,7 @@ mod tests {
             model: "gpt-4o".into(),
             api_key: Some("sk-test".into()),
             base_url: None,
+            organization: None,
             resource_alias: None,
             prompt: "Hello, world!".into(),
             system_prompt: Some("You are a helpful assistant.".into()),
@@ -350,6 +360,7 @@ mod tests {
             model: "qwen2.5:3b".into(),
             api_key: None,
             base_url: None,
+            organization: None,
             resource_alias: None,
             prompt: "Hello".into(),
             system_prompt: None,
