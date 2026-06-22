@@ -12,23 +12,14 @@ Built for research and industry teams whose processes span people *and*
 machines, and need to be durable, reproducible, and auditable.
 
 > **⚠️ Early alpha — work in progress.** APIs, schemas, and the UI are changing
-> fast; expect breaking changes between commits. Nothing here is
-> production-ready, and the default dev stack is insecure by design (see the
-> **Security & maturity** section below). We're sharing it now to develop in the
-> open, not because it's stable.
+> fast; expect breaking changes between commits. Not production-ready — this is
+> for early adopters and open development.
 
-Mekhan turns a process into a **durable, executable graph**. Workflows run
-on an event-sourced engine that persists every step as it happens — so a
-long-running process can stretch across hours or days and span flaky networks,
-preemptible HPC nodes, and intermittently-connected lab hardware **without
-losing state**. If a worker dies, a cluster reclaims a node, or the control
-plane restarts, the run resumes from the last completed step instead of starting
-over; failures are handled explicitly — retry, route to a fallback branch, or
-release held resources on teardown — rather than silently lost. The same
-workflow can hand a form to a person, launch a job on a Slurm or Nomad cluster,
-call an LLM or tool-using agent, run a container, or drive an instrument in a
-lab — and capture the resulting data into a searchable catalogue with full
-provenance.
+Mekhan turns a process into a **durable, executable graph** — workflows run on
+an event-sourced engine that persists every step, so long-running work survives
+crashes and spans people, HPC clusters, and lab hardware without losing state.
+
+![The Mekhan workflow editor showing a crawl-campaign workflow: a Start node with typed parameters, a Python step, a cursor-loop region wrapping a sub-workflow, and a Done node — each with per-step run status.](./docs/assets/workflow-editor.jpeg)
 
 ## What it does
 
@@ -48,7 +39,7 @@ provenance.
   development and debugging natural.
 - **Run heterogeneous work.** One graph mixes human tasks, automated steps
   (Python, containers, HTTP, SQL, ROS, …), and LLM / agent nodes across every
-  execution target below — people, HPC clusters, elastic pools, and edge runners.
+  execution target below — people, HPC clusters, worker pools, and edge runners.
 - **Capture & manage data.** Built-in file-metadata extraction and a searchable,
   workspace-scoped **data catalogue** over pluggable storage — S3, GCS, Azure
   Blob, filesystem, SFTP, and more via [OpenDAL](https://opendal.apache.org) —
@@ -70,25 +61,21 @@ One workflow can mix all of these — the platform is a single plane over them:
 
 - **Human-in-the-loop & SOPs.** First-class human tasks with rich forms for data
   capture, structured reporting, and sign-offs — the building blocks of digital
-  SOPs. Route work to **human operator pools**: tasks are offered to eligible
-  members by capability matching, operators claim what they can do, and the whole
-  handshake is engine-authoritative with the inbox as a live projection.
+  SOPs, with **operator pools** that route work to the right people by capability.
 - **Datacenter scheduling.** Run steps on **Slurm and Nomad** clusters as
   first-class targets — with secure access handling (per-job, single-use secret
   tokens; credentials never live on the node), **container staging** (materialize
   an OCI image to an Apptainer `.sif` and run the executor inside it on HPC), and
   state reconciliation that detects drift between what the engine expects and the
   cluster's actual allocations.
-- **Elastic worker pools.** Pull-based, queue-fed pools of interchangeable
-  workers for high-throughput, low-overhead jobs — the FaaS-style side of the
-  platform. They scale with load and run tasks (Python, containers, HTTP, …)
-  without per-job scheduler overhead, ideal when you have many small units of
-  work rather than a few large allocations.
+- **Worker pools.** Pull-based, queue-fed pools of interchangeable workers for
+  high-throughput, low-overhead jobs — the FaaS-style side of the platform. They
+  run tasks (Python, containers, HTTP, …) without per-job scheduler overhead,
+  ideal when you have many small units of work rather than a few large
+  allocations.
 - **Targeted runners.** Enroll a specific machine — a lab control computer, a
   workstation, an edge box — as a push-consumer runner with capability matching
-  (similar in spirit to GitLab runners). **Zero-secret enrollment** means a
-  runner needs only a token and a URL to come online; the simplest path for most
-  small setups.
+  (similar in spirit to GitLab runners). The simplest path for most small setups.
 - **Capacity pools.** Model any contended, counted resource as a capacity pool —
   concurrency limits, instrument time, or **third-party floating licenses** — so
   the engine only dispatches work when a slot is genuinely free and releases it
@@ -212,8 +199,8 @@ Optional per deployment:
 
 ## Project background
 
-~1 year of active development, building on platforms we've designed and operated
-in commercial and academic settings for 6+ years.
+~1 year of active development, building on platforms [Aithericon](https://aithericon.eu)
+has designed and operated in commercial and academic settings for 6+ years.
 
 **How it's built:** much of the code is LLM-written. We treat that as an
 engineering practice with rigor to match — every subsystem is backed by
@@ -224,13 +211,11 @@ testing.
 
 This is an **early alpha** shared for open development. Read before deploying:
 
-- **The dev stack is insecure by design.** `just dev` and `docker compose`
-  ship with throwaway defaults — a dev Vault with root token `root`, a no-op
-  auth mode where every request is a fixed admin user, and default object-store
-  credentials. These exist so you can try the platform offline in one command.
-  **Do not expose a dev-default deployment to the internet or put real data in
-  it.** Production hardening (real auth, secret management, TLS, tenancy
-  isolation) is in active development and not yet documented as turnkey.
+- **Configure before exposing.** The default `just dev` / `docker compose` stack
+  uses throwaway dev credentials so it runs offline in one command — **don't
+  expose it or put real data in it without proper configuration.** Production
+  hardening (real auth, secret management, TLS, tenancy isolation) is in active
+  development.
 - **No security guarantees yet.** Treat self-hosted instances as experimental.
 - **Reporting a vulnerability:** please see [`SECURITY.md`](./SECURITY.md).
   Do not open public issues for security problems.

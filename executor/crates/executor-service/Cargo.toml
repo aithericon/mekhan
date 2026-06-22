@@ -75,6 +75,9 @@ http = ["dep:aithericon-executor-http"]
 llm = ["dep:aithericon-executor-llm"]
 vault = ["aithericon-secrets/vault", "aithericon-executor-worker/vault"]
 file-ops = ["dep:aithericon-executor-file-ops", "opendal", "aithericon-executor-test-harness/file-ops"]
+# NetCDF-4/HDF5 metadata in the crawl probe. Implies file-ops; links native
+# libnetcdf+libhdf5 (build in the glibc container image, not the musl edge build).
+netcdf = ["file-ops", "aithericon-executor-file-ops/netcdf"]
 kreuzberg = ["dep:aithericon-executor-kreuzberg", "aithericon-executor-kreuzberg/full"]
 surya = ["dep:aithericon-executor-surya"]
 smtp = ["dep:aithericon-executor-smtp"]

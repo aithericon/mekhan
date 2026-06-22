@@ -36,6 +36,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use futures::stream::FuturesOrdered;
 use futures::StreamExt;
 use opendal::Operator;
 use tokio::task::JoinHandle;
@@ -596,138 +597,211 @@ pub async fn execute(
         rchar_baseline,
     ));
 
-    while let Some(entry) = lister.next().await {
-        let entry = match entry {
-            Ok(e) => {
-                consecutive_list_errors = 0;
-                e
-            }
-            // Skip unreadable / vanished directories instead of failing the
-            // whole walk. opendal's `FlatLister` has already dropped the failed
-            // subdir, so `continue` resumes the parent's remaining entries; the
-            // error message carries the offending path for the operator.
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    opendal::ErrorKind::PermissionDenied | opendal::ErrorKind::NotFound
-                ) =>
-            {
-                list_errors += 1;
-                consecutive_list_errors += 1;
-                if consecutive_list_errors > MAX_CONSECUTIVE_LIST_ERRORS {
-                    warn!(
-                        error = %e,
-                        consecutive = consecutive_list_errors,
-                        "crawl: too many consecutive list errors; aborting walk"
-                    );
-                    return Err(e.into());
+    // Per-file content probing runs up to `probe_concurrency` in flight. The walk
+    // still LISTS + `stat`s sequentially (cheap), but the expensive read + SHA-256
+    // + `fmeta` parse — frequently latency-bound (many small random reads on a
+    // RAID array, or one multi-GB file) — overlaps across files. `FuturesOrdered`
+    // yields results in LISTING ORDER, so batches and the `last_path` resume
+    // cursor stay byte-identical to a sequential walk; only wall-clock changes.
+    // `1` restores the historical one-at-a-time behavior.
+    let concurrency = config
+        .probe_concurrency
+        .get("crawl: probe_concurrency")
+        .map_err(FileOpsError::Config)?
+        .max(1);
+
+    // Stat fields carried alongside each in-flight probe, so a drained result can
+    // be turned into an `Observed` in listing order.
+    struct Pending {
+        user_path: String,
+        size: u64,
+        mtime: Option<String>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        mode: Option<u32>,
+    }
+
+    let mut inflight = FuturesOrdered::new();
+    let mut lister_done = false;
+
+    'walk: loop {
+        // Fill the in-flight window: pull entries (skipping dir markers / the
+        // resumed span / unreadable subtrees), `stat` them, and enqueue one probe
+        // each until `concurrency` are running or the lister is drained. Stop
+        // topping up the instant a cancel arrives so we don't queue work we're
+        // about to abandon.
+        while !lister_done && inflight.len() < concurrency && !cancel.is_cancelled() {
+            let entry = match lister.next().await {
+                None => {
+                    lister_done = true;
+                    break;
                 }
-                warn!(error = %e, "crawl: list error; skipping unreadable path");
-                if list_errors <= MAX_STREAMED_DIAGNOSTICS {
-                    crawl_log(
-                        &event_stream,
-                        LogLevel::Warn,
-                        format!("skipped unreadable directory ({}): {e}", e.kind()),
-                    )
-                    .await;
+                Some(Ok(e)) => {
+                    consecutive_list_errors = 0;
+                    e
+                }
+                // Skip unreadable / vanished directories instead of failing the
+                // whole walk. opendal's `FlatLister` has already dropped the
+                // failed subdir, so `continue` resumes the parent's remaining
+                // entries; the error message carries the offending path.
+                Some(Err(e))
+                    if matches!(
+                        e.kind(),
+                        opendal::ErrorKind::PermissionDenied | opendal::ErrorKind::NotFound
+                    ) =>
+                {
+                    list_errors += 1;
+                    consecutive_list_errors += 1;
+                    if consecutive_list_errors > MAX_CONSECUTIVE_LIST_ERRORS {
+                        warn!(
+                            error = %e,
+                            consecutive = consecutive_list_errors,
+                            "crawl: too many consecutive list errors; aborting walk"
+                        );
+                        return Err(e.into());
+                    }
+                    warn!(error = %e, "crawl: list error; skipping unreadable path");
+                    if list_errors <= MAX_STREAMED_DIAGNOSTICS {
+                        crawl_log(
+                            &event_stream,
+                            LogLevel::Warn,
+                            format!("skipped unreadable directory ({}): {e}", e.kind()),
+                        )
+                        .await;
+                    }
+                    continue;
+                }
+                // Genuine infrastructure errors still abort the walk.
+                Some(Err(e)) => return Err(e.into()),
+            };
+            let path = entry.path().to_string();
+
+            // Skip directory markers — both the trailing-slash convention and the
+            // entry's own mode (the `fs` lister marks directories via mode).
+            if path.ends_with('/') || entry.metadata().is_dir() {
+                continue;
+            }
+
+            // Strip the storage prefix back to user-facing paths.
+            let user_path = if !prefix.is_empty() {
+                path.strip_prefix(prefix).unwrap_or(&path).to_string()
+            } else {
+                path.clone()
+            };
+
+            // Client-side resume: skip up to AND INCLUDING the cursor path.
+            // Placed before the stat() so the skipped span costs readdir only.
+            if !resume_passed {
+                if Some(user_path.as_str()) == resume {
+                    resume_passed = true;
                 }
                 continue;
             }
-            // Genuine infrastructure errors still abort the walk.
-            Err(e) => return Err(e.into()),
-        };
-        let path = entry.path().to_string();
 
-        // Skip directory markers — both the trailing-slash convention and the
-        // entry's own mode (the `fs` lister marks directories via mode).
-        if path.ends_with('/') || entry.metadata().is_dir() {
-            continue;
-        }
-
-        // Strip the storage prefix back to user-facing paths.
-        let user_path = if !prefix.is_empty() {
-            path.strip_prefix(prefix).unwrap_or(&path).to_string()
-        } else {
-            path.clone()
-        };
-
-        // Client-side resume: skip up to AND INCLUDING the cursor path.
-        // Placed before the stat() so the skipped span costs readdir only.
-        if !resume_passed {
-            if Some(user_path.as_str()) == resume {
-                resume_passed = true;
-            }
-            continue;
-        }
-
-        // The `fs` lister returns entries without size/mtime, so stat each file
-        // when requested (the default). `path` here is the full storage path.
-        let (size, mtime, uid, gid, mode) = if config.stat {
-            match lstat_root
-                .as_deref()
-                .and_then(|root| local_stat(root, &path))
-            {
-                Some(s) => (s.size, s.mtime, s.uid, s.gid, s.mode),
-                None => {
-                    let meta = operator.stat(&path).await?;
-                    // `last_modified()` is an opendal `Timestamp` (RFC 3339 via
-                    // Display), mirroring `list`'s `include_stat` rendering.
-                    let mtime = meta.last_modified().map(|t| t.to_string());
-                    (meta.content_length(), mtime, None, None, None)
-                }
-            }
-        } else {
-            (entry.metadata().content_length(), None, None, None, None)
-        };
-
-        // Opt-in content probing — failures are counted, not fatal: a 4M-file
-        // corpus WILL contain unreadable/vanishing entries, and losing the
-        // whole chunk to one of them would stall the campaign.
-        let (hash, metadata) = if probe_mode == ProbeMode::Off {
-            (None, None)
-        } else {
-            // Race the probe against cancellation. A single `probe=full` probe of
-            // a multi-GB file blocks for minutes (a 43 GB NetCDF reads for ~12 min
-            // at ~57 MB/s), and the walk otherwise only checks the token between
-            // BATCHES — so a UI cancel sat unhonored for the whole read, the
-            // JetStream job stayed un-acked, and a force-restart redelivered it.
-            // `biased` checks the token first (a cancel that arrived earlier wins
-            // immediately); on cancel we abandon the in-flight read and stop the
-            // walk promptly. The orphaned blocking read finishes in the
-            // background and its result is dropped; the file is re-probed on the
-            // resume pass (`last_path` cursor), so nothing is lost.
-            tokio::select! {
-                biased;
-                _ = cancel.cancelled() => {
-                    cancelled = true;
-                    break;
-                }
-                res = probe_entry(probe_mode, lstat_root.as_deref(), operator, &path, run_dir) => match res {
-                    Ok(hm) => hm,
-                    Err(e) => {
-                        warn!(path = %user_path, error = %e, "crawl: probe failed; emitting hashless");
-                        probe_errors += 1;
-                        if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
-                            crawl_log(
-                                &event_stream,
-                                LogLevel::Warn,
-                                format!("indexed without metadata (probe failed): {user_path} — {e}"),
-                            )
-                            .await;
-                        }
-                        (None, None)
+            // The `fs` lister returns entries without size/mtime, so stat each
+            // file when requested (the default). `path` is the full storage path.
+            let (size, mtime, uid, gid, mode) = if config.stat {
+                match lstat_root
+                    .as_deref()
+                    .and_then(|root| local_stat(root, &path))
+                {
+                    Some(s) => (s.size, s.mtime, s.uid, s.gid, s.mode),
+                    None => {
+                        let meta = operator.stat(&path).await?;
+                        // `last_modified()` is an opendal `Timestamp` (RFC 3339 via
+                        // Display), mirroring `list`'s `include_stat` rendering.
+                        let mtime = meta.last_modified().map(|t| t.to_string());
+                        (meta.content_length(), mtime, None, None, None)
                     }
                 }
+            } else {
+                (entry.metadata().content_length(), None, None, None, None)
+            };
+
+            // Enqueue the probe. It OWNS its inputs (cheap clones — `Operator` is
+            // Arc-backed) so it's self-contained and runs concurrently with its
+            // siblings and the listing loop. `Off` mode short-circuits to a
+            // hashless result. Probe failures are RETURNED (not raised) and
+            // counted at the drain site, where the shared counters live.
+            let pending = Pending {
+                user_path,
+                size,
+                mtime,
+                uid,
+                gid,
+                mode,
+            };
+            let op = operator.clone();
+            let rdir = run_dir.to_path_buf();
+            let lroot = lstat_root.clone();
+            let storage_path = path;
+            let mode_for_probe = probe_mode;
+            inflight.push_back(async move {
+                let res = if mode_for_probe == ProbeMode::Off {
+                    Ok((None, None))
+                } else {
+                    probe_entry(mode_for_probe, lroot.as_deref(), &op, &storage_path, &rdir).await
+                };
+                (pending, res)
+            });
+        }
+
+        // Lister drained and nothing in flight → the walk is complete.
+        if inflight.is_empty() {
+            if cancel.is_cancelled() {
+                cancelled = true;
+            }
+            break 'walk;
+        }
+
+        // Take the OLDEST completed probe (listing order). A cancel interrupts the
+        // wait so a single in-flight multi-GB probe can't pin the walk — the same
+        // promptness the per-probe biased select gave the sequential version. On
+        // cancel the remaining in-flight futures are dropped; their orphaned
+        // blocking reads finish in the background with results discarded, and the
+        // files are re-probed from the `last_path` cursor on resume, so nothing is
+        // lost.
+        let (pending, res) = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                cancelled = true;
+                break 'walk;
+            }
+            drained = inflight.next() => match drained {
+                Some(d) => d,
+                None => continue 'walk,
             }
         };
 
+        let (hash, metadata) = match res {
+            Ok(hm) => hm,
+            Err(e) => {
+                warn!(path = %pending.user_path, error = %e, "crawl: probe failed; emitting hashless");
+                probe_errors += 1;
+                if probe_errors <= MAX_STREAMED_DIAGNOSTICS {
+                    crawl_log(
+                        &event_stream,
+                        LogLevel::Warn,
+                        format!(
+                            "indexed without metadata (probe failed): {} — {e}",
+                            pending.user_path
+                        ),
+                    )
+                    .await;
+                }
+                (None, None)
+            }
+        };
+
+        let user_path = pending.user_path;
+        let size = pending.size;
         batch.push(Observed {
             path: user_path.clone(),
             size,
-            mtime,
-            uid,
-            gid,
-            mode,
+            mtime: pending.mtime,
+            uid: pending.uid,
+            gid: pending.gid,
+            mode: pending.mode,
             hash,
             metadata,
         });
@@ -758,7 +832,7 @@ pub async fn execute(
             if let Some(max) = max_batches {
                 if batch_idx >= max {
                     stopped_by_max = true;
-                    break;
+                    break 'walk;
                 }
             }
 
@@ -766,7 +840,7 @@ pub async fn execute(
             // what we crawled so far (the caller resumes from `last_path`).
             if cancel.is_cancelled() {
                 cancelled = true;
-                break;
+                break 'walk;
             }
         }
     }
@@ -953,6 +1027,7 @@ mod tests {
             max_batches: None,
             sink: None,
             probe: None,
+            probe_concurrency: 8.into(),
         };
 
         let stream = Arc::new(CapturingStream::default());
@@ -1133,6 +1208,7 @@ mod tests {
             max_batches: None,
             sink: None,
             probe: Some(probe.to_string()),
+            probe_concurrency: 8.into(),
         }
     }
 

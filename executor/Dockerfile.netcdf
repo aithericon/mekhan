@@ -1,0 +1,52 @@
+# syntax=docker/dockerfile:1
+#
+# NetCDF-capable executor runner for the agridos-nas crawl.
+#
+# Why this image exists: the agridos-nas `.nc` files are NetCDF-4 (HDF5-backed,
+# magic `\x89HDF`). Extracting their structural metadata needs native
+# libnetcdf + libhdf5, which the static-musl edge binary deliberately omits
+# (glibc-2.20 box, no native-C cross-build). A glibc container brings its own
+# modern glibc, so we build a normal amd64 binary with the `netcdf` feature and
+# run it on the NAS — sidestepping the ancient-glibc wall entirely.
+#
+# Build context = REPO ROOT (the executor workspace reaches ../shared/*):
+#   docker buildx build --platform linux/amd64 \
+#     -f executor/Dockerfile.netcdf -t aithericon-executor:netcdf --load .
+#
+# Feature set mirrors the current NAS runner (file-ops,http,http-cancel,python,
+# url-inputs) PLUS netcdf. `process` is always-on (no feature).
+
+FROM rust:bookworm AS builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libnetcdf-dev libhdf5-dev clang pkg-config cmake protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /build
+# shared/ first (path deps: secrets, backends, apalis, file-metadata), then executor/.
+COPY shared/ shared/
+COPY executor/ executor/
+WORKDIR /build/executor
+# Built under amd64 EMULATION in an ~8 GiB Docker VM. Default settings OOM-kill
+# the build — first on 14-way `rustc` fan-out, then on a single heavy crate
+# (`parquet`) whose opt-level=3 LLVM codegen alone exceeds the budget. So:
+#   jobs=2            — few concurrent rustc (qemu overhead per process)
+#   codegen-units=256 — split each crate into small low-memory chunks
+#   opt-level=1       — slash LLVM peak memory; perf irrelevant for an I/O-bound
+#                       (disk-latency-bound) crawl runner
+#   debug=0           — no debuginfo
+ENV CARGO_BUILD_JOBS=6 \
+    CARGO_PROFILE_RELEASE_DEBUG=0 \
+    CARGO_PROFILE_RELEASE_OPT_LEVEL=1 \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256
+RUN cargo build --release -p aithericon-executor-service \
+        --no-default-features \
+        --features "file-ops,http,http-cancel,python,url-inputs,netcdf"
+
+FROM debian:bookworm-slim AS runtime
+# libnetcdf19 pulls the matching libhdf5 runtime as a dependency; python3 for the
+# python backend; ca-certificates for wss://nats + https://mekhan TLS.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libnetcdf19 ca-certificates python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
+COPY --from=builder /build/executor/target/release/mekhan-runner /usr/local/bin/mekhan-runner
+ENTRYPOINT ["/usr/local/bin/mekhan-runner"]

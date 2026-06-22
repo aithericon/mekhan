@@ -435,6 +435,19 @@ pub async fn prepare_air_with_bindings(
         return Err(PrepareBindingsError::Unbound(slots));
     }
 
+    // Self-heal the workspace-owned (tier-4 baseline) pool nets this instance
+    // bridges to BEFORE any fast-path return. Each `pool-<resource_id>` is
+    // re-`ensure`d under the launching workspace: a no-op for a healthy running
+    // pool, a wake (+ workspace re-stamp) for a hibernated one, and a full
+    // re-deploy for a pool the engine lost (NATS wiped / engine was down at
+    // resource create). Without this a drifted/lost workspace pool fails the
+    // instance's to-Running gate with `BRIDGE_TARGET_NET_MISSING`. Idempotent
+    // and engine-down-tolerant, so it is safe on the common path.
+    for resource_id in &resolved.baseline_pools {
+        crate::handlers::resources::ensure_pool_net_for_launch(state, *resource_id, workspace_id)
+            .await;
+    }
+
     // No tier-1–3 substitution → byte-identical baseline AIR (the common
     // case: every slot satisfied by the home-workspace baseline already baked).
     if resolved.substitutions.is_empty() {
@@ -463,6 +476,18 @@ pub async fn prepare_air_with_bindings(
         // instance net's bridge at `pool-{new_id}`.
         if bound.is_platform && !addresses.net_ids.is_empty() {
             crate::handlers::resources::redeploy_pool_net_for_workspace(
+                state,
+                bound.resource_id,
+                workspace_id,
+            )
+            .await;
+        } else if !addresses.net_ids.is_empty() {
+            // Substituted (tier-1–3) WORKSPACE-owned pool: ensure `pool-{new}`
+            // exists under the launching workspace too — the rewrite below points
+            // the bridge at it, so the same self-heal the baseline pools get
+            // applies (a tier-2 default / tier-1 override can name a pool the
+            // engine never deployed or has since lost).
+            crate::handlers::resources::ensure_pool_net_for_launch(
                 state,
                 bound.resource_id,
                 workspace_id,

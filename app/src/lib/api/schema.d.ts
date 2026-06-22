@@ -7223,6 +7223,20 @@ export interface components {
              */
             probe?: string | null;
             /**
+             * @description Max number of files probed CONCURRENTLY during the walk (`probe` =
+             *     `hash`/`full`). The walk lists + `stat`s sequentially (cheap), but the
+             *     per-file content read + SHA-256 + `fmeta` parse is the expensive,
+             *     frequently latency-bound step — running several in flight overlaps disk
+             *     seeks (especially many small files on a RAID array) and CPU parse.
+             *     Results are still consumed in listing order, so `last_path` (the resume
+             *     cursor) stays exact. `1` restores the historical one-at-a-time walk.
+             *     Default 8. Lower it for huge-file corpora — each in-flight `full` probe
+             *     holds its own read/parse buffers, so N concurrent multi-GB probes cost
+             *     ~N× the per-probe memory. Has no effect when `probe` is off.
+             *     Interpolation-capable like `batch_size`.
+             */
+            probe_concurrency?: number;
+            /**
              * @description Optional resume cursor: the walk resumes *after* this path. Native
              *     `start_after` on backends that support it (S3); elsewhere a
              *     client-side skip-until-cursor (readdir-cheap, assumes stable

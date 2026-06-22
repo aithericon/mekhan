@@ -261,13 +261,15 @@ async fn main() {
         // Woken-net workspace resolver (multi-tenancy linchpin / hazard #2):
         // when a hibernated net is rehydrated, `get_or_create` consults this to
         // stamp + start its event consumer under the REAL workspace before
-        // consulting topology. impl 1/2 wires a single-bucket resolver that
-        // reads the persisted metadata (which today carries no per-net
-        // workspace) and returns `None` → DEFAULT_WORKSPACE, preserving the
-        // single-workspace dev path. impl 2/2 must (a) persist the workspace on
-        // the per-tenant `KV_NET_METADATA_{ws}` entry (or derive it from the
-        // event subject in the projection) and (b) return it here so a woken
-        // multi-tenant net hydrates from `petri.{realws}.{net}.events.>`.
+        // consulting topology. The projection persists each net's workspace on
+        // the global `KV_NET_METADATA` index (derived from the event subject);
+        // this resolver returns it VERBATIM for any existing entry — including
+        // the default workspace — so a woken net always hydrates from
+        // `petri.{realws}.{net}.events.>` and its consumer is actually started.
+        // `None` is reserved for "no entry" (a genuinely fresh net), whose
+        // consumer start is DEFERRED to `load_scenario`. See
+        // `KvWokenWorkspaceResolver` for why collapsing the default workspace
+        // into `None` silently broke hibernated capacity-pool bridges.
         registry.set_woken_workspace_resolver(Arc::new(KvWokenWorkspaceResolver {
             metadata_kv: kv,
         }));
@@ -925,25 +927,43 @@ impl petri_api::net_registry::MetadataLookup for KvMetadataLookup {
 /// Reads the net's `workspace_id` off the global net_id-keyed metadata index
 /// (`KV_NET_METADATA`), which the projection stamps from the event subject. A
 /// woken multi-tenant net therefore hydrates from `petri.{realws}.{net}.
-/// events.>` rather than `petri.default.*`. Returns `None` (→ DEFAULT_WORKSPACE)
-/// for an unknown net or a legacy entry whose stored ws is already the default
-/// sentinel — exactly the single-workspace dev path.
+/// events.>` rather than `petri.default.*`.
+///
+/// `None` means "no metadata entry exists" — a genuinely fresh net whose
+/// consumer start the registry DEFERS to `load_scenario` (which stamps the
+/// workspace first). `None` does NOT mean "recorded under the default
+/// workspace": a net the projection stamped `default` MUST resolve to
+/// `Some("default")`, because the woken-net branch of `get_or_create` only
+/// starts (and blocks on) the event consumer when this returns `Some`. Folding
+/// the default workspace into `None` (the original single-workspace-dev
+/// shortcut) left every `default`-recorded net to wake with its consumer never
+/// started — so topology never hydrated, `resolve_topology` returned `None`, and
+/// a hibernated capacity-pool net (`pool-<resource_id>`) bridged-to by a
+/// workflow instance failed the activation gate with `BRIDGE_TARGET_NET_MISSING`
+/// until manually re-deployed. Return the recorded workspace verbatim for ANY
+/// existing entry.
 struct KvWokenWorkspaceResolver {
     metadata_kv: async_nats::jetstream::kv::Store,
+}
+
+/// Pure decision behind [`KvWokenWorkspaceResolver::workspace_for`]: given the
+/// raw metadata blob (or its absence), return the workspace to wake under.
+///
+/// `Some(ws)` for any parseable entry (INCLUDING the default workspace); `None`
+/// only when there is no entry to read or it fails to parse. Extracted so the
+/// "default must not collapse to None" invariant is unit-testable without NATS.
+fn woken_workspace_from_metadata(entry: Option<&[u8]>) -> Option<String> {
+    let bytes = entry?;
+    serde_json::from_slice::<NetMetadata>(bytes)
+        .ok()
+        .map(|meta| meta.workspace_id)
 }
 
 #[async_trait::async_trait]
 impl petri_api::net_registry::WokenWorkspaceResolver for KvWokenWorkspaceResolver {
     async fn workspace_for(&self, net_id: &str) -> Option<String> {
-        match self.metadata_kv.get(net_id).await {
-            Ok(Some(entry)) => match serde_json::from_slice::<NetMetadata>(&entry) {
-                Ok(meta) if meta.workspace_id != Subjects::DEFAULT_WORKSPACE => {
-                    Some(meta.workspace_id)
-                }
-                _ => None,
-            },
-            _ => None,
-        }
+        let entry = self.metadata_kv.get(net_id).await.ok().flatten();
+        woken_workspace_from_metadata(entry.as_deref())
     }
 }
 
@@ -1532,5 +1552,62 @@ async fn delete_net_handler(
             axum::Json(serde_json::json!({"error": "Net not found"})),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod woken_workspace_resolver_tests {
+    use super::woken_workspace_from_metadata;
+    use petri_nats::Subjects;
+
+    /// Build a minimal serialized `NetMetadata` blob carrying `workspace_id`.
+    fn meta_blob(workspace_id: &str) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "net_id": "pool-5f27e605",
+            "status": "running",
+            "workspace_id": workspace_id,
+            "created_at": "2026-06-22T00:00:00Z",
+        }))
+        .unwrap()
+    }
+
+    /// REGRESSION: a net the projection stamped under the DEFAULT workspace must
+    /// resolve to `Some("default")`, NOT `None`. The original code folded the
+    /// default workspace into `None`, which made the woken-net branch of
+    /// `get_or_create` skip starting the event consumer entirely — so topology
+    /// never hydrated and a bridged-to capacity pool failed activation with
+    /// `BRIDGE_TARGET_NET_MISSING`.
+    #[test]
+    fn default_workspace_resolves_to_some_not_none() {
+        let blob = meta_blob(Subjects::DEFAULT_WORKSPACE);
+        assert_eq!(
+            woken_workspace_from_metadata(Some(&blob)),
+            Some(Subjects::DEFAULT_WORKSPACE.to_string()),
+            "a default-recorded net must wake under 'default', not be treated as unknown"
+        );
+    }
+
+    /// A multi-tenant net resolves to its recorded tenant workspace verbatim.
+    #[test]
+    fn tenant_workspace_resolves_verbatim() {
+        let blob = meta_blob("9a1d2bf1");
+        assert_eq!(
+            woken_workspace_from_metadata(Some(&blob)),
+            Some("9a1d2bf1".to_string())
+        );
+    }
+
+    /// No metadata entry → `None` → the registry DEFERS consumer start to
+    /// `load_scenario` (the genuinely-fresh-net path). This is the ONLY case
+    /// that may return `None`.
+    #[test]
+    fn missing_entry_is_none() {
+        assert_eq!(woken_workspace_from_metadata(None), None);
+    }
+
+    /// An unparseable blob is treated as "no usable entry" → `None`.
+    #[test]
+    fn garbage_entry_is_none() {
+        assert_eq!(woken_workspace_from_metadata(Some(b"not json")), None);
     }
 }

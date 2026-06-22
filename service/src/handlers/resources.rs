@@ -1545,6 +1545,102 @@ pub(crate) async fn redeploy_pool_net_for_workspace(
     .await;
 }
 
+/// Launch-time self-heal for a WORKSPACE-OWNED pool net (`pool-<resource_id>`).
+///
+/// Re-`ensure`s the pool net of a tenant-scoped capacity resource the launching
+/// instance bridges to, stamped under the resource's own workspace. Idempotent
+/// and engine-down-tolerant (same posture as the create/update path): a pool
+/// already deployed + Running is a no-op; a pool the engine merely hibernated is
+/// woken (and its workspace stamp re-healed on wake); a pool the engine LOST
+/// entirely (NATS wiped by a dev reset, or the engine was down when the resource
+/// was created) is re-deployed from its persisted DB config. Without this a
+/// workspace-owned pool that drifted or was lost stayed broken until an operator
+/// manually re-saved the resource — the activation gate would 422 the instance
+/// with `BRIDGE_TARGET_NET_MISSING`.
+///
+/// This is the workspace-scoped sibling of [`redeploy_pool_net_for_workspace`]
+/// (which materializes a PLATFORM pool under a consuming tenant). Where that one
+/// refuses anything non-platform, this one refuses anything that is NOT a
+/// tenant-scoped resource owned by `workspace_id` — so neither can ever
+/// materialize one tenant's pool net under another. A non-pool resource is a
+/// no-op (the inner `ensure` short-circuits on a resource with no admission
+/// backend).
+pub(crate) async fn ensure_pool_net_for_launch(
+    state: &AppState,
+    resource_id: Uuid,
+    workspace_id: Uuid,
+) {
+    // Load type + latest_version + scope + owning workspace. The launcher has
+    // already authorized the launch against this workspace; the guard below is a
+    // defensive tenancy invariant, not the auth check.
+    let row: Option<(String, i32, String, Option<Uuid>)> = match sqlx::query_as(
+        "SELECT resource_type, latest_version, scope_kind, workspace_id FROM resources \
+         WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(resource_id)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(%resource_id, %e, "launch pool-ensure: resource load failed; skipping");
+            return;
+        }
+    };
+    let Some((resource_type, version, scope_kind, resource_ws)) = row else {
+        return;
+    };
+
+    // Tenancy guard: a platform pool is materialized under the consuming tenant
+    // by `redeploy_pool_net_for_workspace`, not here. A tenant-scoped pool MUST
+    // be (re)deployed only under its OWN workspace — refuse to stamp one tenant's
+    // pool net with another tenant's id (the intra-workspace-bridge invariant).
+    if scope_kind == "platform" {
+        return;
+    }
+    if resource_ws != Some(workspace_id) {
+        tracing::warn!(
+            %resource_id,
+            scope_kind,
+            %workspace_id,
+            ?resource_ws,
+            "launch pool-ensure: refusing to deploy a pool net under a workspace that does not \
+             own the resource; skipping"
+        );
+        return;
+    }
+
+    let public_config: Option<Value> = match sqlx::query_scalar(
+        "SELECT public_config FROM resource_versions WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(resource_id)
+    .bind(version)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%resource_id, %e, "launch pool-ensure: version load failed; skipping");
+            return;
+        }
+    };
+    let public = public_config
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    ensure_pool_net_for_resource(
+        state,
+        &resource_type,
+        workspace_id,
+        resource_id,
+        version,
+        &public,
+    )
+    .await;
+}
+
 /// Pull the `__kv_keys` array out of a `public_config` blob. Returns
 /// `None` for typed resources (no sentinel present); `Some(...)` for
 /// `kv` resources. Shared by every handler that emits a fresh

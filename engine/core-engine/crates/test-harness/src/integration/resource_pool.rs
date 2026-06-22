@@ -803,6 +803,103 @@ fn build_registered_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces)
     )
 }
 
+/// Requester that claims → receives grant → registers its hold → holds, and
+/// carries a `t_finally` FINALIZER (consume `holding` → emit release) exactly
+/// like the mekhan compiler's lease-bridge `t_{id}_finally`. There is NO
+/// `finish_trigger` / normal `t_exit` here: this models a leased scope whose
+/// body never completes (the runner is mid-job when the user hits Cancel), so
+/// the only way the held lease can ever return to the pool is the engine's
+/// forced finalizer drain on `terminate`. This is the load-bearing shape the
+/// holder-side `tests/finalizer_drain.rs` proves in isolation; here we wire its
+/// release across the REAL cross-net bridge to a REAL pool net.
+fn build_finalizer_requester_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces) {
+    let mut net = PetriNet::new();
+
+    let start = Place::internal("start");
+    let holding = Place::internal("holding");
+    let done = Place::internal("done");
+    let grant_inbox = Place::internal("grant_inbox");
+    // Kept only so RegReqPlaces stays uniform; never fed in this scenario.
+    let finish_trigger = Place::signal("finish_trigger");
+    let mut channels = HashMap::new();
+    channels.insert("grant".to_string(), "grant_inbox".to_string());
+    let claim_out =
+        Place::bridge_out_reply_channels("claim_out", pool_net_id, "claim_inbox", channels);
+    let register_out = Place::bridge_out("register_out", pool_net_id, "register_inbox");
+    let release_out = Place::bridge_out("release_out", pool_net_id, "release_inbox");
+
+    let start_id = start.id.clone();
+    let holding_id = holding.id.clone();
+    let done_id = done.id.clone();
+    let grant_inbox_id = grant_inbox.id.clone();
+    let finish_id = finish_trigger.id.clone();
+    let claim_out_id = claim_out.id.clone();
+    let register_out_id = register_out.id.clone();
+    let release_out_id = release_out.id.clone();
+    for p in [
+        start,
+        holding,
+        done,
+        grant_inbox,
+        finish_trigger,
+        claim_out,
+        register_out,
+        release_out,
+    ] {
+        net.add_place(p);
+    }
+
+    // t_claim: start → claim_out
+    let t_claim = Transition::new("t_claim", r#"#{ claim_out: start }"#)
+        .with_input_port(Port::new("start"))
+        .with_output_port(Port::new("claim_out"));
+    let tc = t_claim.id.clone();
+    net.add_transition(t_claim);
+    net.add_arc(PetriArc::input(start_id.clone(), tc.clone(), "start"));
+    net.add_arc(PetriArc::output(tc.clone(), "claim_out", claim_out_id));
+
+    // t_receive: grant_inbox → holding + register_out (echo the grant cleanly).
+    let t_receive = Transition::new(
+        "t_receive",
+        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, gpu_id: grant.gpu_id } }"#,
+    )
+    .with_input_port(Port::new("grant"))
+    .with_output_port(Port::new("holding"))
+    .with_output_port(Port::new("register"));
+    let trc = t_receive.id.clone();
+    net.add_transition(t_receive);
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        trc.clone(),
+        "grant",
+    ));
+    net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
+    net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
+
+    // t_finally: holding → release_out. FINALIZER — invisible to Normal
+    // selection (otherwise it would release the lease the instant the hold is
+    // acquired); fires ONLY during the engine's forced `drain_finalizers` on
+    // teardown. Mirrors lease_bridge.rs `t_{id}_finally` exactly.
+    let t_finally = Transition::new("t_finally", r#"#{ release: #{ grant_id: holding.grant_id } }"#)
+        .with_input_port(Port::new("holding"))
+        .with_output_port(Port::new("release"))
+        .with_finalizer(true);
+    let tfin = t_finally.id.clone();
+    net.add_transition(t_finally);
+    net.add_arc(PetriArc::input(holding_id.clone(), tfin.clone(), "holding"));
+    net.add_arc(PetriArc::output(tfin.clone(), "release", release_out_id));
+
+    (
+        net,
+        RegReqPlaces {
+            start: start_id,
+            holding: holding_id,
+            done: done_id,
+            finish_trigger: finish_id,
+        },
+    )
+}
+
 /// Drain bridge traffic + fire enabled transitions across the pool and every
 /// requester until things settle. Repeated a few times to let cross-net
 /// messages propagate (each call evaluates every net once).
@@ -995,6 +1092,164 @@ async fn crashed_holder_lease_is_reaped_and_regranted() {
         }
     }
     assert!(new_holder.is_some(), "the waiting job got the reaped GPU");
+
+    ctx.teardown().await;
+}
+
+// ===========================================================================
+// Manual cancel (runner stays ONLINE) frees the held pool lease end-to-end.
+//
+// Reproduces the live incident: a user cancels a running instance from the UI.
+// The remote worker is cancelled fine, BUT the runner stays online — so the
+// presence/lease never EXPIRES and the pool's `t_reap` (lease_expired → in_use)
+// never fires. The ONLY thing that can return the held unit to the pool is the
+// holder's forced finalizer drain (what the engine's `terminate` runs before
+// NetCancelled) emitting a release that crosses the bridge to the pool's
+// `release_inbox`, where `t_release` returns the capacity.
+//
+// `tests/finalizer_drain.rs` proves the HOLDER half (the drain fires the
+// finalizer and emits a release into a LOCAL stand-in place). These two tests
+// close the gap it leaves: the release must actually traverse the REAL cross-net
+// bridge and free a REAL pool net's `in_use` hold — the half the live failure
+// was in ("worker cancel worked, pool-net lease stayed stuck").
+// ===========================================================================
+
+/// THE FIX, end to end: a holder whose body never completes is cancelled while
+/// holding. A forced finalizer drain emits the release; it crosses the bridge;
+/// the pool's `t_release` returns the unit. `in_use` goes back to 0 and the
+/// capacity token is restored — WITHOUT any lease-expiry signal (the runner is
+/// still online, so `t_reap` must NOT be the thing that saves us).
+#[tokio::test]
+async fn manual_cancel_while_holding_frees_pool_lease_via_finalizer_drain() {
+    const CAP: usize = 1;
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_registered_pool_net(CAP);
+    ctx.pool.initialize(pool_net).await.unwrap();
+    ctx.pool
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
+        .await
+        .unwrap();
+
+    let (req_net, rp) = build_finalizer_requester_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+
+    // The instance acquires + registers its hold; the body is now "running".
+    settle(&ctx, 4).await;
+    assert_eq!(pool_in_use(&ctx, &pp).await, 1, "lease held while running");
+    assert_eq!(
+        ctx.requesters[0]
+            .get_marking()
+            .await
+            .token_count(&rp.holding),
+        1,
+        "the requester observably holds the unit"
+    );
+
+    // Manual cancel from the UI. The runner is STILL ONLINE — no lease_expired
+    // signal is ever injected, so the pool's `t_reap` cannot fire. Normal
+    // evaluation cannot release either (the finalizer is invisible to Normal
+    // selection, and the body never completes). The forced drain is the engine's
+    // `terminate` pre-teardown hook.
+    ctx.requesters[0]
+        .evaluate_until_quiescent(50)
+        .await
+        .unwrap();
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        1,
+        "normal evaluation alone must NOT free the lease — only the forced drain can"
+    );
+
+    let fired = ctx.requesters[0].drain_finalizers().await;
+    assert!(
+        !fired.is_empty(),
+        "the forced finalizer drain must fire the release on cancel"
+    );
+
+    // The released unit must cross the bridge and the pool must reclaim it.
+    settle(&ctx, 4).await;
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        0,
+        "cancel must free the pool lease (in_use back to 0), not strand it"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        CAP,
+        "capacity must be restored to the pool so the next job can be granted"
+    );
+
+    ctx.teardown().await;
+}
+
+/// THE FAILURE SHAPE (regression guard): a holder with NO release finalizer —
+/// the pre-fix lease-bridge, or any leased scope whose teardown does not drain a
+/// finalizer — leaks the unit forever when cancelled with the runner online.
+/// Neither normal evaluation nor a finalizer drain frees it, and because the
+/// runner never expires, `t_reap` never fires. The unit is stranded in `in_use`,
+/// which is exactly the stuck pool-net lease observed live. This test PINS that
+/// failure mode so the only escape remains the finalizer wired above.
+#[tokio::test]
+async fn manual_cancel_without_finalizer_strands_pool_lease() {
+    const CAP: usize = 1;
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_registered_pool_net(CAP);
+    ctx.pool.initialize(pool_net).await.unwrap();
+    ctx.pool
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
+        .await
+        .unwrap();
+
+    // The stock requester releases ONLY via `t_finish` (gated on finish_trigger)
+    // — it has no finalizer. We never fire the trigger (cancel, not completion).
+    let (req_net, rp) = build_registered_requester_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+
+    settle(&ctx, 4).await;
+    assert_eq!(pool_in_use(&ctx, &pp).await, 1, "lease held while running");
+
+    // Cancel: drain finalizers (there are none) and settle. Runner stays online,
+    // so no lease_expired is ever injected.
+    let fired = ctx.requesters[0].drain_finalizers().await;
+    assert!(
+        fired.is_empty(),
+        "no finalizer exists on this requester — nothing to drain"
+    );
+    settle(&ctx, 4).await;
+
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        1,
+        "BUG SHAPE: with no finalizer and the runner online, the cancelled hold is \
+         stranded in the pool's in_use forever — capacity never returns"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        CAP - 1,
+        "the pool's free capacity stays depleted — the next job can never be granted"
+    );
 
     ctx.teardown().await;
 }
