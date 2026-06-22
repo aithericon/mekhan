@@ -166,46 +166,58 @@ pub(crate) fn bridge_envelope(inj: PoolInjection<'_>, timestamp: &str) -> serde_
 }
 
 /// Publish one bridge injection to
-/// `petri.default.<pool_net_id>.bridge.<inbox>`. NO reply routing — bridge injections
-/// are one-way (the unit lives in the pool until granted/reaped; a claim is
-/// consumed by `t_claim`).
+/// `petri.<workspace>.<pool_net_id>.bridge.<inbox>`. NO reply routing — bridge
+/// injections are one-way (the unit lives in the pool until granted/reaped; a
+/// claim is consumed by `t_claim`).
 pub(crate) async fn inject_bridge(
     nats: &MekhanNats,
+    workspace: &str,
     pool_net_id: &str,
     inbox: &str,
     inj: PoolInjection<'_>,
     what: &str,
 ) {
-    // Pool/adapter nets deploy on the reserved `default` workspace sentinel
-    // (see `pool_net.rs`), so the engine's bridge listener filters
-    // `petri.default.{net}.bridge.>`. The pre-multi-tenancy
-    // `petri.bridge.{net}.{inbox}` shape ACKs into PETRI_GLOBAL but matches no
-    // consumer → the injection is silently dropped (masked only because
-    // heartbeats re-acquire).
-    let subject = crate::nats::subjects::Subjects::bridge_transfer(
-        crate::nats::subjects::Subjects::DEFAULT_WORKSPACE,
-        pool_net_id,
-        inbox,
-    );
+    // A pool net is deployed stamped with its OWNING resource's workspace (see
+    // `presence_pool_net::ensure_presence_pool_net_deployed` /
+    // `pool_net.rs`), so the engine's bridge listener filters
+    // `petri.{workspace}.{net}.bridge.>` where `{workspace}` is that resource's
+    // workspace uuid string (NOT the reserved `default` sentinel — pools left
+    // `default` when the cross-workspace stamp fix landed). The presence plane
+    // must publish under the SAME workspace the pool listens on, or the
+    // injection ACKs into JetStream but matches no consumer → it is silently
+    // dropped and the pool never receives capacity (the presence-plane analogue
+    // of the bridge-validation workspace bug).
+    let subject = bridge_subject(workspace, pool_net_id, inbox);
     let envelope = bridge_envelope(inj, &Utc::now().to_rfc3339());
     publish_jetstream(nats, &subject, &envelope, what).await;
 }
 
+/// Build the workspace-scoped bridge subject a pool injection publishes to.
+/// Pure (no NATS) so the workspace-scoping is unit-testable — the regression
+/// guard that the presence plane targets the pool's ACTUAL workspace and not the
+/// reserved `default` sentinel.
+fn bridge_subject(workspace: &str, pool_net_id: &str, inbox: &str) -> String {
+    crate::nats::subjects::Subjects::bridge_transfer(workspace, pool_net_id, inbox)
+}
+
 /// Inject ONE slot's `presence_acquire` token into the pool net's
 /// `presence_acquire` bridge_in place via
-/// `petri.default.<pool_net_id>.bridge.presence_acquire`. Wire shape is the engine's
-/// `CrossNetTokenTransfer` envelope (what the engine's global bridge listener
-/// deserializes); NO reply routing (acquire is one-way — the unit lives in the
-/// pool until granted/reaped). The BUILDER (`inj`) is per-kind: see the
+/// `petri.<workspace>.<pool_net_id>.bridge.presence_acquire`. Wire shape is the
+/// engine's `CrossNetTokenTransfer` envelope (what the engine's global bridge
+/// listener deserializes); NO reply routing (acquire is one-way — the unit lives
+/// in the pool until granted/reaped). `workspace` is the pool's deployed
+/// workspace (see [`inject_bridge`]). The BUILDER (`inj`) is per-kind: see the
 /// adapters' `acquire_injection` for each identity + dedup scheme.
 pub(crate) async fn inject_acquire(
     nats: &MekhanNats,
+    workspace: &str,
     pool_net_id: &str,
     inj: PoolInjection<'_>,
     what: &str,
 ) {
     inject_bridge(
         nats,
+        workspace,
         pool_net_id,
         well_known::POOL_PRESENCE_ACQUIRE_INBOX,
         inj,
@@ -240,38 +252,47 @@ pub(crate) fn signal_envelope(sig: PoolSignal<'_>, timestamp: &str) -> serde_jso
     })
 }
 
-/// Publish one signal injection to `petri.default.<pool_net_id>.signal.<signal>`.
+/// Publish one signal injection to
+/// `petri.<workspace>.<pool_net_id>.signal.<signal>`.
 pub(crate) async fn inject_signal(
     nats: &MekhanNats,
+    workspace: &str,
     pool_net_id: &str,
     signal: &str,
     sig: PoolSignal<'_>,
     what: &str,
 ) {
-    // Pool nets deploy on the reserved `default` workspace sentinel, so the
-    // engine's signal listener filters `petri.default.{net}.signal.>`. The old
-    // `petri.signal.{net}.{signal}` shape never matches a consumer → the
-    // expire signal is silently dropped (masked only because the sweep
-    // re-expires).
-    let subject = crate::nats::subjects::Subjects::signal_transfer(
-        crate::nats::subjects::Subjects::DEFAULT_WORKSPACE,
-        pool_net_id,
-        signal,
-    );
+    // A pool net is deployed stamped with its owning resource's workspace, so
+    // the engine's signal listener filters `petri.{workspace}.{net}.signal.>`
+    // where `{workspace}` is that resource's workspace uuid string (NOT the
+    // reserved `default` sentinel). The presence plane must publish the expire
+    // under the SAME workspace the pool listens on, or the signal ACKs into
+    // JetStream but matches no consumer → it is silently dropped and the unit is
+    // never reaped (the present→absent edge is lost).
+    let subject = signal_subject(workspace, pool_net_id, signal);
     let envelope = signal_envelope(sig, &Utc::now().to_rfc3339());
     publish_jetstream(nats, &subject, &envelope, what).await;
 }
 
+/// Build the workspace-scoped signal subject a pool expire publishes to. Pure
+/// (no NATS) so the workspace-scoping is unit-testable — see [`bridge_subject`].
+fn signal_subject(workspace: &str, pool_net_id: &str, signal: &str) -> String {
+    crate::nats::subjects::Subjects::signal_transfer(workspace, pool_net_id, signal)
+}
+
 /// Inject `slots` BARE `presence_expired { runner_id }` signals into the pool
-/// net's signal place via `petri.default.<pool_net_id>.signal.presence_expired` — one
-/// per applied slot, since each signal is consumed once and reaps exactly one
-/// of the unit's slots (reap-ALL-by-reap-key; the net's `t_reap_free` /
-/// `t_reap_held` discriminate free-vs-held by input place, so mekhan keeps NO
-/// holder tracking). `mk_signal` builds the per-kind signal from the
+/// net's signal place via
+/// `petri.<workspace>.<pool_net_id>.signal.presence_expired` — one per applied
+/// slot, since each signal is consumed once and reaps exactly one of the unit's
+/// slots (reap-ALL-by-reap-key; the net's `t_reap_free` / `t_reap_held`
+/// discriminate free-vs-held by input place, so mekhan keeps NO holder
+/// tracking). `workspace` is the pool's deployed workspace (see
+/// [`inject_signal`]). `mk_signal` builds the per-kind signal from the
 /// per-emission stamp (wall-clock millis, folded into the signal key); see the
 /// adapters' `expire_signal` for each source/key scheme.
 pub(crate) async fn inject_expires(
     nats: &MekhanNats,
+    workspace: &str,
     pool_net_id: &str,
     slots: u32,
     mk_signal: impl Fn(i64) -> PoolSignal<'static>,
@@ -280,6 +301,7 @@ pub(crate) async fn inject_expires(
     for _ in 0..slots {
         inject_signal(
             nats,
+            workspace,
             pool_net_id,
             well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
             mk_signal(Utc::now().timestamp_millis()),
@@ -324,12 +346,14 @@ pub(crate) fn claim_injection(grant_id: &str, runner_id: &str) -> PoolInjection<
 /// per-kind adapter.
 pub(crate) async fn inject_claim(
     nats: &MekhanNats,
+    workspace: &str,
     pool_net_id: &str,
     grant_id: &str,
     runner_id: &str,
 ) {
     inject_bridge(
         nats,
+        workspace,
         pool_net_id,
         well_known::POOL_PRESENCE_CLAIM_INBOX,
         claim_injection(grant_id, runner_id),
@@ -394,6 +418,11 @@ pub(crate) struct ExpiredSlots {
     /// The generic reap key (`runner_id` on the wire): the runner UUID or the
     /// member UUID.
     pub reap_key: Uuid,
+    /// The pool's deployed workspace (the uuid string the pool net was stamped
+    /// with). The reap signal must be published under THIS workspace or it
+    /// reaches no consumer (see [`inject_signal`]). Empty for a liveness-only
+    /// runner (no pool to expire — the empty `pool_net_id` short-circuits).
+    pub workspace: String,
     /// The entry's pool net id (may be empty for a liveness-only runner).
     pub pool_net_id: String,
     /// How many expire signals to inject (one per applied slot).
@@ -451,6 +480,7 @@ pub(crate) async fn sweep_loop<K, E, P, X, C, Fut>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::nats::subjects::Subjects;
     use crate::presence::{humans, runners};
 
     #[test]
@@ -475,6 +505,74 @@ mod tests {
     // `timestamp` parameter.
 
     const T: &str = "2026-01-01T00:00:00+00:00";
+
+    // ---- Workspace-scoping pins (the M2 regression guard) ----
+    //
+    // A pool net is deployed stamped with its owning resource's workspace (NOT
+    // the reserved `default` sentinel — pools left `default` when the
+    // cross-workspace stamp fix landed). The presence plane must publish acquire
+    // bridges + expire signals under that SAME workspace or they ACK into
+    // JetStream but reach no consumer → the pool never receives/loses capacity.
+    // These pin that the subject builders are workspace-scoped, so a regression
+    // back to `Subjects::DEFAULT_WORKSPACE` is caught here.
+
+    #[test]
+    fn bridge_subject_is_scoped_to_the_pools_workspace() {
+        let ws = "9a1d2bf1-0000-4000-8000-000000000001";
+        let subject = bridge_subject(ws, "pool-5f27e605", well_known::POOL_PRESENCE_ACQUIRE_INBOX);
+        // The owning workspace must be the subject's workspace segment ...
+        assert_eq!(
+            subject,
+            format!("petri.{ws}.pool-5f27e605.bridge.presence_acquire")
+        );
+        // ... and it must NOT collapse to the historical `default` sentinel.
+        assert!(
+            !subject.contains(".default."),
+            "presence bridge must target the pool's workspace, not `default`: {subject}"
+        );
+    }
+
+    #[test]
+    fn signal_subject_is_scoped_to_the_pools_workspace() {
+        let ws = "9a1d2bf1-0000-4000-8000-000000000001";
+        let subject = signal_subject(
+            ws,
+            "pool-5f27e605",
+            well_known::POOL_PRESENCE_EXPIRED_SIGNAL,
+        );
+        assert_eq!(
+            subject,
+            format!("petri.{ws}.pool-5f27e605.signal.presence_expired")
+        );
+        assert!(
+            !subject.contains(".default."),
+            "presence expire must target the pool's workspace, not `default`: {subject}"
+        );
+    }
+
+    #[test]
+    fn default_workspace_pool_is_stamped_with_the_nil_uuid_string_not_the_sentinel() {
+        // A pool in the default workspace is deployed stamped with the default
+        // workspace's nil-uuid STRING (matching how instance nets are stamped —
+        // see `presence_pool_net::ensure_presence_pool_net_deployed`), so even the
+        // "default" case must use that uuid string, never the literal `default`
+        // sentinel the presence plane used to hardcode.
+        let nil = uuid::Uuid::nil().to_string();
+        let subject = bridge_subject(&nil, "pool-x", well_known::POOL_PRESENCE_ACQUIRE_INBOX);
+        assert_eq!(
+            subject,
+            "petri.00000000-0000-0000-0000-000000000000.pool-x.bridge.presence_acquire"
+        );
+        assert_ne!(
+            subject,
+            Subjects::bridge_transfer(
+                Subjects::DEFAULT_WORKSPACE,
+                "pool-x",
+                well_known::POOL_PRESENCE_ACQUIRE_INBOX
+            ),
+            "the nil-uuid-stamped default pool and the `default` sentinel are DIFFERENT subjects"
+        );
+    }
 
     #[test]
     fn runner_acquire_envelope_shape() {

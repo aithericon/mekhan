@@ -92,6 +92,14 @@ pub(crate) struct PresenceEntry {
     /// Resolved once on the acquire edge and cached so the sweep can inject the
     /// expire signal without another DB round-trip.
     pool_net_id: String,
+    /// The pool's deployed workspace (the runner's `workspace_id` uuid string —
+    /// the SAME workspace [`resolve_pool_net_id`] resolves the capacity resource
+    /// in, and therefore the one `ensure_pool_net_for_resource` stamps the pool
+    /// net with). Cached alongside `pool_net_id` so both the acquire injection
+    /// and the sweep's expire signal publish under the workspace the pool net
+    /// actually listens on (NOT the reserved `default` sentinel — see
+    /// [`super::core::inject_bridge`]). Empty for a liveness-only runner.
+    pool_workspace: String,
     /// The runner's `group` alias (the `resources.path` of its `runner_group`),
     /// cached from the trusted DB row on the acquire edge. This is the SAME
     /// alias string a step's `CapacityBinding.alias` carries, so the
@@ -212,6 +220,7 @@ impl RunnerPresence {
                 last_seen: Instant::now(),
                 concurrency: 0,
                 pool_net_id: String::new(),
+                pool_workspace: String::new(),
                 pool_alias: Some(pool_alias.to_string()),
                 backends: Vec::new(),
                 host: None,
@@ -263,6 +272,7 @@ impl RunnerPresence {
                 last_seen: Instant::now(),
                 concurrency: 0,
                 pool_net_id: String::new(),
+                pool_workspace: String::new(),
                 pool_alias: group.map(|g| g.to_string()),
                 backends: Vec::new(),
                 host: None,
@@ -480,12 +490,13 @@ async fn handle_presence(
                 // (liveness-only) entry never injects.
                 let new_slots =
                     core::grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
-                let grow = new_slots.map(|s| (entry.pool_net_id.clone(), s));
+                let grow =
+                    new_slots.map(|s| (entry.pool_workspace.clone(), entry.pool_net_id.clone(), s));
                 // Always record the new target C (grow OR shrink).
                 entry.concurrency = concurrency;
                 drop(map);
 
-                if let Some((pool_net_id, new_slots)) = grow {
+                if let Some((pool_workspace, pool_net_id, new_slots)) = grow {
                     // Re-resolve the trusted namespace + caps from the DB row to
                     // mint the new slots (never from the wire payload).
                     if let Some(runner) = load_live_runner(db, runner_id).await {
@@ -498,8 +509,15 @@ async fn handle_presence(
                         for slot in new_slots {
                             core::inject_acquire(
                                 nats,
+                                &pool_workspace,
                                 &pool_net_id,
-                                acquire_injection(runner_id, slot, epoch, &executor_namespace, &caps),
+                                acquire_injection(
+                                    runner_id,
+                                    slot,
+                                    epoch,
+                                    &executor_namespace,
+                                    &caps,
+                                ),
                                 "presence acquire",
                             )
                             .await;
@@ -544,6 +562,8 @@ async fn handle_presence(
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: String::new(),
+                    // Liveness-only: no pool, so no workspace to publish under.
+                    pool_workspace: String::new(),
                     pool_alias: runner.group.clone(),
                     backends: backends.clone(),
                     host: host.clone(),
@@ -573,6 +593,13 @@ async fn handle_presence(
     let executor_namespace = format!("runner-jobs/{runner_id}");
     let caps = runner.capabilities.clone();
 
+    // The pool net is deployed stamped with the capacity resource's workspace,
+    // which `resolve_pool_net_id` just resolved IN the runner's workspace — so
+    // the pool listens on `petri.{runner.workspace_id}.{pool}.bridge.>`. Publish
+    // the acquire (and later the sweep's expire) under that SAME workspace, NOT
+    // the reserved `default` sentinel (see `core::inject_bridge`).
+    let pool_workspace = runner.workspace_id.to_string();
+
     // Per-admission epoch stamped into every slot's unit_id/dedup_id so this
     // admission EPISODE is distinct from any prior one for this runner — a toggle
     // off→on (or a re-acquire after a reap) inside the engine's bridge dedup
@@ -599,6 +626,7 @@ async fn handle_presence(
     for slot in 0..need {
         core::inject_acquire(
             nats,
+            &pool_workspace,
             &pool_net_id,
             acquire_injection(runner_id, slot, epoch, &executor_namespace, &caps),
             "presence acquire",
@@ -618,6 +646,7 @@ async fn handle_presence(
             PresenceEntry {
                 last_seen: Instant::now(),
                 pool_net_id: pool_net_id.clone(),
+                pool_workspace: pool_workspace.clone(),
                 pool_alias: runner.group.clone(),
                 backends: backends.clone(),
                 host: host.clone(),
@@ -767,6 +796,7 @@ pub(crate) async fn start_presence_sweep(
             entry.concurrency = 0;
             ExpiredSlots {
                 reap_key: *rid,
+                workspace: entry.pool_workspace.clone(),
                 pool_net_id: entry.pool_net_id.clone(),
                 slots: applied_c,
             }
@@ -776,6 +806,7 @@ pub(crate) async fn start_presence_sweep(
             let fleet = fleet.clone();
             async move {
                 let runner_id = expired.reap_key;
+                let pool_workspace = expired.workspace;
                 let pool_net_id = expired.pool_net_id;
                 let applied_c = expired.slots;
 
@@ -802,6 +833,7 @@ pub(crate) async fn start_presence_sweep(
                 );
                 core::inject_expires(
                     &nats,
+                    &pool_workspace,
                     &pool_net_id,
                     applied_c,
                     |now_ms| expire_signal(runner_id, now_ms),
@@ -876,6 +908,7 @@ mod tests {
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: "pool-x".to_string(),
+                    pool_workspace: "ws-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
                     host: None,
@@ -1044,6 +1077,7 @@ mod tests {
                 PresenceEntry {
                     last_seen: Instant::now(),
                     pool_net_id: "pool-x".to_string(),
+                    pool_workspace: "ws-x".to_string(),
                     pool_alias: Some("lab_fleet".to_string()),
                     backends: vec!["python".to_string()],
                     host: None,
