@@ -1,0 +1,8 @@
+{
+  "path": "suessco_loki",
+  "resource_type": "loki",
+  "display_name": "Suessco Cluster Loki",
+  "config": {
+    "base_url": "${SUESSCO_LOKI_URL:-http://loki.service.consul:3100}"
+  }
+}
