@@ -88,6 +88,8 @@ fn registry_with_topologies(topos: Vec<(String, PetriNet)>) -> (Router, Arc<Reg>
                     Box::pin(async {})
                         as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                 }),
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                Arc::new(parking_lot::RwLock::new(None)),
             )
         });
     let registry = Arc::new(NetRegistry::new(factory));
@@ -131,6 +133,7 @@ async fn activation_wakes_hibernated_bridge_target() {
     registry.get_or_create(target_id);
     registry
         .hibernate(target_id)
+        .await
         .expect("hibernate target should succeed");
     assert!(
         registry.get(target_id).is_none(),

@@ -236,6 +236,7 @@ impl JobExecutor {
                 transports: self.transports.clone(),
                 channels: job.channels.clone(),
                 metric_sink: self.metric_sink.clone(),
+                artifact_store: self.artifact_store.clone(),
             }))
         } else {
             None

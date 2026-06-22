@@ -17,6 +17,14 @@ use aithericon_executor_domain::{
 
 use crate::chunks::{datastream_subject, TransportRegistry};
 use crate::event_emitter::{enrich_log_fields, EventEmitter, StreamContext};
+use crate::executor::DEFAULT_MAX_OUTPUT_INLINE_BYTES;
+
+/// Ceiling on an IPC `emit` item payload before it is offloaded out-of-band to
+/// the artifact store (carrying a slim reference handle) or — when no store is
+/// wired — hard-errors the emit back to the SDK. The worker path NEVER silently
+/// elides; the engine's marking guard is the last-line `{__omitted__}` defense.
+/// Shared with the inline-output cap and the in-process emit path.
+const MAX_EMIT_ITEM_BYTES: usize = DEFAULT_MAX_OUTPUT_INLINE_BYTES;
 use aithericon_executor_ipc::proto;
 use aithericon_executor_ipc::{ExecutorSidecar, ExecutorSidecarServer};
 use aithericon_executor_logs::LogSink;
@@ -313,6 +321,7 @@ impl ExecutorSidecar for SidecarService {
             &self.channels,
             &self.metadata,
             &self.event_emitter,
+            &self.artifact_store,
         )
         .await;
         Ok(Response::new(make_response(status, error_message)))
@@ -516,6 +525,7 @@ fn convert_control_kind(kind: proto::ControlKind) -> ControlKind {
 ///
 /// On success the emit is published fire-and-forget; a missing emitter (no NATS
 /// wired) validates then no-ops, so the contract is identical offline.
+#[allow(clippy::too_many_arguments)]
 async fn handle_emit_control(
     req: &proto::EmitControlRequest,
     execution_id: &str,
@@ -523,6 +533,7 @@ async fn handle_emit_control(
     channels: &[ChannelManifestEntry],
     metadata: &HashMap<String, String>,
     event_emitter: &Option<Arc<dyn EventEmitter>>,
+    artifact_store: &Option<Arc<dyn ArtifactStore>>,
 ) -> (proto::ResponseStatus, Option<String>) {
     let channel = req.channel.trim();
     if channel.is_empty() {
@@ -565,12 +576,43 @@ async fn handle_emit_control(
         );
     }
 
+    // Bound only the `item` payload (the one user-bytes element that parks in the
+    // marking); `open`/`close` brackets carry small structural descriptors and
+    // pass through verbatim. The engine re-enforces the same ceiling.
+    //
+    // An oversized `item` is OFFLOADED out-of-band to the artifact store and the
+    // item carries a slim reference handle (preferred); when no store is wired
+    // the emit HARD-ERRORS back to the SDK (which raises in the child, failing
+    // the step) rather than silently eliding the element. NEVER silently drop.
+    let payload_json = match kind {
+        ControlKind::Item => {
+            match crate::event_emitter::bound_item_payload_str(
+                req.payload_json.clone(),
+                MAX_EMIT_ITEM_BYTES,
+                artifact_store.as_ref(),
+                execution_id,
+                channel,
+                &req.episode_uid,
+                req.item_idx,
+            )
+            .await
+            {
+                crate::event_emitter::BoundedItemPayload::Inline(s) => s,
+                crate::event_emitter::BoundedItemPayload::TooLarge { message } => {
+                    error!(%execution_id, channel, "emit_control: {message}");
+                    return (proto::ResponseStatus::Error, Some(message));
+                }
+            }
+        }
+        ControlKind::Open | ControlKind::Close => req.payload_json.clone(),
+    };
+
     let event = ControlEmitEvent {
         execution_id: execution_id.to_string(),
         workspace_id: workspace_id.to_string(),
         channel: channel.to_string(),
         kind,
-        payload_json: req.payload_json.clone(),
+        payload_json,
         item_idx: req.item_idx,
         count: req.count,
         episode_uid: req.episode_uid.clone(),

@@ -12,6 +12,19 @@
 //! hibernation the in-memory cache is always empty and we need full replay —
 //! durable ack tracking has zero value. This also eliminates "consumer deleted"
 //! race conditions that occurred with the previous delete-then-recreate pattern.
+//!
+//! ## Bounded-memory hydration (fold-as-you-go)
+//!
+//! Hydration **streams** the `petri.{ws}.{net}.events.>` subject — it never
+//! accumulates the whole subject into a `Vec` before applying. Each replayed
+//! message is deserialized, processed, handed to
+//! [`MemoryEventStore::load_existing_event`] (which folds it into the bounded
+//! base+tail per the store's eviction policy), and then dropped. The only state
+//! retained across the loop is O(1): the last delivered `stream_sequence`, a
+//! hydration counter, and the message-stream cursor. Combined with the store's
+//! byte-capped tail, peak resident memory during hydration is bounded by the
+//! tail cap (+ folded base marking/dedup) rather than O(log size) — a multi-GB
+//! event log rehydrates without OOMing the engine.
 
 use std::time::Duration;
 
@@ -20,6 +33,7 @@ use futures::StreamExt;
 use petri_application::TopologyRepository;
 use petri_domain::{DomainEvent, PersistedEvent};
 use petri_infrastructure::MemoryEventStore;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::{oneshot, watch};
 
@@ -42,6 +56,23 @@ pub struct EventConsumer {
 
     /// Oneshot sender — signals when initial hydration is complete
     ready_tx: Option<oneshot::Sender<()>>,
+
+    /// Shared cell exposing the JetStream `stream_sequence` of the last event
+    /// the consumer has applied. The registry's hibernate hook reads it to
+    /// build the snapshot's `last_stream_seq` (so the wake resumes the consumer
+    /// at `last_stream_seq + 1`). Updated in lockstep with the local
+    /// `last_stream_seq` at every apply point. `None` when the consumer is not
+    /// part of a snapshot-enabled stack (the value just isn't published).
+    last_stream_seq_cell: Option<Arc<AtomicU64>>,
+
+    /// Optional resume point for the INITIAL hydration consumer. When `Some(s)`
+    /// (set by the wake path from a snapshot), the first consumer is created
+    /// with `DeliverPolicy::ByStartSequence(s + 1)` and the store has already
+    /// been seeded from the snapshot, so only the post-snapshot delta replays.
+    /// When `None` (fresh/legacy net, or no snapshot), the consumer uses
+    /// `DeliverPolicy::All` and replays the full log (bounded peak memory still
+    /// holds thanks to the byte-capped tail).
+    resume_from: Option<u64>,
 }
 
 impl EventConsumer {
@@ -63,6 +94,33 @@ impl EventConsumer {
             topology,
             applied_tx,
             ready_tx: Some(ready_tx),
+            last_stream_seq_cell: None,
+            resume_from: None,
+        }
+    }
+
+    /// Publish the consumer-tracked JetStream `stream_sequence` of the last
+    /// applied event into `cell`, so the hibernate hook can read it for the
+    /// snapshot's `last_stream_seq`. Builder-style; call before `start`.
+    pub fn with_last_stream_seq_cell(mut self, cell: Arc<AtomicU64>) -> Self {
+        self.last_stream_seq_cell = Some(cell);
+        self
+    }
+
+    /// Resume the INITIAL hydration consumer at `start_sequence + 1` instead of
+    /// replaying the whole log. Set by the wake path after seeding the store
+    /// from a snapshot whose `last_stream_seq == start_sequence`. Builder-style;
+    /// call before `start`.
+    pub fn with_resume_from(mut self, start_sequence: u64) -> Self {
+        self.resume_from = Some(start_sequence);
+        self
+    }
+
+    /// Update both the local hydration cursor and the shared cell (if present).
+    fn record_stream_seq(&self, local: &mut u64, seq: u64) {
+        *local = seq;
+        if let Some(cell) = &self.last_stream_seq_cell {
+            cell.store(seq, Ordering::SeqCst);
         }
     }
 
@@ -112,13 +170,26 @@ impl EventConsumer {
             }
         };
 
-        // Ephemeral pull consumer — replays all events from the beginning.
-        // No durable_name: NATS auto-cleans the consumer on disconnect.
-        // This is the correct pattern for hydration since we always need full
-        // replay after hibernation (in-memory cache is empty).
+        // Ephemeral pull consumer. No durable_name: NATS auto-cleans the
+        // consumer on disconnect.
+        //
+        // Initial deliver policy:
+        // - `resume_from = Some(s)` (snapshot wake): the store was seeded from a
+        //   snapshot whose `last_stream_seq == s`, so we replay ONLY the
+        //   post-snapshot delta via `ByStartSequence(s + 1)` — wake is then
+        //   `O(events since hibernate)`, not `O(total events)`.
+        // - `resume_from = None` (fresh/legacy net): `DeliverPolicy::All` — full
+        //   replay, with peak memory still bounded by the store's byte-capped
+        //   tail (fold-as-you-go).
+        let initial_deliver_policy = match self.resume_from {
+            Some(s) => jetstream::consumer::DeliverPolicy::ByStartSequence {
+                start_sequence: s.saturating_add(1),
+            },
+            None => jetstream::consumer::DeliverPolicy::All,
+        };
         let consumer_config = jetstream::consumer::pull::Config {
             filter_subject: filter_subject.clone(),
-            deliver_policy: jetstream::consumer::DeliverPolicy::All,
+            deliver_policy: initial_deliver_policy,
             ack_policy: jetstream::consumer::AckPolicy::Explicit,
             ..Default::default()
         };
@@ -152,7 +223,15 @@ impl EventConsumer {
         // disconnected — when those events are simultaneously suppressed by
         // JetStream's `Nats-Msg-Id` dedup on a re-publish, the engine ends
         // up with a phantom event on the stream that the cache never sees.
-        let mut last_stream_seq: u64 = 0;
+        //
+        // Initialize from the snapshot baseline (if any): on a snapshot wake the
+        // store already reflects events up to `resume_from`, so the live
+        // consumer (and any reconnect) must resume from there even if the
+        // post-snapshot delta is empty (no message advances the cursor).
+        let mut last_stream_seq: u64 = self.resume_from.unwrap_or(0);
+        if let Some(cell) = &self.last_stream_seq_cell {
+            cell.store(last_stream_seq, Ordering::SeqCst);
+        }
 
         loop {
             tokio::select! {
@@ -166,12 +245,27 @@ impl EventConsumer {
                 result = tokio::time::timeout(hydration_timeout, messages.next()) => {
                     match result {
                         Ok(Some(Ok(msg))) => {
-                            if let Ok(info) = msg.info() {
-                                last_stream_seq = info.stream_sequence;
+                            // Capture the JetStream stream_sequence for THIS
+                            // message so we can record it into the store in
+                            // lockstep with the apply (MAJOR 2b coherence).
+                            let stream_seq = msg.info().map(|i| i.stream_sequence).ok();
+                            if let Some(s) = stream_seq {
+                                self.record_stream_seq(&mut last_stream_seq, s);
                             }
+                            // Fold-as-you-go: process this one message, hand it to
+                            // the bounded store (which folds it into base/tail and
+                            // evicts down to the byte cap), then let it drop. We
+                            // never collect the subject into a Vec — peak memory is
+                            // bounded by the store's tail cap, not the log size.
                             if let Some(event) = self.process_message(&msg.payload) {
                                 let seq = event.sequence;
-                                self.cache.load_existing_event(event);
+                                // Record the stream_sequence under the same store
+                                // lock as the apply so the hibernate snapshot's
+                                // (marking, last_stream_seq) pair stays coherent.
+                                self.cache.load_existing_event_with_stream_seq(
+                                    event,
+                                    stream_seq.unwrap_or(seq),
+                                );
                                 let _ = self.applied_tx.send(seq + 1);
                                 hydration_count += 1;
                             }
@@ -231,12 +325,16 @@ impl EventConsumer {
                             result = tokio::time::timeout(hydration_timeout, messages.next()) => {
                                 match result {
                                     Ok(Some(Ok(msg))) => {
-                                        if let Ok(info) = msg.info() {
-                                            last_stream_seq = info.stream_sequence;
+                                        let stream_seq = msg.info().map(|i| i.stream_sequence).ok();
+                                        if let Some(s) = stream_seq {
+                                            self.record_stream_seq(&mut last_stream_seq, s);
                                         }
                                         if let Some(event) = self.process_message(&msg.payload) {
                                             let seq = event.sequence;
-                                            self.cache.load_existing_event(event);
+                                            self.cache.load_existing_event_with_stream_seq(
+                                                event,
+                                                stream_seq.unwrap_or(seq),
+                                            );
                                             let _ = self.applied_tx.send(seq + 1);
                                             hydration_count += 1;
                                         }
@@ -361,12 +459,16 @@ impl EventConsumer {
                         match msg_result {
                             Some(Ok(msg)) => {
                                 consecutive_errors = 0;
-                                if let Ok(info) = msg.info() {
-                                    last_stream_seq = info.stream_sequence;
+                                let stream_seq = msg.info().map(|i| i.stream_sequence).ok();
+                                if let Some(s) = stream_seq {
+                                    self.record_stream_seq(&mut last_stream_seq, s);
                                 }
                                 if let Some(event) = self.process_message(&msg.payload) {
                                     let seq = event.sequence;
-                                    self.cache.load_existing_event(event);
+                                    self.cache.load_existing_event_with_stream_seq(
+                                        event,
+                                        stream_seq.unwrap_or(seq),
+                                    );
                                     let _ = self.applied_tx.send(seq + 1);
                                 }
                                 if let Err(e) = msg.ack().await {

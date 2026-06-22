@@ -126,6 +126,8 @@ fn build(target_ws: Option<&str>) -> (Router, Arc<Reg>) {
                     rx,
                     Arc::new(std::sync::RwLock::new(None)),
                     starter,
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    Arc::new(parking_lot::RwLock::new(None)),
                 )
             } else {
                 // Parent (and anything else): topology pre-loaded; no-op starter.
@@ -140,6 +142,8 @@ fn build(target_ws: Option<&str>) -> (Router, Arc<Reg>) {
                         Box::pin(async {})
                             as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                     }),
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    Arc::new(parking_lot::RwLock::new(None)),
                 )
             }
         });
@@ -169,11 +173,12 @@ async fn put_run_mode(router: Router, net_id: &str, mode: &str) -> (StatusCode, 
 
 /// Bring the pool up then hibernate it: known-but-cold, the post-idle / restart
 /// condition the activation gate must tolerate.
-fn hibernate_pool(registry: &Arc<Reg>) {
+async fn hibernate_pool(registry: &Arc<Reg>) {
     let target_id = "pool-target-net";
     registry.get_or_create(target_id);
     registry
         .hibernate(target_id)
+        .await
         .expect("hibernate pool should succeed");
     assert!(
         registry.get(target_id).is_none(),
@@ -188,7 +193,7 @@ fn hibernate_pool(registry: &Arc<Reg>) {
 async fn default_recorded_pool_hydrates_and_activation_succeeds() {
     let (router, registry) = build(Some("default"));
     registry.get_or_create("parent-net");
-    hibernate_pool(&registry);
+    hibernate_pool(&registry).await;
 
     let (status, body) = put_run_mode(router, "parent-net", "running").await;
 
@@ -214,7 +219,7 @@ async fn default_recorded_pool_hydrates_and_activation_succeeds() {
 async fn pool_stays_cold_when_resolver_collapses_default_to_none() {
     let (router, registry) = build(None);
     registry.get_or_create("parent-net");
-    hibernate_pool(&registry);
+    hibernate_pool(&registry).await;
 
     let (status, body) = put_run_mode(router, "parent-net", "running").await;
 

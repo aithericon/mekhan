@@ -426,8 +426,48 @@ impl<E: EventRepository + 'static> EventRepository for NatsEventPublisher<E> {
         self.inner.len().await
     }
 
+    async fn materialized_floor(&self) -> usize {
+        self.inner.materialized_floor().await
+    }
+
+    async fn earliest_available_sequence(&self) -> Option<u64> {
+        self.inner.earliest_available_sequence().await
+    }
+
     async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
         self.inner.events_from(idx).await
+    }
+
+    async fn events_from_checked(&self, idx: usize) -> Option<Vec<PersistedEvent>> {
+        self.inner.events_from_checked(idx).await
+    }
+
+    async fn marking_base(&self) -> (petri_domain::Marking, Vec<PersistedEvent>, u64) {
+        self.inner.marking_base().await
+    }
+
+    async fn last_hash(&self) -> Option<String> {
+        self.inner.last_hash().await
+    }
+
+    async fn write_cursor(&self) -> (u64, Option<String>) {
+        self.inner.write_cursor().await
+    }
+
+    async fn dedup_seed(&self) -> petri_application::DedupSeed {
+        self.inner.dedup_seed().await
+    }
+
+    async fn snapshot_inputs(&self) -> petri_application::SnapshotInputs {
+        self.inner.snapshot_inputs().await
+    }
+
+    async fn seed_from_snapshot(&self, snapshot: &petri_application::NetSnapshot) {
+        self.inner.seed_from_snapshot(snapshot).await
+    }
+
+    async fn seed_write_state(&self, next_sequence: u64, last_hash: Option<String>) {
+        self.inner.seed_write_state(next_sequence, last_hash).await
     }
 }
 

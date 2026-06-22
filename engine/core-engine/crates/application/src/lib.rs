@@ -16,6 +16,7 @@ pub mod human_handlers;
 pub(crate) mod idempotency_index;
 pub(crate) mod join_index;
 pub mod materialize_image_handlers;
+pub mod net_snapshot;
 pub mod ports;
 pub mod pre_dispatch;
 pub mod process_handlers;
@@ -43,8 +44,8 @@ pub use catalogue_handlers::*;
 pub use effect::*;
 pub use errors::*;
 pub use evaluation::{
-    check_terminal_state, EvaluateFinalState, EvaluateResult, TerminalReachedInfo,
-    TransitionStatusDetail,
+    advance_marking, check_terminal_state, EvaluateFinalState, EvaluateResult, MarkingDelta,
+    TerminalReachedInfo, TransitionStatusDetail,
 };
 pub use execute_contract::{ExecuteRequest, ExecuteResponse};
 pub use executor::*;
@@ -58,6 +59,7 @@ pub use process_handlers::*;
 #[cfg(test)]
 mod integration_tests;
 pub use materialize_image_handlers::MaterializeImageHandler;
+pub use net_snapshot::{DedupEntry, NetSnapshot, SnapshotInputs, SnapshotStore, SNAPSHOT_VERSION};
 pub use process_log_handler::*;
 pub use process_metric_handler::*;
 pub use process_phase_progress_handler::*;

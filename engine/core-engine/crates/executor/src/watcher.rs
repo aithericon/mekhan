@@ -33,6 +33,57 @@ use petri_scheduler_bridge::{
 
 use crate::config::ExecutorConfig;
 
+/// Ceiling on the serialized byte size of a single `emit`/`scatter` streaming
+/// **item** payload before the engine refuses to park it inline in the net
+/// marking, substituting a slim `{ "__omitted__": … }` placeholder instead.
+///
+/// This mirrors the executor's `DEFAULT_MAX_OUTPUT_INLINE_BYTES` (1 MiB) — the
+/// cap that already keeps terminal `set_output` values slim — and exists for the
+/// same reason: an emit item becomes a `TokenCreated` folded into the in-memory
+/// `Marking`, and under a `gather` join MANY items sit parked simultaneously, so
+/// an uncapped per-item payload (a high-volume crawl emitting per-file blobs) is
+/// the one path that can bloat the marking (and any hibernation snapshot) past
+/// what a memory-bounded engine can rehydrate.
+///
+/// This is the LAST line of defense: every emit token — from any worker version,
+/// capped or not — flows through `control_emit_token`, so enforcing the ceiling
+/// here guarantees the marking stays slim regardless of the producer. Overridable
+/// via `PETRI_MAX_EMIT_ITEM_INLINE_BYTES` for parity with the executor knob.
+const DEFAULT_MAX_EMIT_ITEM_INLINE_BYTES: usize = 1024 * 1024;
+
+/// Resolve the emit-item inline ceiling, honoring the env override once.
+fn max_emit_item_inline_bytes() -> usize {
+    std::env::var("PETRI_MAX_EMIT_ITEM_INLINE_BYTES")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_EMIT_ITEM_INLINE_BYTES)
+}
+
+/// If `payload`'s serialized size exceeds `limit`, replace it with a slim
+/// placeholder carrying the elided size so the token entering the marking holds
+/// a reference-shaped stub, not the bytes. Returns the (possibly substituted)
+/// value. A within-limit payload passes through untouched.
+///
+/// The placeholder mirrors the executor's `redact_oversized_inline_outputs`
+/// shape (`{ "__omitted__": … }`) so downstream consumers see the same
+/// "value elided" sentinel on both the output path and the emit path.
+fn cap_emit_payload(payload: serde_json::Value, limit: usize) -> serde_json::Value {
+    let size = serde_json::to_vec(&payload).map(|b| b.len()).unwrap_or(0);
+    if size > limit {
+        serde_json::json!({
+            "__omitted__": format!(
+                "emit item payload of {size} B exceeded the inline limit of {limit} B \
+                 and was not parked in the marking; stream large payloads as a data \
+                 channel (data_open/data_chunk) or persist via log_artifact and emit \
+                 the reference"
+            ),
+            "__elided_bytes__": size,
+        })
+    } else {
+        payload
+    }
+}
+
 /// Errors from the executor event watcher.
 #[derive(Debug, thiserror::Error)]
 pub enum WatcherError {
@@ -615,6 +666,15 @@ fn control_emit_token(emit: &ControlEmitEvent) -> (serde_json::Value, String) {
         serde_json::from_str(&emit.payload_json).unwrap_or(serde_json::Value::Null)
     };
 
+    // LAST-LINE marking guard: an emit `item` payload is the one uncapped path
+    // that becomes a parked marking token carrying inline bytes (under a `gather`
+    // join, MANY items co-reside). Cap it here — the single seam every emit token
+    // flows through — so the marking (and any hibernation snapshot) stays slim no
+    // matter the producer. Bracket payloads (open descriptors, control-close
+    // counts) are inherently small; we cap the user-supplied `item` and data-plane
+    // close payloads, which are the only ones that ride user bytes.
+    let payload = cap_emit_payload(payload, max_emit_item_inline_bytes());
+
     // Namespaced correlation id: instance + per-episode uid.
     let map_id = format!("{}:{}", emit.execution_id, emit.episode_uid);
 
@@ -823,5 +883,73 @@ mod tests {
         assert_eq!(tok_b["__map_id"], "exec-1:uid-B");
         // …and their dedup ids stay independent (no JetStream collision).
         assert_ne!(dedup_a, dedup_b);
+    }
+
+    /// PART B marking guard: an `item` emit whose payload exceeds the inline
+    /// ceiling MUST NOT enter the marking carrying its bytes. The translated
+    /// token's `payload` is replaced with a slim `{ "__omitted__": …,
+    /// "__elided_bytes__": N }` placeholder, while the rest of the token shape
+    /// (kind/correlation/idx/dedup) is untouched — the gather barrier still
+    /// works, it just never parks the blob.
+    #[test]
+    fn oversized_item_payload_is_elided_before_entering_marking() {
+        // A payload comfortably over the 1 MiB default ceiling.
+        let big = "x".repeat(2 * 1024 * 1024);
+        let payload_json = serde_json::to_string(&serde_json::json!({ "blob": big })).unwrap();
+        let oversized_bytes = payload_json.len();
+
+        let emit = ControlEmitEvent {
+            execution_id: "exec-1".into(),
+            workspace_id: "default".into(),
+            channel: "items".into(),
+            kind: ControlKind::Item,
+            payload_json,
+            item_idx: 5,
+            count: 0,
+            episode_uid: "uid-big".into(),
+            metadata: HashMap::new(),
+        };
+
+        let (token, dedup) = control_emit_token(&emit);
+
+        // The token that lands in the marking carries the placeholder, not the blob.
+        assert!(
+            token["payload"].get("__omitted__").is_some(),
+            "oversized payload must be elided to the __omitted__ placeholder"
+        );
+        assert!(token["payload"].get("blob").is_none());
+
+        // And the parked token itself is now slim — well under the ceiling.
+        let token_bytes = serde_json::to_vec(&token["payload"]).unwrap().len();
+        assert!(
+            token_bytes < max_emit_item_inline_bytes(),
+            "elided token payload ({token_bytes} B) must be far below the cap"
+        );
+        assert!(token_bytes < oversized_bytes / 100);
+
+        // The coloring leaves + dedup are preserved — gather still correlates.
+        assert_eq!(token["kind"], "item");
+        assert_eq!(token["__map_idx"], 5);
+        assert_eq!(token["__map_id"], "exec-1:uid-big");
+        assert_eq!(dedup, "exec-1-control-items-uid-big-item-5");
+    }
+
+    /// The cap is a CEILING, not a transform: a payload at or under the limit
+    /// passes through byte-for-byte (no spurious elision of normal items).
+    #[test]
+    fn within_limit_item_payload_passes_through_untouched() {
+        let small = serde_json::json!({ "v": 42, "note": "well under a megabyte" });
+        let capped = cap_emit_payload(small.clone(), max_emit_item_inline_bytes());
+        assert_eq!(capped, small);
+    }
+
+    /// The cap helper is deterministic against an explicit tiny limit, so the
+    /// guard's behavior does not depend on the 1 MiB default being exceeded.
+    #[test]
+    fn cap_helper_elides_above_explicit_limit() {
+        let payload = serde_json::json!({ "data": "abcdefghij" }); // > 8 bytes serialized
+        let elided = cap_emit_payload(payload, 8);
+        assert!(elided.get("__omitted__").is_some());
+        assert!(elided.get("data").is_none());
     }
 }

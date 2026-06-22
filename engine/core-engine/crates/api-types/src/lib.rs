@@ -18,7 +18,26 @@ pub struct TopologyResponse {
 #[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
 pub struct EventsResponse {
     pub events: Vec<PersistedEvent>,
+    /// Whether the returned `events` form an unbroken, correctly hash-linked
+    /// chain. With a bounded in-memory store this is verified over the
+    /// returned (possibly partial) range via `verify_event_chain_from`, so a
+    /// valid contiguous tail is NOT misreported as broken — see
+    /// `history_truncated` to know whether the range is partial.
     pub chain_valid: bool,
+    /// The lowest `.sequence` the in-memory store can currently serve, or
+    /// `None` if it holds no events. When this is greater than the requested
+    /// `from_sequence` (or greater than `0` for an unfiltered request), the
+    /// in-memory view is partial: the engine has evicted older events to bound
+    /// memory. They remain in the durable NATS log and can be replayed from
+    /// there; this field tells a client where the in-memory window begins.
+    #[serde(default)]
+    pub earliest_available_sequence: Option<u64>,
+    /// `true` when the in-memory store could not serve the full requested
+    /// range because older events were evicted (the requested `from_sequence`,
+    /// or `0` for an unfiltered request, is below `earliest_available_sequence`).
+    /// The returned `events` are the contiguous tail the store still holds.
+    #[serde(default)]
+    pub history_truncated: bool,
 }
 
 /// Status of a transition (enabled or reason for being disabled)
