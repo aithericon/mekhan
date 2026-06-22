@@ -865,8 +865,22 @@ pub async fn claim_task(
 
     // Publish the claim onto the capacity pool's existing cross-net bridge. This
     // is fire-and-forget; the `claimed` status is projected from the pool net's
-    // `in_use` token (docs/34 §4.2), not set here.
-    crate::presence::inject_claim(&state.nats, &pool_net_id, &id, &member_id.to_string()).await;
+    // `in_use` token (docs/34 §4.2), not set here. The pool net is deployed under
+    // the capacity resource's workspace — the same workspace the offered task
+    // lives in — so the claim must publish under it, not the reserved `default`
+    // sentinel (the consent-pool analogue of the bridge-workspace fix).
+    let pool_workspace = task
+        .workspace_id
+        .unwrap_or_else(uuid::Uuid::nil)
+        .to_string();
+    crate::presence::inject_claim(
+        &state.nats,
+        &pool_workspace,
+        &pool_net_id,
+        &id,
+        &member_id.to_string(),
+    )
+    .await;
 
     tracing::info!(
         task_id = %id,

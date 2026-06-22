@@ -335,6 +335,10 @@ async fn reconcile(
     // race the edge.
     enum Edge {
         Acquire {
+            /// The pool's deployed workspace (the capacity resource's
+            /// `workspace_id` uuid string) — the injection must publish under it,
+            /// not the reserved `default` sentinel (see `core::inject_bridge`).
+            workspace: String,
             pool_net_id: String,
             member: Uuid,
             concurrency: u32,
@@ -344,6 +348,7 @@ async fn reconcile(
             caps: serde_json::Value,
         },
         Expire {
+            workspace: String,
             pool_net_id: String,
             member: Uuid,
             concurrency: u32,
@@ -359,6 +364,9 @@ async fn reconcile(
         if should && !entry.present {
             entry.present = true;
             Edge::Acquire {
+                // The capacity resource's pool net is deployed stamped with this
+                // workspace, so the bridge listener filters on it.
+                workspace: entry.workspace_id.to_string(),
                 pool_net_id: entry.pool_net_id.clone(),
                 member: entry.member_user_id,
                 concurrency: entry.concurrency,
@@ -371,6 +379,7 @@ async fn reconcile(
         } else if !should && entry.present {
             entry.present = false;
             Edge::Expire {
+                workspace: entry.workspace_id.to_string(),
                 pool_net_id: entry.pool_net_id.clone(),
                 member: entry.member_user_id,
                 concurrency: entry.concurrency,
@@ -382,6 +391,7 @@ async fn reconcile(
 
     match edge {
         Edge::Acquire {
+            workspace,
             pool_net_id,
             member,
             concurrency,
@@ -408,6 +418,7 @@ async fn reconcile(
             for slot in 0..need {
                 core::inject_acquire(
                     nats,
+                    &workspace,
                     &pool_net_id,
                     acquire_injection(member, slot, epoch, &caps),
                     "human presence acquire",
@@ -420,12 +431,14 @@ async fn reconcile(
             );
         }
         Edge::Expire {
+            workspace,
             pool_net_id,
             member,
             concurrency,
         } => {
             core::inject_expires(
                 nats,
+                &workspace,
                 &pool_net_id,
                 concurrency,
                 |now_ms| expire_signal(member, now_ms),
@@ -752,6 +765,7 @@ pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: Human
             entry.present = false;
             ExpiredSlots {
                 reap_key: key.1,
+                workspace: entry.workspace_id.to_string(),
                 pool_net_id: entry.pool_net_id.clone(),
                 slots: entry.concurrency,
             }
@@ -760,6 +774,7 @@ pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: Human
             let nats = nats.clone();
             async move {
                 let member = expired.reap_key;
+                let workspace = expired.workspace;
                 let pool_net_id = expired.pool_net_id;
                 let concurrency = expired.slots;
                 tracing::info!(
@@ -768,6 +783,7 @@ pub(crate) async fn start_human_presence_sweep(nats: MekhanNats, presence: Human
                 );
                 core::inject_expires(
                     &nats,
+                    &workspace,
                     &pool_net_id,
                     concurrency,
                     |now_ms| expire_signal(member, now_ms),
