@@ -20,8 +20,9 @@
 //!
 //! - Reply frames (one [`ReplyFrame`] per NATS message, serde-tagged JSON):
 //!   * `OPEN  { req_id, seq: 0, content_type, total_size }` — first frame.
-//!   * `CHUNK { req_id, seq, bytes }` — ~1 MiB payloads (well under the 8 MiB
-//!     NATS max_payload). `seq` starts at 1 (OPEN is seq 0).
+//!   * `CHUNK { req_id, seq, bytes }` — byte payloads sized so the SERIALIZED
+//!     frame stays under the server's advertised `max_payload` (see
+//!     [`fileserve_chunk_size`]). `seq` starts at 1 (OPEN is seq 0).
 //!   * `CLOSE { req_id, final_seq, count }` — terminal success.
 //!   * `ERROR { req_id, kind, message }` — terminal failure.
 //!
@@ -46,8 +47,38 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt, SeekFrom};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-/// Chunk payload target — ~1 MiB, well under the 8 MiB NATS `max_payload`.
+/// Upper bound on RAW bytes read per CHUNK frame. The effective per-frame size
+/// is the smaller of this and what the negotiated `max_payload` allows (see
+/// [`fileserve_chunk_size`]); this cap just keeps the read buffer + per-frame
+/// memory bounded on a server that advertises a very large `max_payload`.
 pub const CHUNK_SIZE: usize = 1024 * 1024;
+
+/// Worst-case wire inflation of `bytes: Vec<u8>`: serde serializes it as a JSON
+/// array of decimal integers, so each byte costs up to 4 characters (`"255,"`).
+/// We size raw chunks at `max_payload / FRAME_INFLATION_DIVISOR` — the 4× worst
+/// case plus headroom for the frame envelope (`type`/`req_id`/`seq` keys) — so a
+/// full CHUNK frame never trips the server's publish-side `max_payload` check.
+const FRAME_INFLATION_DIVISOR: usize = 5;
+
+/// If `server_info().max_payload` is unknown (0, e.g. not yet negotiated), fall
+/// back to NATS's conservative 1 MiB default rather than assume a large limit.
+const DEFAULT_MAX_PAYLOAD: usize = 1024 * 1024;
+
+/// RAW bytes to put in a single CHUNK frame so its JSON-serialized form stays
+/// safely under the server's advertised `max_payload`.
+///
+/// `bytes` serializes ~4× larger as a JSON int-array, so we budget
+/// `max_payload / 5` (4× worst case + ~25% envelope headroom) and never exceed
+/// the [`CHUNK_SIZE`] memory cap. A serialized worst-case frame at this size is
+/// verified to stay under `max_payload` by `chunk_size_keeps_frame_under_max_payload`.
+pub fn fileserve_chunk_size(server_max_payload: usize) -> usize {
+    let max_payload = if server_max_payload == 0 {
+        DEFAULT_MAX_PAYLOAD
+    } else {
+        server_max_payload
+    };
+    (max_payload / FRAME_INFLATION_DIVISOR).clamp(1, CHUNK_SIZE)
+}
 
 /// In-flight window: stream at most this many CHUNK frames ahead of mekhan's
 /// acks before blocking on the ack subject. Keeps the inbox buffer bounded for
@@ -260,6 +291,14 @@ pub trait FrameSink: Send {
     /// Block until mekhan has cumulatively acked `>= seq` CHUNK frames. Used to
     /// enforce the in-flight window. Default: no-op (unbounded window).
     async fn ack_at_least(&mut self, _seq: u64) {}
+
+    /// Max RAW bytes to put in one CHUNK frame so the serialized frame fits the
+    /// transport's payload limit. Default [`CHUNK_SIZE`] (tests / in-memory
+    /// sinks have no limit); the NATS sink derives it from the server's
+    /// negotiated `max_payload` via [`fileserve_chunk_size`].
+    fn max_chunk_bytes(&self) -> usize {
+        CHUNK_SIZE
+    }
 }
 
 /// Read a file under `root`, path-jailed, honoring `offset`/`length`, and frame
@@ -361,10 +400,14 @@ pub async fn serve_file<S: FrameSink>(req: &ServeRequest, sink: &mut S) {
     let mut remaining = to_read;
     let mut seq: u64 = 0; // OPEN was seq 0; CHUNKs start at 1.
     let mut count: u64 = 0;
-    let mut buf = vec![0u8; CHUNK_SIZE];
+    // Size each CHUNK so its serialized frame stays under the transport's
+    // payload limit (NATS rejects an oversized publish client-side, which would
+    // otherwise abort the serve mid-stream).
+    let chunk_size = sink.max_chunk_bytes().max(1);
+    let mut buf = vec![0u8; chunk_size];
 
     while remaining > 0 {
-        let want = (CHUNK_SIZE as u64).min(remaining) as usize;
+        let want = (chunk_size as u64).min(remaining) as usize;
         let n = match file.read(&mut buf[..want]).await {
             Ok(0) => break, // EOF earlier than expected (file truncated mid-read).
             Ok(n) => n,
@@ -418,6 +461,8 @@ struct NatsFrameSink {
     reply: String,
     acks: async_nats::Subscriber,
     acked: u64,
+    /// Raw bytes per CHUNK, derived from the server's negotiated `max_payload`.
+    max_chunk: usize,
 }
 
 #[async_trait::async_trait]
@@ -432,6 +477,10 @@ impl FrameSink for NatsFrameSink {
             .map_err(|e| {
                 warn!(reply = %self.reply, error = %e, "failed to publish fileserve reply frame");
             })
+    }
+
+    fn max_chunk_bytes(&self) -> usize {
+        self.max_chunk
     }
 
     async fn ack_at_least(&mut self, seq: u64) {
@@ -530,11 +579,18 @@ pub fn spawn_fileserve_handler(
                                         .expect("core NATS subscribe is infallible for valid subject")
                                 }
                             };
+                            // Size CHUNK frames against the server's negotiated
+                            // max_payload — a frame over that limit is rejected
+                            // client-side and would abort the serve mid-stream
+                            // (mekhan then sees "serve stream idle").
+                            let max_chunk =
+                                fileserve_chunk_size(client.server_info().max_payload);
                             let mut sink = NatsFrameSink {
                                 client,
                                 reply: reply.to_string(),
                                 acks,
                                 acked: 0,
+                                max_chunk,
                             };
                             serve_file(&req, &mut sink).await;
                             debug!(req_id = %req.req_id, "fileserve request complete");
@@ -552,9 +608,11 @@ mod tests {
     use std::io::Write;
 
     /// Collecting test sink: records every frame; unbounded ack window.
+    /// `max_chunk` overrides the per-frame raw byte cap (default [`CHUNK_SIZE`]).
     #[derive(Default)]
     struct CollectSink {
         frames: Vec<ReplyFrame>,
+        max_chunk: Option<usize>,
     }
 
     #[async_trait::async_trait]
@@ -562,6 +620,9 @@ mod tests {
         async fn send(&mut self, frame: ReplyFrame) -> Result<(), ()> {
             self.frames.push(frame);
             Ok(())
+        }
+        fn max_chunk_bytes(&self) -> usize {
+            self.max_chunk.unwrap_or(CHUNK_SIZE)
         }
     }
 
@@ -584,6 +645,76 @@ mod tests {
             length: None,
             workspace_id: "ws1".to_string(),
         }
+    }
+
+    #[test]
+    fn chunk_size_scales_with_max_payload_and_caps_at_chunk_size() {
+        // 1 MiB server → ~200 KiB raw chunks (well under CHUNK_SIZE).
+        assert_eq!(fileserve_chunk_size(1024 * 1024), 1024 * 1024 / 5);
+        // Large server → capped at the CHUNK_SIZE memory bound.
+        assert_eq!(fileserve_chunk_size(64 * 1024 * 1024), CHUNK_SIZE);
+        // Unknown (0) → conservative 1 MiB default, not an unbounded chunk.
+        assert_eq!(fileserve_chunk_size(0), DEFAULT_MAX_PAYLOAD / 5);
+        // Tiny but non-zero limit still yields a positive chunk size.
+        assert!(fileserve_chunk_size(64 * 1024) >= 1);
+    }
+
+    #[test]
+    fn chunk_size_keeps_frame_under_max_payload() {
+        // For each plausible server limit, a WORST-CASE CHUNK frame (every byte
+        // serializes to the 4-char "255,") at the chosen size must serialize to
+        // fewer bytes than the server's max_payload — the exact thing the live
+        // "max payload size exceeded" error was tripping.
+        for &max_payload in &[64 * 1024usize, 256 * 1024, 1024 * 1024, 8 * 1024 * 1024] {
+            let chunk = fileserve_chunk_size(max_payload);
+            let frame = ReplyFrame::Chunk {
+                // A realistic 36-char UUID req_id and the largest possible seq.
+                req_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                seq: u64::MAX,
+                bytes: vec![255u8; chunk],
+            };
+            let wire = serde_json::to_vec(&frame).unwrap();
+            assert!(
+                wire.len() < max_payload,
+                "max_payload={max_payload}: chunk={chunk} serialized to {} bytes, not < limit",
+                wire.len()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn serve_file_honors_sink_chunk_size() {
+        let tmp = tempfile::tempdir().unwrap();
+        // 1000 bytes with a 256-byte chunk cap → ceil(1000/256) = 4 chunks.
+        let data: Vec<u8> = (0..1000u32).map(|i| (i % 256) as u8).collect();
+        write_file(tmp.path(), "blob.bin", &data);
+
+        let mut sink = CollectSink {
+            max_chunk: Some(256),
+            ..Default::default()
+        };
+        serve_file(&req(tmp.path(), "blob.bin"), &mut sink).await;
+
+        let chunks: Vec<&ReplyFrame> = sink
+            .frames
+            .iter()
+            .filter(|f| matches!(f, ReplyFrame::Chunk { .. }))
+            .collect();
+        assert_eq!(chunks.len(), 4, "1000 bytes / 256 = 4 chunks");
+        for f in &chunks {
+            if let ReplyFrame::Chunk { bytes, .. } = f {
+                assert!(bytes.len() <= 256, "chunk exceeds the cap");
+            }
+        }
+        // Bytes still reassemble exactly + framing closes cleanly.
+        let mut reassembled = Vec::new();
+        for f in &sink.frames {
+            if let ReplyFrame::Chunk { bytes, .. } = f {
+                reassembled.extend_from_slice(bytes);
+            }
+        }
+        assert_eq!(reassembled, data);
+        assert!(matches!(sink.frames.last(), Some(ReplyFrame::Close { count: 4, .. })));
     }
 
     #[test]
