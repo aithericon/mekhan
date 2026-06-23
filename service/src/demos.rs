@@ -2811,7 +2811,7 @@ mod tests {
         );
     }
 
-    /// `loki-error-alert` is the scheduled-alert composition: a Cron trigger
+    /// `aithericon-loki-error-alert` is the scheduled-alert composition: a Cron trigger
     /// fires `Start{fire_time}` → a Loki `query_range` AutomatedStep →
     /// a single-shot Agent that summarizes the matched entries →
     /// an SMTP AutomatedStep that emails the summary. This pins that the
@@ -2823,9 +2823,9 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/loki-error-alert"))
-            .expect("loki-error-alert must load");
-        assert_eq!(demo.metadata.name, "Loki Error-Log Alert");
+        let demo = load_demo(&repo_root().join("demos/aithericon-loki-error-alert"))
+            .expect("aithericon-loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Aithericon Loki Error-Log Alert");
         assert_eq!(
             demo.metadata.template_id,
             "00000000-0000-0000-0000-0000000000a1"
@@ -2842,7 +2842,7 @@ mod tests {
                 ..Default::default()
             },
         )
-        .expect("loki-error-alert must compile");
+        .expect("aithericon-loki-error-alert must compile");
 
         // The Loki step binds the cluster resource.
         let loki_cfg = node_configs
@@ -2871,22 +2871,151 @@ mod tests {
             "smtp step must template against the upstream entry count: {smtp_cfg}"
         );
 
-        // The agent binds the in-cluster inference router: `provider: internal`
-        // must remap to the `openai` wire shape while keeping the
-        // `internal_pool_router` resource_alias that overlays the router
-        // endpoint at fire time (same contract as demo 37).
+        // The agent binds Hugging Face Inference via the `openai` wire shape,
+        // keeping the `hf_inference` resource_alias that overlays the HF
+        // endpoint + org (X-HF-Bill-To) at fire time — same binding as the
+        // suessco sibling, so the two stay consistent.
         let agent_cfg = node_configs
             .get("summarize")
             .expect("summarize config must be parked");
         assert_eq!(
             agent_cfg.get("provider").and_then(|v| v.as_str()),
             Some("openai"),
-            "internal provider must compile to the openai wire shape: {agent_cfg}"
+            "agent must compile to the openai wire shape: {agent_cfg}"
         );
         assert_eq!(
             agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
-            Some("internal_pool_router"),
-            "the router-binding alias must survive the remap: {agent_cfg}"
+            Some("hf_inference"),
+            "the HF-binding alias must survive compile: {agent_cfg}"
+        );
+    }
+
+    /// `suessco-dev-loki-error-alert` is the cross-cluster sibling of
+    /// `aithericon-loki-error-alert`: the same Cron → Loki → Agent → Decision → SMTP
+    /// chain, but the Loki step pins `deploymentModel.group = "suessco"` (so it
+    /// dispatches to a worker inside the Suessco cluster) and the Agent binds
+    /// Hugging Face Inference (`hf_inference`) instead of the internal router.
+    /// This pins that the alternate resource bindings + routing group compile.
+    #[test]
+    fn suessco_loki_error_alert_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/suessco-dev-loki-error-alert"))
+            .expect("suessco-dev-loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Suessco Dev Loki Error-Log Alert");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000a2"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("suessco-dev-loki-error-alert must compile");
+
+        // The Loki step binds the Suessco cluster resource (not aithericon's).
+        let loki_cfg = node_configs
+            .get("query_logs")
+            .expect("query_logs config must be parked")
+            .to_string();
+        assert!(
+            loki_cfg.contains("suessco_loki"),
+            "loki step must bind the suessco_loki resource: {loki_cfg}"
+        );
+
+        // The SMTP step keeps the literal Tera placeholders and the recipient.
+        let smtp_cfg = node_configs
+            .get("send_alert")
+            .expect("send_alert config must be parked")
+            .to_string();
+        assert!(
+            smtp_cfg.contains("{{ summarize.response }}"),
+            "smtp step must template against the agent summary: {smtp_cfg}"
+        );
+        assert!(
+            smtp_cfg.contains("{{ query_logs.entry_count }}"),
+            "smtp step must template against the upstream entry count: {smtp_cfg}"
+        );
+
+        // The agent binds Hugging Face Inference via the `openai` wire shape,
+        // keeping the `hf_inference` resource_alias that overlays the HF
+        // endpoint + org (X-HF-Bill-To) at fire time.
+        let agent_cfg = node_configs
+            .get("summarize")
+            .expect("summarize config must be parked");
+        assert_eq!(
+            agent_cfg.get("provider").and_then(|v| v.as_str()),
+            Some("openai"),
+            "agent must compile to the openai wire shape: {agent_cfg}"
+        );
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("hf_inference"),
+            "the HF-binding alias must survive compile: {agent_cfg}"
+        );
+    }
+
+    /// `suessco-prod-loki-error-alert` is the prod-environment twin of
+    /// `suessco-dev-loki-error-alert`: identical chain + bindings, but the Loki
+    /// step pins `deploymentModel.group = "suessco_prod"` so it dispatches to the
+    /// worker enrolled from the Suessco PROD cluster. Pins that the prod routing
+    /// group + the shared resource bindings compile.
+    #[test]
+    fn suessco_prod_loki_error_alert_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/suessco-prod-loki-error-alert"))
+            .expect("suessco-prod-loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Suessco Prod Loki Error-Log Alert");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000a3"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("suessco-prod-loki-error-alert must compile");
+
+        // Same Suessco Loki resource as dev (routing group, not the resource,
+        // distinguishes prod from dev).
+        let loki_cfg = node_configs
+            .get("query_logs")
+            .expect("query_logs config must be parked")
+            .to_string();
+        assert!(
+            loki_cfg.contains("suessco_loki"),
+            "loki step must bind the suessco_loki resource: {loki_cfg}"
+        );
+
+        // The agent binds Hugging Face Inference via the `openai` wire shape.
+        let agent_cfg = node_configs
+            .get("summarize")
+            .expect("summarize config must be parked");
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("hf_inference"),
+            "the HF-binding alias must survive compile: {agent_cfg}"
         );
     }
 

@@ -173,6 +173,9 @@
 	const numCols = $derived(mv?.num_columns ?? null);
 	const unixMode = $derived(mv?.unix_mode ?? null);
 	const modifiedAt = $derived(mv?.modified_at ?? null);
+	// Real filesystem birth time, extracted at probe time. Distinct from
+	// `entry.created_at`, which is the catalogue INGEST time (shown as "Indexed").
+	const fileCreatedAt = $derived(mv?.created_at ?? null);
 	const pct = (n: number) => `${Math.round(n * 100)}%`;
 
 	const contentHash = $derived(entry.content_hash ?? null);
@@ -669,12 +672,16 @@
 							{/if}
 						</dd>
 					{/if}
-					<dt class="text-muted-foreground">Created</dt>
-					<dd class="min-w-0 text-foreground">{fullDate(entry.created_at)}</dd>
+					{#if fileCreatedAt}
+						<dt class="text-muted-foreground">Created</dt>
+						<dd class="min-w-0 text-foreground">{fullDate(fileCreatedAt)}</dd>
+					{/if}
 					{#if modifiedAt}
 						<dt class="text-muted-foreground">Modified</dt>
 						<dd class="min-w-0 text-muted-foreground">{fullDate(modifiedAt)}</dd>
 					{/if}
+					<dt class="text-muted-foreground">Ingested</dt>
+					<dd class="min-w-0 text-muted-foreground">{fullDate(entry.created_at)}</dd>
 				</dl>
 			</section>
 

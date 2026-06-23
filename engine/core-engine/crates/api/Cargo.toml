@@ -52,6 +52,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 petri-test-harness.workspace = true
+petri-infrastructure.workspace = true
 aithericon-sdk = { path = "../../../sdk" }
 rstest.workspace = true
 tower = "0.5"

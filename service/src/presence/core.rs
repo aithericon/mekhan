@@ -328,8 +328,9 @@ pub(crate) fn claim_injection(grant_id: &str, runner_id: &str) -> PoolInjection<
 
 /// Inject a UNIT-INITIATED `presence_claim { grant_id, runner_id }` token into
 /// the pool net's `presence_claim` bridge_in place via
-/// `petri.default.<pool_net_id>.bridge.presence_claim` (the `Acceptance::Consent`
-/// claim path, docs/33 + docs/35 §4).
+/// `petri.<workspace>.<pool_net_id>.bridge.presence_claim` (the
+/// `Acceptance::Consent` claim path, docs/33 + docs/35 §4). `workspace` is the
+/// pool's deployed workspace (see [`inject_bridge`]).
 ///
 /// A claim binds a parked offer to the claiming MEMBER (docs/34 §3): the offer
 /// net's `t_claim` correlates the unit on `runner_id` (= the member id), so the

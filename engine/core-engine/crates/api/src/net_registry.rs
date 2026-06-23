@@ -271,6 +271,17 @@ where
     /// distinct net_ids never collide. `as_app_state` clones the Arc into
     /// the per-request AppState facade.
     pub dispatch_options: Arc<RwLock<petri_domain::DispatchOptions>>,
+    /// Shared cell the per-net event consumer updates with the JetStream
+    /// `stream_sequence` of the last event it applied. The hibernate hook reads
+    /// it to fill the snapshot's `last_stream_seq`. `0` until the consumer
+    /// applies an event (or is seeded from a snapshot). For stores without a
+    /// NATS consumer this stays `0` (snapshots are then disabled anyway).
+    pub last_stream_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// Resume-from cell read by the deferred consumer starter: when the wake
+    /// path seeds the store from a snapshot it writes `Some(last_stream_seq)`
+    /// here, so the consumer hydrates only the post-snapshot delta
+    /// (`ByStartSequence(last_stream_seq + 1)`). `None` → full replay.
+    pub resume_from: Arc<RwLock<Option<u64>>>,
 }
 
 impl<E, T, S> NetInstance<E, T, S>
@@ -350,6 +361,14 @@ pub type StoreFactory<E, T, S> = Arc<
             tokio::sync::watch::Receiver<u64>,
             Arc<std::sync::RwLock<Option<String>>>,
             ConsumerStarter,
+            // Stream-sequence cell the consumer publishes its last-applied
+            // JetStream `stream_sequence` into (read by the hibernate hook for
+            // the snapshot's `last_stream_seq`).
+            Arc<std::sync::atomic::AtomicU64>,
+            // Resume-from cell the consumer starter consults: `Some(seq)` ⇒
+            // hydrate only `ByStartSequence(seq + 1)` (snapshot wake); `None` ⇒
+            // full replay. Set by the registry's wake path before starting.
+            Arc<RwLock<Option<u64>>>,
         ) + Send
         + Sync,
 >;
@@ -437,6 +456,14 @@ where
     /// True once the first `get_or_create` runs — registration is rejected
     /// after this point with `RegistrationError::RegistryFrozen`.
     pre_dispatch_frozen: AtomicBool,
+    /// Optional snapshot store (backed by NATS KV in production). When set, the
+    /// `hibernate` hook captures a [`petri_application::NetSnapshot`] before
+    /// tearing the net down, and `get_or_create`'s wake path seeds the
+    /// freshly-built store from it (replaying only the post-snapshot delta).
+    /// `None` (tests / no-NATS builds) → snapshots disabled, full-replay wake,
+    /// behavior identical to before. Wrapped in `RwLock<Option<>>` + set via
+    /// `&self` so main.rs can install it after the registry is `Arc`-wrapped.
+    snapshot_store: RwLock<Option<Arc<dyn petri_application::SnapshotStore>>>,
 }
 
 impl<E, T, S> NetRegistry<E, T, S>
@@ -470,7 +497,17 @@ where
             pre_dispatch_builtin_hooks: RwLock::new(HashMap::new()),
             pre_dispatch_chain_configs: RwLock::new(Vec::new()),
             pre_dispatch_frozen: AtomicBool::new(false),
+            snapshot_store: RwLock::new(None),
         }
+    }
+
+    /// Install the snapshot store (NATS KV-backed in production). After this,
+    /// `hibernate` writes a snapshot before teardown and the wake path resumes
+    /// from it. Takes `&self` so main.rs can call it after the registry is
+    /// `Arc`-wrapped; should be set before the first `get_or_create` that may
+    /// wake a hibernated net.
+    pub fn set_snapshot_store(&self, store: Arc<dyn petri_application::SnapshotStore>) {
+        *self.snapshot_store.write() = Some(store);
     }
 
     /// Install the TOML-loaded `[[pre_dispatch_hooks]]` chain config. Must
@@ -728,8 +765,16 @@ where
         // It returns the shared `workspace_cell` (written through by
         // `set_workspace_id`, read by the NATS publisher) and a deferred
         // `consumer_starter` we invoke under the real workspace below.
-        let (event_store, topology_store, projection, applied_rx, workspace_cell, consumer_starter) =
-            (self.store_factory)(net_id);
+        let (
+            event_store,
+            topology_store,
+            projection,
+            applied_rx,
+            workspace_cell,
+            consumer_starter,
+            last_stream_seq_cell,
+            resume_from_cell,
+        ) = (self.store_factory)(net_id);
 
         // WOKEN-NET PATH (hazard #2) — done OUTSIDE the registry lock (the
         // consumer start may block on a long NATS history replay; holding the
@@ -744,6 +789,9 @@ where
         // the workspace.
         let woken_resolver = self.woken_workspace_resolver.read().clone();
         let mut consumer_started = false;
+        // True once the snapshot wake path seeds the store; gates the
+        // post-hydration write-state reconciliation (non-empty-delta fix).
+        let mut snapshot_woke = false;
         if let Some(resolver) = woken_resolver {
             let net_id_owned = net_id.to_string();
             let woken_ws = tokio::task::block_in_place(|| {
@@ -755,12 +803,101 @@ where
                 // it has not been constructed yet, but the publisher already
                 // holds this Arc, and the service will share it by construction.
                 *workspace_cell.write().unwrap() = Some(ws.clone());
+
+                // SNAPSHOT WAKE (PART C): if a hibernation snapshot exists for
+                // this net, seed the freshly-built store's base from it and tell
+                // the consumer to resume at `last_stream_seq + 1`, so only the
+                // post-snapshot delta replays. On any miss (no store, no
+                // snapshot, oversized/stale → `None`) we leave `resume_from`
+                // unset and the consumer full-replays exactly as before — bounded
+                // peak memory still holds via the byte-capped tail.
+                let snapshot_store = self.snapshot_store.read().clone();
+                if let Some(store) = snapshot_store {
+                    let net_id_owned = net_id.to_string();
+                    let ws_owned = ws.clone();
+                    let snap = tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current()
+                            .block_on(async { store.get(&ws_owned, &net_id_owned).await })
+                    });
+                    if let Some(snap) = snap {
+                        let resume_seq = snap.last_stream_seq;
+                        let seed_event_store = event_store.clone();
+                        let seed_next_sequence = snap.next_sequence;
+                        let seed_last_hash = snap.last_hash.clone();
+                        tokio::task::block_in_place(|| {
+                            tokio::runtime::Handle::current().block_on(async {
+                                seed_event_store.seed_from_snapshot(&snap).await;
+                                // Seed the write authority too (MAJOR 2a): on an
+                                // EMPTY post-snapshot delta the consumer ticks
+                                // `applied_rx` zero times, so the NATS store's
+                                // `WriteState.next_sequence` would stay 0 and the
+                                // first live append would mint `.sequence == 0`,
+                                // colliding with the pre-hibernate prefix and
+                                // breaking SSE broadcast (sequence-based) cursors.
+                                // This is the SNAPSHOT-BASELINE seed; it is correct
+                                // only for an empty post-snapshot delta. For a
+                                // NON-empty delta we re-seed below from the
+                                // POST-replay cache (the delta advances both the
+                                // next sequence and the chain tip past the
+                                // snapshot baseline).
+                                seed_event_store
+                                    .seed_write_state(seed_next_sequence, seed_last_hash)
+                                    .await;
+                            })
+                        });
+                        *resume_from_cell.write() = Some(resume_seq);
+                        snapshot_woke = true;
+                        tracing::info!(
+                            net_id = %net_id,
+                            workspace = %ws,
+                            resume_from = resume_seq,
+                            event_count = snap.event_count,
+                            "Waking from snapshot — replaying only post-snapshot delta"
+                        );
+                    }
+                }
+
                 let starter = consumer_starter.clone();
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async move {
                         starter(ws).await;
                     })
                 });
+
+                // POST-HYDRATION write-state reconciliation (snapshot wake only).
+                // `starter(ws).await` blocks until the post-snapshot delta has
+                // fully replayed into the store, so the cache's `current_sequence`
+                // and `last_hash` are now the TRUE chain head. The pre-hydration
+                // `seed_write_state` above used the snapshot BASELINE, which is one
+                // delta behind whenever events landed on the stream while the net
+                // was hibernated (cross-net bridge / signal injection). Without
+                // this re-seed the first live append would (a) mint a `.sequence`
+                // that collides with a replayed delta event and (b) link its
+                // `previous_hash` to the stale snapshot tip — forking the hash
+                // chain (the append and the first delta event both point at
+                // `snapshot.last_hash`). Re-seeding from the post-replay cache
+                // links the next append to the real head. For an empty delta this
+                // is a no-op (cache == snapshot baseline). It also subsumes the
+                // 2a empty-delta fix, but we keep the pre-hydration seed too so a
+                // re-hibernate during a failed/blocked hydration still has a
+                // sane write cursor.
+                if snapshot_woke {
+                    let reseed_store = event_store.clone();
+                    tokio::task::block_in_place(|| {
+                        tokio::runtime::Handle::current().block_on(async {
+                            // Read (next_sequence, chain tip) as ONE coherent pair.
+                            // Two separate `current_sequence()` + `last_hash()`
+                            // reads could be torn by the live consumer applying a
+                            // post-delta event between them — pinning the sequence
+                            // to the pre-event value while reading the post-event
+                            // tip, which mints a colliding `.sequence` chained off a
+                            // forked hash tip on the "events landed while
+                            // hibernated" wake.
+                            let (next_seq, tip) = reseed_store.write_cursor().await;
+                            reseed_store.seed_write_state(next_seq, tip).await;
+                        })
+                    });
+                }
                 consumer_started = true;
             }
         }
@@ -841,6 +978,8 @@ where
                 Some(consumer_starter)
             }),
             dispatch_options: Arc::new(RwLock::new(petri_domain::DispatchOptions::default())),
+            last_stream_seq: last_stream_seq_cell,
+            resume_from: resume_from_cell,
         });
 
         // Spawn evaluation loop for this net
@@ -1445,19 +1584,67 @@ where
         removed
     }
 
-    /// Hibernate a net: cancel its tasks and remove from memory.
+    /// Hibernate a net: capture a wake snapshot, then cancel its tasks and
+    /// remove it from memory.
     ///
-    /// In-memory state is discarded; NATS JetStream retains all events
-    /// for later rehydration via `get_or_create`.
-    pub fn hibernate(&self, net_id: &str) -> Result<(), String> {
+    /// In-memory state is discarded; NATS JetStream retains all events for
+    /// later rehydration via `get_or_create`. When a snapshot store is
+    /// installed, a [`petri_application::NetSnapshot`] is written FIRST (while
+    /// the store is still alive) so the next wake resumes from the snapshot
+    /// baseline instead of full-replaying the durable log.
+    ///
+    /// Ordering is load-bearing: read all state → build snapshot → `put`
+    /// (await) → `cancel`. The snapshot write is best-effort — a failure logs
+    /// and proceeds to cancel (the net then wakes via full replay).
+    pub async fn hibernate(&self, net_id: &str) -> Result<(), String> {
+        // Remove first so a concurrent get_or_create can't observe a
+        // half-cancelled instance; we still hold `inst` to read its state for
+        // the snapshot before cancelling.
         let instance = self.nets.write().remove(net_id);
         match instance {
             Some(inst) => {
+                self.write_snapshot(net_id, &inst).await;
                 inst.cancel_token.cancel();
                 tracing::info!(net_id = %net_id, "Net hibernated (tasks cancelled, memory freed)");
                 Ok(())
             }
             None => Err(format!("Net '{}' not found", net_id)),
+        }
+    }
+
+    /// Capture and persist a wake snapshot for `inst` (best-effort). No-op when
+    /// no snapshot store is installed. MUST run BEFORE `cancel_token.cancel()`
+    /// so the event store is still alive to read its marking/dedup/hash.
+    async fn write_snapshot(&self, net_id: &str, inst: &Arc<NetInstance<E, T, S>>) {
+        let Some(store) = self.snapshot_store.read().clone() else {
+            return;
+        };
+        let ws = inst
+            .service
+            .workspace()
+            .unwrap_or_else(|| petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string());
+        // MAJOR 2b: `last_stream_seq` is read FROM THE STORE under the same lock
+        // as the marking (carried on `SnapshotInputs`), NOT from the separate
+        // `inst.last_stream_seq` atomic cell. The cell is updated by the consumer
+        // task independently of the marking, so reading it as a second
+        // non-atomic operation could skew the snapshot by one event if the
+        // consumer applied an event between the two reads (the consumer is still
+        // live here — `write_snapshot` runs BEFORE `cancel_token.cancel()`).
+        // Reading both from the store guarantees coherence.
+        let inputs = inst.service.snapshot_inputs().await;
+        let snapshot = inputs.into_snapshot();
+        store.put(&ws, net_id, &snapshot).await;
+    }
+
+    /// Best-effort deletion of a net's wake snapshot (e.g. on terminal stop —
+    /// the net will never wake again, so its snapshot is dead KV space). No-op
+    /// when no snapshot store is installed.
+    pub async fn delete_snapshot(&self, ws: &str, net_id: &str) {
+        // Clone the Arc and DROP the lock guard before awaiting (a parking_lot
+        // guard is not Send and would poison the future).
+        let store = self.snapshot_store.read().clone();
+        if let Some(store) = store {
+            store.delete(ws, net_id).await;
         }
     }
 
@@ -1667,8 +1854,19 @@ where
             .await
             .map_err(|e| e.to_string())?;
 
-        // Cancel and remove
-        self.hibernate(net_id)
+        // Terminal stop: capture the workspace BEFORE teardown so we can reclaim
+        // the wake snapshot (a terminal net never wakes — its snapshot is dead
+        // KV). The tombstone gate already prevents a woken terminal net from
+        // consulting it, so this is purely space reclamation.
+        let ws = instance
+            .service
+            .workspace()
+            .unwrap_or_else(|| petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string());
+
+        // Cancel and remove (also writes a snapshot, which we then delete).
+        let result = self.hibernate(net_id).await;
+        self.delete_snapshot(&ws, net_id).await;
+        result
     }
 
     /// Inject `cancel_request` into every in-flight executor step's
@@ -1783,10 +1981,19 @@ fn spawn_net_evaluation_loop<E, T, S>(
     tokio::spawn(async move {
         // Track last broadcast sequence so we can catch ALL new events
         // (including those from NATS signal injection, adapter callbacks, etc.)
-        let mut last_broadcast_seq: u64 = {
-            let existing = service.get_events().await;
-            existing.last().map_or(0, |e| e.sequence)
-        };
+        //
+        // Initialize from the POST-wake tip — `current_sequence()` is the engine
+        // `.sequence` the NEXT live append will use, so `- 1` is the highest
+        // sequence already present. This is robust on a snapshot wake: the
+        // bounded store's `get_events()` returns only the resident TAIL, which
+        // can be EMPTY after an empty-delta wake (everything folded into the
+        // snapshot base) — `.last()` would then yield `0` and, more dangerously,
+        // post-wake events whose `.sequence` restarts at `snapshot.next_sequence`
+        // (a large value seeded by `seed_write_state`) would still be `> 0` and
+        // broadcast, but the inverse failure (a stale large cursor skipping
+        // small post-wake sequences) is closed by anchoring on the seeded
+        // `current_sequence()` rather than on whatever happens to be in the tail.
+        let mut last_broadcast_seq: u64 = service.current_sequence().await.saturating_sub(1);
 
         loop {
             tokio::select! {
@@ -2097,6 +2304,11 @@ mod tests {
                     Box::pin(async {})
                         as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                 }),
+                // PART C: stream-seq cell + resume-from cell. The mock store has
+                // no NATS consumer, so the cell stays 0 and resume_from is unset
+                // (snapshots are also disabled — no snapshot store installed).
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                Arc::new(RwLock::new(None)),
             )
         })
     }
@@ -2142,6 +2354,7 @@ mod tests {
         assert!(!cancel.is_cancelled(), "Should not be cancelled initially");
         registry
             .hibernate("net-1")
+            .await
             .expect("hibernate should succeed");
         assert!(
             cancel.is_cancelled(),
@@ -2155,6 +2368,7 @@ mod tests {
         registry.get_or_create("net-1");
         registry
             .hibernate("net-1")
+            .await
             .expect("hibernate should succeed");
         assert!(
             registry.get("net-1").is_none(),
@@ -2162,10 +2376,10 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_hibernate_unknown_net_errors() {
+    #[tokio::test]
+    async fn test_hibernate_unknown_net_errors() {
         let registry = new_registry();
-        let result = registry.hibernate("nonexistent");
+        let result = registry.hibernate("nonexistent").await;
         assert!(result.is_err(), "Hibernate should fail for unknown net");
         assert!(result.unwrap_err().contains("not found"));
     }
@@ -2219,7 +2433,7 @@ mod tests {
 
         assert_eq!(registry.list().len(), 3);
 
-        registry.hibernate("net-2").unwrap();
+        registry.hibernate("net-2").await.unwrap();
 
         let remaining = registry.list();
         assert_eq!(remaining.len(), 2);

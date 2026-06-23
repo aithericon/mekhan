@@ -315,6 +315,17 @@ impl RunnerNatsSigner {
         // `get_or_create_stream` is denied and the daemon dies at startup.
         pub_allow.extend(jetstream_cancel_pub_allow());
 
+        // PUBLISH `_INBOX.>` — the fileserve data plane (docs/36) streams a
+        // MULTI-frame reply (OPEN → CHUNK* → CLOSE) to mekhan's reply inbox.
+        // The `resp` ResponsePermission below caps a request/reply at `max(1)`
+        // response, so without an explicit publish grant only the OPEN frame
+        // lands and every CHUNK/CLOSE is denied — mekhan then sees the stream go
+        // idle and reports "serve stream idle (runner gone)" / a 500 on verify.
+        // A standing publish grant on the inbox namespace lets the runner emit
+        // the full frame stream (inbox subjects are random nonces, and the
+        // runner already SUBSCRIBES `_INBOX.>`).
+        pub_allow.push("_INBOX.>".to_string());
+
         // This runner's own control subject PLUS the request/reply mux inbox.
         // async-nats subscribes ONCE to `_INBOX.>` (default prefix) and ALL
         // JetStream pull deliveries and `$JS.API.*` replies arrive there. Without
@@ -484,6 +495,12 @@ impl RunnerNatsSigner {
         // The JetStream `EXECUTOR_CANCEL` stream + ephemeral pull consumer the
         // cancel listener binds at boot (same as the runner path).
         pub_allow.extend(jetstream_cancel_pub_allow());
+        // PUBLISH `_INBOX.>` — the fileserve data plane streams a MULTI-frame
+        // reply (OPEN → CHUNK* → CLOSE) to mekhan's reply inbox, which the
+        // `max(1)` ResponsePermission alone can't carry (only OPEN lands, the
+        // rest are denied → "serve stream idle (runner gone)" on verify). Same
+        // rationale as the runner mint.
+        pub_allow.push("_INBOX.>".to_string());
 
         let pub_perm: Permission = Permission::builder()
             .allow(Some(StringList::from(pub_allow)))
@@ -846,6 +863,14 @@ mod tests {
         );
 
         let pub_allow = allow_list(&claims, "pub");
+        // Fileserve streams a multi-frame reply to mekhan's reply inbox; the
+        // `max(1)` ResponsePermission can't carry it, so the runner needs a
+        // standing publish grant on the inbox namespace (else verify reads see
+        // OPEN then "serve stream idle (runner gone)").
+        assert!(
+            pub_allow.contains(&"_INBOX.>".to_string()),
+            "needs _INBOX.> publish for the streaming fileserve reply"
+        );
         let stream = format!("{RUNNER_JOBS_NAMESPACE}_high");
         let durable = format!("{stream}_{id}_consumer");
         for want in [
@@ -980,6 +1005,12 @@ mod tests {
         assert!(
             !pub_allow.iter().any(|s| s.ends_with(".claim")),
             "a worker must never get a `.claim` publish subject, got {pub_allow:?}"
+        );
+        // Streaming fileserve reply needs an inbox publish grant (see the runner
+        // mint) — without it the worker's serve stalls after the OPEN frame.
+        assert!(
+            pub_allow.contains(&"_INBOX.>".to_string()),
+            "needs _INBOX.> publish for the streaming fileserve reply"
         );
 
         // ResponsePermission present so request/reply works.

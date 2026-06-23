@@ -103,6 +103,60 @@ mod tests {
     }
 
     #[test]
+    fn test_project_onto_equals_full_replay() {
+        let projection = MarkingProjection::new();
+        let place_a = PlaceId::new();
+        let place_b = PlaceId::new();
+        let token_a = Token::new(TokenColor::Unit);
+        let token_b = Token::new(TokenColor::Data(serde_json::json!({"r": "ok"})));
+
+        let prefix = vec![PersistedEvent::new(
+            0,
+            DomainEvent::TokenCreated {
+                token: token_a.clone(),
+                place_id: place_a.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: None,
+            },
+            None,
+        )];
+        let suffix = vec![PersistedEvent::new(
+            1,
+            DomainEvent::EffectCompleted {
+                transition_id: petri_domain::TransitionId::new(),
+                transition_name: Some("e".to_string()),
+                consumed_tokens: vec![(place_a.clone(), token_a.id.clone())],
+                produced_tokens: vec![(place_b.clone(), token_b.clone())],
+                effect_handler_id: "h".to_string(),
+                effect_result: serde_json::json!({"status": "ok"}),
+                read_tokens: vec![],
+                process_step_started: None,
+                process_step_completed: None,
+            },
+            Some("prev".to_string()),
+        )];
+
+        // project_onto(project(prefix), suffix) == project(prefix ++ suffix)
+        let base = projection.project(&prefix);
+        let folded = projection.project_onto(&base, &suffix);
+
+        let mut all = prefix.clone();
+        all.extend(suffix.clone());
+        let full = projection.project(&all);
+
+        assert_eq!(folded.token_count(&place_a), full.token_count(&place_a));
+        assert_eq!(folded.token_count(&place_b), full.token_count(&place_b));
+        assert_eq!(full.token_count(&place_a), 0);
+        assert_eq!(full.token_count(&place_b), 1);
+
+        // project(evs) == project_onto(empty, evs)
+        let from_empty = projection.project_onto(&Marking::new(), &all);
+        assert_eq!(from_empty.token_count(&place_b), full.token_count(&place_b));
+    }
+
+    #[test]
     fn test_project_transition_firing() {
         let projection = MarkingProjection::new();
 

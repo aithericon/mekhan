@@ -809,7 +809,9 @@ pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
 /// the negative-binding memo is invalidated from the **same** event delta that
 /// moved the marking — never from a second, independently-timed read of the
 /// log (which could disagree if an external append landed in between).
-pub(crate) enum MarkingDelta {
+#[doc(hidden)] // exported only so cross-crate regression tests (petri-infrastructure)
+// can drive the real `advance_marking` against the real bounded store.
+pub enum MarkingDelta {
     /// Cache hit — the marking is unchanged since the previous call.
     Unchanged,
     /// Incremental — exactly these events were applied to advance the marking.
@@ -831,7 +833,10 @@ pub(crate) enum MarkingDelta {
 /// the cursor — the cached marking then drifts away from `f(events)` and the
 /// eval loop re-fires the same transition on a stale binding (the executor-net
 /// infinite-fire bug, see [[engine-loop-dup-seq]]).
-pub(crate) async fn advance_marking<E: EventRepository, S: StateProjection>(
+#[doc(hidden)] // exported only so cross-crate regression tests (petri-infrastructure)
+// can drive the real cursor logic against the real bounded store; production
+// callers reach it through `get_marking_cached` / the eval loop.
+pub async fn advance_marking<E: EventRepository, S: StateProjection>(
     events: &E,
     projection: &S,
     cached_state: &RwLock<Option<(u64, Marking)>>,
@@ -867,17 +872,68 @@ pub(crate) async fn advance_marking<E: EventRepository, S: StateProjection>(
             cached_idx,
             mut cached_marking,
         } => {
-            let new_events = events.events_from(cached_idx as usize).await;
-            for persisted in &new_events {
-                crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
+            // The cursor is a stale `events.len()` snapshot. Between two
+            // `advance_marking` calls, external NATS listeners (token injection,
+            // signals, executor 'item' streaming) can append+EVICT many events,
+            // advancing the store's `base_count` (= `materialized_floor`) PAST
+            // `cached_idx`. If we sliced `events_from(cached_idx)` now, the
+            // bounded store would clamp the start to the tail and SILENTLY DROP
+            // events `[cached_idx .. materialized_floor)`, permanently drifting
+            // the cached marking away from `project(all_events)` — the
+            // eviction-induced re-fire of [[engine-loop-dup-seq]].
+            //
+            // `events_from_checked` performs the floor-check AND the slice under
+            // ONE store lock: it returns `None` exactly when the cursor has
+            // fallen below the floor. Using it (instead of a separate
+            // `materialized_floor()` read followed by `events_from()`) closes the
+            // check-then-slice TOCTOU window where a concurrent append+evict
+            // between the two reads could advance the floor past a cursor that
+            // passed the guard, after which `events_from` would lossily clamp.
+            // `None` → rebuild from `base ⊕ tail` (Miss semantics); `Some` → the
+            // cursor is still in resident territory, so the incremental fold is
+            // safe and lossless.
+            match events.events_from_checked(cached_idx as usize).await {
+                None => {
+                    // Eviction overtook the cursor → rebuild from base ⊕ tail.
+                    // Store the extent `marking_base` folded (NOT `current_idx`,
+                    // read earlier and possibly stale w.r.t. a concurrent append)
+                    // so the cursor matches the marking and the next call won't
+                    // re-fold the gap.
+                    let (base, tail, extent) = events.marking_base().await;
+                    let marking = projection.project_onto(&base, &tail);
+                    *cached_state.write().unwrap() = Some((extent, marking.clone()));
+                    (marking, MarkingDelta::Rebuilt)
+                }
+                Some(new_events) => {
+                    for persisted in &new_events {
+                        crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
+                    }
+                    // The new cursor is the EXACT extent folded: `events_from_checked`
+                    // returned `[cached_idx .. current_tail_end)`, so the store now
+                    // reflects `cached_idx + new_events.len()` events. Using the
+                    // call-site `current_idx` (read before the slice) would lag if a
+                    // concurrent append landed in between, leaving a stale cursor
+                    // that re-folds `new_events` on the next Stale call (over-fold).
+                    let folded_extent = cached_idx + new_events.len() as u64;
+                    *cached_state.write().unwrap() = Some((folded_extent, cached_marking.clone()));
+                    (cached_marking, MarkingDelta::Applied(new_events))
+                }
             }
-            *cached_state.write().unwrap() = Some((current_idx, cached_marking.clone()));
-            (cached_marking, MarkingDelta::Applied(new_events))
         }
         CacheState::Miss => {
-            let all = events.all_events().await;
-            let marking = projection.project(&all);
-            *cached_state.write().unwrap() = Some((current_idx, marking.clone()));
+            // Rebuild from the store's maintained base marking plus the
+            // resident tail — NOT from a full `all_events()` replay, which a
+            // bounded store can no longer provide (and which would defeat the
+            // bounded-memory invariant). For a full-retention store this is
+            // exactly `project(all_events())`: `marking_base` returns
+            // `(empty, all_events())` and `project_onto(&empty, all)` folds it.
+            // The stored cursor is the extent `marking_base` actually folded,
+            // read under its own lock — coherent with the projected marking even
+            // if a concurrent append advanced `events.len()` past the
+            // call-site `current_idx`.
+            let (base, tail, extent) = events.marking_base().await;
+            let marking = projection.project_onto(&base, &tail);
+            *cached_state.write().unwrap() = Some((extent, marking.clone()));
             (marking, MarkingDelta::Rebuilt)
         }
     }

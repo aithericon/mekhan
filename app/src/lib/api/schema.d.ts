@@ -8287,6 +8287,13 @@ export interface components {
             attributes?: components["schemas"]["AttributeView"][];
             checksum?: null | components["schemas"]["ChecksumView"];
             columns?: components["schemas"]["ColumnView"][];
+            /**
+             * Format: date-time
+             * @description The file's real creation/birth time on disk (filesystem btime), extracted
+             *     at probe time. NOT the catalogue ingest time — that's the row's own
+             *     `created_at`. `None` on filesystems/platforms that don't expose btime.
+             */
+            created_at?: string | null;
             data_quality?: null | components["schemas"]["DataQualityView"];
             details?: null | components["schemas"]["FormatDetailsView"];
             dimensions?: components["schemas"]["DimensionView"][];
@@ -9710,6 +9717,15 @@ export interface components {
             max_tokens?: number | null;
             /** @description Model identifier (e.g. "gpt-4o", "claude-sonnet-4-20250514"). */
             model: string;
+            /**
+             * @description Organization / billing account. Overlaid from the bound `openai`
+             *     resource's `organization` field. For OpenAI it is sent as the
+             *     `OpenAI-Organization` header; for Hugging Face Inference Providers it is
+             *     sent as `X-HF-Bill-To` so usage bills to the named org instead of the
+             *     token owner's depletable personal credits. Sending both is safe — each
+             *     provider ignores the other's header.
+             */
+            organization?: string | null;
             /**
              * @description Turns produced since `history` was last persisted — for the agent
              *     loop, the tool result (or synthetic feedback) the engine accumulated

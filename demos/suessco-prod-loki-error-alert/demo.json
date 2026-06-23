@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-0000000000a3",
+  "folder": "integrations",
+  "name": "Suessco Prod Loki Error-Log Alert",
+  "description": "Scheduled error-log alert for the PROD environment of the Suessco cluster, run by a cross-cluster worker: Cron (every 12h) → Loki query (error-level logs only, via a logfmt `level` filter) → AI incident summary → Decision (email only if errors) → SMTP send. The Loki step pins deploymentModel.group `suessco_prod`, dispatching to the executor enrolled from suessco-prod, so it reads that cluster's in-cluster Loki locally. The agent uses Hugging Face Inference (resource `hf_inference`) billed to the `Aithericon` HF org via X-HF-Bill-To. `send_alert` sets retryPolicy.maxRetries 0 to avoid an email storm on the single-use SMTP secret. Identical to the suessco-dev sibling except the routing group. Requires workspace resources `suessco_loki` (loki), `hf_inference` (openai) and `mail` (smtp), auto-seeded from demos/resources/."
+}

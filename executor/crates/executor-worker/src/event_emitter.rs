@@ -15,8 +15,119 @@ use aithericon_executor_metrics::MetricSink;
 use serde_json::json;
 
 use aithericon_executor_backend::traits::EventStream;
+use aithericon_executor_storage::{ArtifactStore, StoragePath};
 
 use crate::chunks::{datastream_subject, TransportRegistry};
+use crate::executor::DEFAULT_MAX_OUTPUT_INLINE_BYTES;
+
+/// Outcome of bounding a single `emit`/`scatter` streaming **item** payload
+/// against the inline ceiling.
+///
+/// An oversized payload must NEVER ride inline in the control token (it would
+/// bloat the engine's in-memory net marking, and under `gather` N at once). The
+/// two valid resolutions, in priority order, are:
+///   * [`Self::Inline`] — within the cap (or offloaded out-of-band): the JSON
+///     string the `ControlEmitEvent.payload_json` carries. For an offloaded
+///     payload this is a slim REFERENCE handle (`{ "__ref__": true, "key": …,
+///     "size_bytes": …, "content_type": … }`), the SAME `{key:…}` shape a
+///     promoted `file` output uses, so a downstream consumer resolves it with
+///     `store.download(StoragePath(key), …)` exactly as it would a file handle.
+///   * [`Self::TooLarge`] — over the cap AND no storage backend is wired into
+///     the emit path, so offload is impossible. The caller MUST fail the step
+///     with the carried actionable message; silently eliding the payload would
+///     drop a crucial stream element.
+pub(crate) enum BoundedItemPayload {
+    /// The (possibly reference-substituted) JSON string to put on the wire.
+    Inline(String),
+    /// Offload was impossible — the step must hard-error. Carries the actionable
+    /// message (which already embeds the offending byte size).
+    TooLarge { message: String },
+}
+
+/// Actionable guidance appended to every over-cap error/log so the operator
+/// knows how to keep large payloads off the control token.
+const EMIT_OVERSIZE_GUIDANCE: &str = "stream large payloads on a data channel \
+     (open_output/write) or persist via log_artifact and emit the reference \
+     instead of inlining the bytes in the emitted item";
+
+/// Bound a single emit/scatter item payload against `limit`, OFFLOADING the
+/// bytes out-of-band when they exceed it (the preferred resolution) and falling
+/// back to a hard-error signal only when no `store` is available.
+///
+/// This is the WORKER-side half of the emit-payload cap (the engine enforces the
+/// same ceiling in `control_emit_token` as the authoritative last line of
+/// defense). We reuse `DEFAULT_MAX_OUTPUT_INLINE_BYTES` (1 MiB) so the emit path
+/// and the output path share one ceiling.
+///
+/// On offload the payload bytes are persisted under
+/// `artifacts/{execution_id}/emit/{channel}/{episode_uid}/{idx}.json` via the
+/// SAME [`ArtifactStore::put`] a promoted `file` output uses (identical key
+/// namespace + resolution), and the item carries a slim reference handle. The
+/// data is NOT lost and does NOT ride inline. Returns [`BoundedItemPayload`].
+///
+/// `episode_uid` MUST be in the key: `idx` is the per-EPISODE item index
+/// (monotonic from 0 within one episode), so two distinct episodes emitting into
+/// the SAME channel within one execution collide at the same `idx`. The engine's
+/// `__map_id` correlation and the `control_emit_token` dedup id both already
+/// carry `episode_uid` for exactly this reason — dropping it here would let
+/// episode B's `put` overwrite episode A's bytes (silent cross-episode
+/// corruption).
+pub(crate) async fn bound_item_payload_str(
+    serialized: String,
+    limit: usize,
+    store: Option<&Arc<dyn ArtifactStore>>,
+    execution_id: &str,
+    channel: &str,
+    episode_uid: &str,
+    idx: u64,
+) -> BoundedItemPayload {
+    let size = serialized.len();
+    if size <= limit {
+        return BoundedItemPayload::Inline(serialized);
+    }
+
+    // PREFERRED: offload out-of-band and emit a reference handle.
+    if let Some(store) = store {
+        let key = format!("artifacts/{execution_id}/emit/{channel}/{episode_uid}/{idx}.json");
+        match store
+            .put(&StoragePath(key.clone()), serialized.into_bytes())
+            .await
+        {
+            Ok(()) => {
+                debug!(%execution_id, channel, idx, size, %key, "emit item payload offloaded to store");
+                let reference = json!({
+                    "__ref__": true,
+                    "key": key,
+                    "size_bytes": size,
+                    "content_type": "application/json",
+                });
+                return BoundedItemPayload::Inline(reference.to_string());
+            }
+            Err(e) => {
+                // Offload was attempted but the upload failed — this is NOT a
+                // silent elide. Treat it as the hard-error fallback so the step
+                // fails loudly rather than dropping the element.
+                error!(%execution_id, channel, idx, size, error = %e, "emit item payload offload to store failed");
+                return BoundedItemPayload::TooLarge {
+                    message: format!(
+                        "emit item payload of {size} B exceeded the inline limit of {limit} B \
+                         and offload to the artifact store failed ({e}); {EMIT_OVERSIZE_GUIDANCE}"
+                    ),
+                };
+            }
+        }
+    }
+
+    // FALLBACK: no storage backend wired into the emit path — offload is
+    // impossible, so hard-error. Never silently drop the payload.
+    BoundedItemPayload::TooLarge {
+        message: format!(
+            "emit item payload of {size} B exceeded the inline limit of {limit} B and no \
+             artifact store is wired into this executor's emit path to offload it; \
+             {EMIT_OVERSIZE_GUIDANCE}"
+        ),
+    }
+}
 
 /// Resolve a JetStream subject, applying the optional isolation prefix.
 ///
@@ -185,6 +296,13 @@ pub struct StreamContext {
     /// child-process SDK metrics to. `None` when the worker has no metric sink
     /// configured — `metric()` is then a no-op.
     pub metric_sink: Option<Arc<dyn MetricSink>>,
+    /// Artifact store for OFFLOADING an oversized emit `item` payload out-of-band
+    /// (the same store a promoted `file` output uploads to). Cloned from the
+    /// worker's `JobExecutor`. When an `item`'s serialized payload exceeds the
+    /// inline ceiling, the bytes are persisted here and the item carries a slim
+    /// reference handle instead of inlining the blob. `None` when the worker has
+    /// no store wired — an oversized item then hard-errors rather than eliding.
+    pub artifact_store: Option<Arc<dyn ArtifactStore>>,
 }
 
 impl StreamContext {
@@ -329,12 +447,44 @@ impl EventStream for StreamContext {
         // is NOT category-gated like `maybe_emit`. Build it directly and publish
         // through the emitter's control path (same wire the IPC `EmitControl`
         // uses for the Python SDK's episode emit).
+        // Bound the per-item payload: an oversized blob would ride the wire and
+        // then park in the engine marking (and under `gather`, N at once). Offload
+        // it out-of-band and emit a slim reference handle instead (preferred), or
+        // — when no store is wired — fail loudly. NEVER silently elide.
+        let serialized = serde_json::to_string(&payload).unwrap_or_default();
+        let payload_json = match bound_item_payload_str(
+            serialized,
+            DEFAULT_MAX_OUTPUT_INLINE_BYTES,
+            self.artifact_store.as_ref(),
+            &self.execution_id,
+            &channel,
+            &episode_uid,
+            idx,
+        )
+        .await
+        {
+            BoundedItemPayload::Inline(s) => s,
+            BoundedItemPayload::TooLarge { message } => {
+                // The in-process `EventStream::item` contract is fire-and-forget
+                // (no return value to fail the step on), and offload was
+                // impossible. Surface the failure explicitly: log an error and
+                // emit an error-carrying item so the downstream consumer sees a
+                // visible error rather than a silently-dropped element.
+                error!(
+                    execution_id = %self.execution_id,
+                    %channel,
+                    idx,
+                    "{message}"
+                );
+                json!({ "__error__": message }).to_string()
+            }
+        };
         let event = ControlEmitEvent {
             execution_id: self.execution_id.clone(),
             workspace_id: self.workspace_id.clone(),
             channel,
             kind: ControlKind::Item,
-            payload_json: serde_json::to_string(&payload).unwrap_or_default(),
+            payload_json,
             item_idx: idx,
             count: 0,
             episode_uid,
@@ -464,13 +614,200 @@ mod tests {
 
     use std::sync::Mutex;
 
-    use aithericon_executor_domain::MetricType;
+    use aithericon_executor_domain::{Artifact, ArtifactManifest, MetricType};
+    use aithericon_executor_storage::{StorageError, UploadOptions};
+
+    /// In-memory `ArtifactStore` capturing every `put` so a test can assert an
+    /// oversized emit item was OFFLOADED (bytes persisted) rather than elided.
+    #[derive(Default)]
+    struct CapturingStore {
+        puts: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ArtifactStore for CapturingStore {
+        async fn upload(
+            &self,
+            _execution_id: &str,
+            artifact: &Artifact,
+            _local_path: &std::path::Path,
+            _options: UploadOptions,
+        ) -> Result<Artifact, StorageError> {
+            Ok(artifact.clone())
+        }
+        async fn download(
+            &self,
+            _storage_path: &StoragePath,
+            _local_dest: &std::path::Path,
+        ) -> Result<(), StorageError> {
+            Ok(())
+        }
+        async fn put(&self, storage_path: &StoragePath, data: Vec<u8>) -> Result<(), StorageError> {
+            self.puts.lock().unwrap().insert(storage_path.0.clone(), data);
+            Ok(())
+        }
+        async fn exists(&self, storage_path: &StoragePath) -> Result<bool, StorageError> {
+            Ok(self.puts.lock().unwrap().contains_key(&storage_path.0))
+        }
+        async fn delete(&self, _storage_path: &StoragePath) -> Result<(), StorageError> {
+            Ok(())
+        }
+        async fn list(&self, _execution_id: &str) -> Result<Vec<StoragePath>, StorageError> {
+            Ok(vec![])
+        }
+        async fn load_manifest(
+            &self,
+            _execution_id: &str,
+        ) -> Result<Option<ArtifactManifest>, StorageError> {
+            Ok(None)
+        }
+        async fn save_manifest(
+            &self,
+            _execution_id: &str,
+            _manifest: &ArtifactManifest,
+        ) -> Result<(), StorageError> {
+            Ok(())
+        }
+        fn name(&self) -> &'static str {
+            "capturing"
+        }
+    }
+
+    /// Within-limit payloads pass through byte-for-byte (no spurious offload,
+    /// no store touched) regardless of whether a store is wired.
+    #[tokio::test]
+    async fn within_limit_item_payload_passes_through_unchanged() {
+        let store: Arc<dyn ArtifactStore> = Arc::new(CapturingStore::default());
+        let bounded =
+            bound_item_payload_str("{\"v\":1}".to_string(), 1024, Some(&store), "e", "ch", "ep", 0)
+                .await;
+        match bounded {
+            BoundedItemPayload::Inline(s) => assert_eq!(s, "{\"v\":1}"),
+            BoundedItemPayload::TooLarge { .. } => panic!("small payload must not be TooLarge"),
+        }
+    }
+
+    /// OFFLOAD path: an oversized payload with a store wired persists the bytes
+    /// out-of-band and the item carries a slim, resolvable reference handle
+    /// (`__ref__` + a `{key:…}` the consumer downloads) — NOT an `__omitted__`
+    /// placeholder and NOT the inline blob.
+    #[tokio::test]
+    async fn oversized_item_payload_is_offloaded_to_a_reference() {
+        let store = Arc::new(CapturingStore::default());
+        let store_dyn: Arc<dyn ArtifactStore> = store.clone();
+        let big = format!("{{\"blob\":\"{}\"}}", "y".repeat(2 * 1024 * 1024));
+        let big_len = big.len();
+
+        let bounded = bound_item_payload_str(
+            big,
+            DEFAULT_MAX_OUTPUT_INLINE_BYTES,
+            Some(&store_dyn),
+            "exec-1",
+            "scatter",
+            "ep-9",
+            7,
+        )
+        .await;
+
+        let s = match bounded {
+            BoundedItemPayload::Inline(s) => s,
+            BoundedItemPayload::TooLarge { .. } => {
+                panic!("with a store wired, oversized payloads must offload, not error")
+            }
+        };
+        // The on-wire item is a slim reference, not the blob nor an __omitted__.
+        assert!(s.len() < DEFAULT_MAX_OUTPUT_INLINE_BYTES);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v.get("__ref__").and_then(|b| b.as_bool()), Some(true));
+        assert!(v.get("__omitted__").is_none(), "must not silently elide");
+        let key = v.get("key").and_then(|k| k.as_str()).unwrap();
+        assert_eq!(key, "artifacts/exec-1/emit/scatter/ep-9/7.json");
+        assert_eq!(v.get("size_bytes").and_then(|n| n.as_u64()), Some(big_len as u64));
+        // The bytes are resolvable: the store holds them under that exact key.
+        let stored = store.puts.lock().unwrap();
+        assert_eq!(stored.get(key).map(|b| b.len()), Some(big_len));
+    }
+
+    /// HARD-ERROR fallback: an oversized payload with NO store wired must NOT be
+    /// elided — it returns `TooLarge` with an actionable message so the caller
+    /// fails the step.
+    #[tokio::test]
+    async fn oversized_item_payload_without_store_hard_errors() {
+        let bounded =
+            bound_item_payload_str("x".repeat(64).to_string(), 8, None, "e", "ch", "ep", 3).await;
+        match bounded {
+            BoundedItemPayload::TooLarge { message } => {
+                assert!(message.contains("of 64 B"));
+                assert!(message.contains("no artifact store"));
+                assert!(message.contains("log_artifact") || message.contains("data channel"));
+            }
+            BoundedItemPayload::Inline(_) => {
+                panic!("without a store, an oversized payload must hard-error, not elide")
+            }
+        }
+    }
+
+    /// REGRESSION: two distinct episodes (different `episode_uid`) emitting an
+    /// oversized item at the SAME channel + SAME `idx` within ONE execution must
+    /// offload to DISTINCT keys. Without `episode_uid` in the key, episode B's
+    /// `put` would overwrite episode A's bytes and A's `{__ref__,key}` would
+    /// later resolve to B's data (silent cross-episode corruption).
+    #[tokio::test]
+    async fn two_episodes_same_channel_idx_offload_to_distinct_keys() {
+        let store = Arc::new(CapturingStore::default());
+        let store_dyn: Arc<dyn ArtifactStore> = store.clone();
+        let a = format!("{{\"who\":\"A\",\"pad\":\"{}\"}}", "a".repeat(2 * 1024 * 1024));
+        let b = format!("{{\"who\":\"B\",\"pad\":\"{}\"}}", "b".repeat(2 * 1024 * 1024));
+
+        // Same channel "scatter", same idx 0, different episode_uid.
+        let ra = bound_item_payload_str(
+            a.clone(),
+            DEFAULT_MAX_OUTPUT_INLINE_BYTES,
+            Some(&store_dyn),
+            "exec-1",
+            "scatter",
+            "episode-A",
+            0,
+        )
+        .await;
+        let rb = bound_item_payload_str(
+            b.clone(),
+            DEFAULT_MAX_OUTPUT_INLINE_BYTES,
+            Some(&store_dyn),
+            "exec-1",
+            "scatter",
+            "episode-B",
+            0,
+        )
+        .await;
+
+        let key_of = |r: BoundedItemPayload| match r {
+            BoundedItemPayload::Inline(s) => {
+                let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+                v.get("key").and_then(|k| k.as_str()).unwrap().to_string()
+            }
+            BoundedItemPayload::TooLarge { .. } => panic!("expected offload"),
+        };
+        let key_a = key_of(ra);
+        let key_b = key_of(rb);
+        assert_ne!(key_a, key_b, "distinct episodes must not collide on the offload key");
+        assert_eq!(key_a, "artifacts/exec-1/emit/scatter/episode-A/0.json");
+        assert_eq!(key_b, "artifacts/exec-1/emit/scatter/episode-B/0.json");
+
+        // Both sets of bytes survive — neither overwrote the other.
+        let stored = store.puts.lock().unwrap();
+        assert_eq!(stored.get(&key_a).map(|b| b.len()), Some(a.len()));
+        assert_eq!(stored.get(&key_b).map(|b| b.len()), Some(b.len()));
+        assert!(stored[&key_a].starts_with(b"{\"who\":\"A\""));
+        assert!(stored[&key_b].starts_with(b"{\"who\":\"B\""));
+    }
 
     /// Records every emitted event's (category, detail) so a test can assert
     /// what `StreamContext` published.
     #[derive(Default)]
     struct CapturingEmitter {
         events: Mutex<Vec<(EventCategory, StatusDetail)>>,
+        controls: Mutex<Vec<ControlEmitEvent>>,
     }
 
     #[async_trait::async_trait]
@@ -481,7 +818,9 @@ mod tests {
                 .unwrap()
                 .push((event.category, event.detail.clone()));
         }
-        async fn emit_control(&self, _event: &ControlEmitEvent) {}
+        async fn emit_control(&self, event: &ControlEmitEvent) {
+            self.controls.lock().unwrap().push(event.clone());
+        }
     }
 
     fn ctx_with(categories: &[EventCategory], emitter: Arc<CapturingEmitter>) -> StreamContext {
@@ -496,7 +835,48 @@ mod tests {
             transports: None,
             channels: vec![],
             metric_sink: None,
+            artifact_store: None,
         }
+    }
+
+    /// End-to-end native emit path: `StreamContext::item` with a store wired
+    /// offloads an oversized payload and publishes a `control_emit` carrying the
+    /// reference handle — the in-process backend equivalent of the offload.
+    #[tokio::test]
+    async fn stream_context_item_offloads_oversized_payload() {
+        let store = Arc::new(CapturingStore::default());
+        let emitter = Arc::new(CapturingEmitter::default());
+        let mut ctx = ctx_with(&[], emitter.clone());
+        ctx.artifact_store = Some(store.clone() as Arc<dyn ArtifactStore>);
+
+        let big = serde_json::json!({ "blob": "z".repeat(2 * 1024 * 1024) });
+        ctx.item("ch".to_string(), "ep-1".to_string(), 4, big).await;
+
+        let controls = emitter.controls.lock().unwrap();
+        assert_eq!(controls.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&controls[0].payload_json).unwrap();
+        assert_eq!(v.get("__ref__").and_then(|b| b.as_bool()), Some(true));
+        assert!(v.get("blob").is_none());
+        assert!(!store.puts.lock().unwrap().is_empty(), "bytes offloaded");
+    }
+
+    /// Native emit path with NO store: the element is NOT silently dropped — the
+    /// published item carries an explicit `__error__` marker (and the failure is
+    /// logged), since the fire-and-forget trait cannot fail the step.
+    #[tokio::test]
+    async fn stream_context_item_without_store_marks_error_not_elided() {
+        let emitter = Arc::new(CapturingEmitter::default());
+        let ctx = ctx_with(&[], emitter.clone());
+
+        let big = serde_json::json!({ "blob": "z".repeat(2 * 1024 * 1024) });
+        ctx.item("ch".to_string(), "ep-1".to_string(), 0, big).await;
+
+        let controls = emitter.controls.lock().unwrap();
+        assert_eq!(controls.len(), 1);
+        let v: serde_json::Value = serde_json::from_str(&controls[0].payload_json).unwrap();
+        assert!(v.get("__error__").is_some(), "explicit error, not silent drop");
+        assert!(v.get("__omitted__").is_none());
+        assert!(v.get("blob").is_none());
     }
 
     fn gauge(name: &str, value: f64) -> MetricPoint {

@@ -79,6 +79,12 @@ impl TestServer {
                         Box::pin(async {})
                             as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                     }),
+                    // Stream-sequence + resume-from cells (snapshot wake). Inert
+                    // for the in-memory store, which has no NATS consumer. The
+                    // resume-from cell is a `parking_lot::RwLock` (bare `RwLock`
+                    // in the `StoreFactory` type), unlike the `std::sync` ws cell.
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    Arc::new(RwLock::new(None)),
                 )
             });
 

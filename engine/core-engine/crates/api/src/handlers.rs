@@ -14,7 +14,9 @@ use petri_application::{
     token_color_to_json, validate_topology, EventRepository, StateProjection, TopologyRepository,
     TransitionStatusDetail,
 };
-use petri_domain::{verify_event_chain, DomainEvent, PlaceId, TokenColor, TokenId, TransitionId};
+use petri_domain::{
+    verify_event_chain_from, DomainEvent, PlaceId, TokenColor, TokenId, TransitionId,
+};
 
 use crate::dto::{
     AnalysisReport, AnalysisSummary, CommandResponse, CreateTokenRequest, ErrorResponse,
@@ -102,7 +104,13 @@ where
     T: TopologyRepository,
     S: StateProjection,
 {
+    // NOTE: with a bounded in-memory store, `get_events()` returns only the
+    // resident tail — older events have been evicted (they remain in the
+    // durable NATS log). `earliest_available_sequence` is the oldest sequence
+    // this in-memory view can serve; we use it to flag a partial range rather
+    // than silently returning a truncated history with a false "chain broken".
     let all_events = app_state.service.get_events().await;
+    let earliest_available_sequence = app_state.service.earliest_available_sequence().await;
 
     // Filter events if from_sequence is provided
     let events: Vec<_> = match query.from_sequence {
@@ -113,10 +121,22 @@ where
         None => all_events,
     };
 
-    let chain_valid = verify_event_chain(&events);
+    // The in-memory view is truncated when the requested floor (the explicit
+    // `from_sequence`, or `0` for an unfiltered request) is below the oldest
+    // sequence the store still holds. `None` (empty store) → never truncated.
+    let requested_floor = query.from_sequence.unwrap_or(0);
+    let history_truncated = earliest_available_sequence
+        .map(|earliest| requested_floor < earliest)
+        .unwrap_or(false);
+
+    // Verify over the returned (possibly partial-but-contiguous) range so a
+    // valid evicted-prefix tail is not misreported as a broken chain.
+    let chain_valid = verify_event_chain_from(&events);
     Json(EventsResponse {
         events,
         chain_valid,
+        earliest_available_sequence,
+        history_truncated,
     })
 }
 
@@ -996,19 +1016,45 @@ where
 
     let rx = app_state.event_tx.subscribe();
 
-    // Phase 1: backfill missed events as an immediate stream
+    // Phase 1: backfill missed events as an immediate stream.
+    //
+    // With a bounded in-memory store, `get_events()` only holds the resident
+    // tail; events older than `earliest_available_sequence` were evicted (they
+    // remain in the durable NATS log). A reconnecting client asking for a
+    // `from_sequence` below that floor would otherwise SILENTLY receive only
+    // the recent tail with the middle range dropped. Instead, when the
+    // requested range starts below what memory holds, we emit an explicit
+    // `history_truncated` SSE event up front so the client knows its backfill
+    // is partial and where the in-memory window begins (and can re-read the
+    // evicted prefix from the durable log if it needs it).
     let backfill: Vec<Result<SseEvent, Infallible>> = if let Some(from_seq) = query.from_sequence {
-        app_state
-            .service
-            .get_events()
-            .await
-            .into_iter()
-            .filter(|e| e.sequence >= from_seq)
-            .map(|event| {
-                let data = serde_json::to_string(&event).unwrap_or_default();
-                Ok(SseEvent::default().event("update").data(data))
-            })
-            .collect()
+        let earliest_available_sequence = app_state.service.earliest_available_sequence().await;
+        let mut out: Vec<Result<SseEvent, Infallible>> = Vec::new();
+
+        if let Some(earliest) = earliest_available_sequence {
+            if from_seq < earliest {
+                let data = serde_json::json!({
+                    "earliest_available_sequence": earliest,
+                    "requested_from_sequence": from_seq,
+                })
+                .to_string();
+                out.push(Ok(SseEvent::default().event("history_truncated").data(data)));
+            }
+        }
+
+        out.extend(
+            app_state
+                .service
+                .get_events()
+                .await
+                .into_iter()
+                .filter(|e| e.sequence >= from_seq)
+                .map(|event| {
+                    let data = serde_json::to_string(&event).unwrap_or_default();
+                    Ok(SseEvent::default().event("update").data(data))
+                }),
+        );
+        out
     } else {
         vec![]
     };
@@ -1659,7 +1705,7 @@ pub mod net_scoped {
         T: TopologyRepository + 'static,
         S: StateProjection + 'static,
     {
-        match registry.hibernate(&net_id) {
+        match registry.hibernate(&net_id).await {
             Ok(()) => (StatusCode::OK, Json(serde_json::json!({ "success": true }))),
             Err(e) => (
                 StatusCode::NOT_FOUND,

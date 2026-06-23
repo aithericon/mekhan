@@ -22329,6 +22329,14 @@
               "$ref": "#/components/schemas/ColumnView"
             }
           },
+          "created_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The file's real creation/birth time on disk (filesystem btime), extracted\nat probe time. NOT the catalogue ingest time — that's the row's own\n`created_at`. `None` on filesystems/platforms that don't expose btime."
+          },
           "data_quality": {
             "oneOf": [
               {
@@ -25683,6 +25691,13 @@
           "model": {
             "type": "string",
             "description": "Model identifier (e.g. \"gpt-4o\", \"claude-sonnet-4-20250514\")."
+          },
+          "organization": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Organization / billing account. Overlaid from the bound `openai`\nresource's `organization` field. For OpenAI it is sent as the\n`OpenAI-Organization` header; for Hugging Face Inference Providers it is\nsent as `X-HF-Bill-To` so usage bills to the named org instead of the\ntoken owner's depletable personal credits. Sending both is safe — each\nprovider ignores the other's header."
           },
           "pending": {
             "type": "array",
