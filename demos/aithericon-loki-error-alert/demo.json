@@ -1,6 +1,6 @@
 {
   "templateId": "00000000-0000-0000-0000-0000000000a1",
   "folder": "integrations",
-  "name": "Loki Error-Log Alert",
-  "description": "Scheduled cluster error-log email alert: Cron (every 12h) \u2192 Loki query for error/fatal/panic lines \u2192 Agent incident summary \u2192 Decision (email only if errors found) \u2192 SMTP send. The agent binds the in-cluster inference router (provider: internal, resource internal_pool_router, model qwen3.5:9b). Requires workspace resources `aithericon_loki` (loki), `internal_pool_router` + `internal_pool_registry` (internal LLM), and `mail` (smtp) \u2014 all auto-seeded from demos/resources/; swap `mail` for a real relay (and widen the Loki `since`) for production use."
+  "name": "Aithericon Loki Error-Log Alert",
+  "description": "Scheduled error-log email alert for the Aithericon cluster: Cron (every 12h) \u2192 Loki query for error/fatal/panic lines \u2192 Agent incident summary \u2192 Decision (email only if errors found) \u2192 SMTP send. The agent uses Hugging Face Inference (provider: openai, resource hf_inference, model Qwen/Qwen2.5-7B-Instruct) billed to the `Aithericon` HF org via X-HF-Bill-To \u2014 the same agent binding as the suessco sibling. `send_alert` sets retryPolicy.maxRetries 0 to avoid an email storm on the single-use SMTP secret. Requires workspace resources `aithericon_loki` (loki), `hf_inference` (openai), and `mail` (smtp) \u2014 all auto-seeded from demos/resources/; swap `mail` for a real relay for production use."
 }
