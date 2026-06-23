@@ -2965,6 +2965,60 @@ mod tests {
         );
     }
 
+    /// `suessco-prod-loki-error-alert` is the prod-environment twin of
+    /// `suessco-dev-loki-error-alert`: identical chain + bindings, but the Loki
+    /// step pins `deploymentModel.group = "suessco_prod"` so it dispatches to the
+    /// worker enrolled from the Suessco PROD cluster. Pins that the prod routing
+    /// group + the shared resource bindings compile.
+    #[test]
+    fn suessco_prod_loki_error_alert_demo_loads_and_compiles() {
+        use crate::compiler::{
+            compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
+        };
+
+        let demo = load_demo(&repo_root().join("demos/suessco-prod-loki-error-alert"))
+            .expect("suessco-prod-loki-error-alert must load");
+        assert_eq!(demo.metadata.name, "Suessco Prod Loki Error-Log Alert");
+        assert_eq!(
+            demo.metadata.template_id,
+            "00000000-0000-0000-0000-0000000000a3"
+        );
+
+        let files = node_files_inline(&demo.files);
+        let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
+            &demo.graph,
+            &demo.metadata.name,
+            demo.metadata.description.as_deref().unwrap_or(""),
+            &files,
+            CompileOptions {
+                inline_sources: &demo.files,
+                ..Default::default()
+            },
+        )
+        .expect("suessco-prod-loki-error-alert must compile");
+
+        // Same Suessco Loki resource as dev (routing group, not the resource,
+        // distinguishes prod from dev).
+        let loki_cfg = node_configs
+            .get("query_logs")
+            .expect("query_logs config must be parked")
+            .to_string();
+        assert!(
+            loki_cfg.contains("suessco_loki"),
+            "loki step must bind the suessco_loki resource: {loki_cfg}"
+        );
+
+        // The agent binds Hugging Face Inference via the `openai` wire shape.
+        let agent_cfg = node_configs
+            .get("summarize")
+            .expect("summarize config must be parked");
+        assert_eq!(
+            agent_cfg.get("resource_alias").and_then(|v| v.as_str()),
+            Some("hf_inference"),
+            "the HF-binding alias must survive compile: {agent_cfg}"
+        );
+    }
+
     /// `output-safety-gate` is a SubWorkflow-shaped composable critic:
     /// a low-temperature LLM critic step (with a strict `CriticFlags` `$ref`
     /// response_format) followed by two Python steps (`verify`, `decide`)
