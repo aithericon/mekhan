@@ -8,7 +8,7 @@
 //!
 //! The lifecycle listener and the engine must share a NATS broker. Both the
 //! harness default and the `just dev` engine use the dev broker
-//! (`docker-compose.yml` maps `4333:4222`). Override with `ENGINE_NATS_URL`
+//! (`docker-compose.yml` maps `14333:4222`). Override with `ENGINE_NATS_URL`
 //! only if the engine was started against a non-default NATS.
 
 mod common;

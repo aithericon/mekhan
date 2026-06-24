@@ -208,8 +208,8 @@ psql:
 # from its identity.json and exports it as TEST_WORKER_DEFAULT_PARTITION, so the
 # test harness seeds its fresh DB's nil-workspace `default` group with the SAME
 # id the running executor drains. It also points the test at this slot's NATS /
-# engine / pg / S3 endpoints (the test defaults assume the separate test-infra
-# NATS on :4333, not the dev stack). The stack must be up (`just dev up`).
+# engine / pg / S3 endpoints (only needed for non-zero slots — the test defaults
+# target slot 0's dev stack). The stack must be up (`just dev up`).
 #
 #   just dev::e2e-partition                    # default: automated_step_e2e
 #   just dev::e2e-partition http_borrow_e2e    # a specific test binary

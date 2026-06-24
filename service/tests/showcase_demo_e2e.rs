@@ -23,9 +23,9 @@
 //! contract change — all surface as a publish-time compile error or a
 //! runtime-time assert failure here, never on the user's first try.
 //!
-//! Requires `just dev::up` (engine :3030, executor, rustfs S3 :9005,
-//! NATS :4333). Set
-//! `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:5439/mekhan`
+//! Requires `just dev::up` (engine :13030, executor, rustfs S3 :19005,
+//! NATS :14333). Set
+//! `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:15439/mekhan`
 //! and the `TEST_S3_*` env per `reference_executor_e2e_s3_bucket`.
 //!
 //! Parallel-safe: builds `MekhanNats` with a per-test

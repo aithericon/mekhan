@@ -25,9 +25,9 @@ pub const DEFAULT_POSTGRES_URL: &str = "postgres://mekhan:mekhan@localhost:15439
 /// Default NATS URL for test infrastructure.
 ///
 /// Points at the `just dev` stack broker (`docker-compose.yml` maps
-/// `4333:4222`), which is the same NATS the engine/executor daemons connect
+/// `14333:4222`), which is the same NATS the engine/executor daemons connect
 /// to. Override with `TEST_NATS_URL` env var.
-pub const DEFAULT_NATS_URL: &str = "nats://localhost:4333";
+pub const DEFAULT_NATS_URL: &str = "nats://localhost:14333";
 
 /// Read the test Postgres URL from env or use the default.
 pub fn postgres_url() -> String {

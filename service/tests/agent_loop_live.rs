@@ -29,8 +29,8 @@
 //!     hung instance, caught by the test timeout.
 //!
 //! Requires:
-//!   - `just dev::up` (engine :3030, executor with `llm`+`python` features,
-//!     NATS :4333, postgres :5439)
+//!   - `just dev::up` (engine :13030, executor with `llm`+`python` features,
+//!     NATS :14333, postgres :15439)
 //!   - `just dev::up-ollama` (Ollama at :11434; the demo references
 //!     `qwen3.5:9b`, which is `up-ollama`'s default. Any tool-capable
 //!     model — qwen2.5+/qwen3+/llama3.1+ — works; override by editing

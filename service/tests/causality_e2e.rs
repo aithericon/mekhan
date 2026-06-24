@@ -8,7 +8,7 @@
 //!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
 //!
 //! The engine/executor connect to the dev NATS broker (`docker-compose.yml`
-//! maps `4333:4222`); the test harness defaults to that same broker.
+//! maps `14333:4222`); the test harness defaults to that same broker.
 //!
 //! Run with:
 //!   cargo test --test causality_e2e -- --test-threads=1 --nocapture
