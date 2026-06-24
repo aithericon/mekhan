@@ -1,18 +1,27 @@
 //! `StaticPrincipalResolver` — maps verified JWT claims onto Mekhan's
-//! `AuthUser`. Reads the Zitadel-specific roles claim layout, so this is the
-//! one place provider-specific identifiers live outside the adapter itself.
+//! `AuthUser`. Reads the Zitadel-specific roles claim layout for role names,
+//! so this is the one place provider-specific identifiers live outside the
+//! adapter itself.
 //!
 //! `DbPrincipalResolver` wraps the static one with a database lookup that
-//! resolves `workspace_id` from the upstream `org_id` claim (matching
-//! `workspaces.zitadel_org_id`). When no org workspace resolves, the principal
-//! is lazily given a **personal** workspace (owner) on first login — see
-//! [`DbPrincipalResolver::ensure_personal_workspace`]. Membership is auto-
-//! provisioned on the matching-org path so first login from a known Zitadel org
-//! grants workspace access without an explicit admin step.
+//! reconciles the principal onto the `users` identity spine and resolves a
+//! `workspace_id` from their `workspace_members` rows. A fresh principal with
+//! no existing non-system membership is lazily given a **personal** workspace
+//! (owner) on first login — see [`DbPrincipalResolver::ensure_personal_workspace`].
 //!
-//! ## No more shared-`default` enrolment
+//! ## No org→workspace auto-provisioning
 //!
-//! Earlier revisions auto-joined every principal into the seeded `default`
+//! Earlier revisions read the Zitadel org-id set out of the roles claim and
+//! auto-joined the principal into each org-bound workspace as `editor` (via a
+//! since-dropped `workspaces` org-binding column). That coupling is gone:
+//! mekhan no longer derives
+//! tenancy from the upstream IdP org. Membership now comes only from explicit
+//! sources — an invite the user accepts, an admin-granted `workspace_members`
+//! row, a workspace they create, or the personal workspace minted below. The
+//! `org_id` claim is dropped entirely (`AuthUser.org_id = None`); only role
+//! names are still lifted off the roles claim.
+//!
+//! Earlier revisions also auto-joined every principal into the seeded `default`
 //! (nil) workspace and into every system workspace (`demos`). Both are gone:
 //! migration `20240189` demoted `default` to `is_system = TRUE` (internals /
 //! legacy only), and demos stay discoverable through `visibility = 'public'`
@@ -21,32 +30,16 @@
 //!
 //! ## What the resolver auto-provisions
 //!
-//! On every resolve the principal is granted membership **only** in
-//! workspaces they demonstrably belong to:
-//!   - each Zitadel org claim is mapped to its bound workspace
-//!     (`workspaces.zitadel_org_id`) and the user is upserted there as
-//!     `editor` — a principal can hold several org-workspaces at once;
-//!   - optionally (flag-gated, see below) a `viewer` row in every system
-//!     workspace.
+//! On every resolve a principal with **no** existing non-system membership is
+//! provisioned a personal workspace (owner) before the active-workspace pick —
+//! see [`DbPrincipalResolver::ensure_personal_workspace`] — so demoting
+//! `default` never strands a user. Optionally (flag-gated, see below) a
+//! `viewer` row is upserted in every system workspace.
 //!
-//! With `multi_org = false` (the default — dev_noop and single-org Zitadel
-//! deployments) the resolver, if the principal carries one resolvable org,
-//! returns that org-workspace directly (the legacy single-org path). With
-//! `multi_org = true` it instead picks the active workspace from the
-//! principal's full membership set (the `active_workspace` cookie override,
-//! applied downstream, can swap to any other membership).
-//!
-//! The resolver does **not** auto-join the shared `default` tenant and does
-//! **not** bulk-import an org's other members. In **both** modes, a principal
-//! with **no** resolvable org workspace and **no** existing non-system
-//! membership is provisioned a personal workspace (owner) before the
-//! active-workspace pick — see [`DbPrincipalResolver::ensure_personal_workspace`]
-//! — so demoting `default` never strands a user.
-//!
-//! Neither mode touches `dev_noop`: the dev-user's seeded personal-workspace
-//! (`…0001`) owner `workspace_members` row pre-dates resolution, so it is
-//! honoured regardless (the flags govern auto-JOIN, not pre-existing
-//! membership).
+//! The resolver does **not** auto-join the shared `default` tenant. `dev_noop`
+//! is untouched: the dev-user's seeded personal-workspace (`…0001`) owner
+//! `workspace_members` row pre-dates resolution, so it is honoured regardless
+//! (the flag governs auto-JOIN, not pre-existing membership).
 //!
 //! ## Flag-gated system-workspace auto-join (`auth.auto_join_system_workspaces`)
 //!
@@ -68,35 +61,30 @@ use super::port::PrincipalResolver;
 
 /// Zitadel emits roles under this claim. Value is a nested object:
 /// `{ "<role>": { "<org_id>": "<org_domain>" } }`. We flatten to the set of
-/// role names and adopt the first org_id we encounter as the user's org.
+/// role names only; the nested org ids are deliberately ignored — mekhan no
+/// longer derives tenancy from the upstream IdP org.
 const ZITADEL_ROLES_CLAIM: &str = "urn:zitadel:iam:org:project:roles";
 
-/// Extract the full **set** of Zitadel org ids referenced anywhere in the
-/// roles claim. A principal granted roles in several orgs (the multi-org
-/// case) shows up here as multiple ids; the single-org case yields one (or
-/// zero). Order is deterministic-ish (BTreeMap iteration) but callers should
-/// not depend on it for tenant selection — that's the membership-preference
-/// query's job.
-fn org_ids_from_claims(claims: &VerifiedClaims) -> Vec<String> {
-    let Some(Value::Object(roles_obj)) = claims.extra.get(ZITADEL_ROLES_CLAIM) else {
-        return Vec::new();
-    };
-    let mut seen = std::collections::BTreeSet::new();
-    let mut out = Vec::new();
-    for orgs in roles_obj.values().filter_map(|v| v.as_object()) {
-        for org_id in orgs.keys() {
-            if seen.insert(org_id.clone()) {
-                out.push(org_id.clone());
-            }
-        }
-    }
-    out
-}
+/// Identity-provider key stamped on `user_identities.provider` for the
+/// BFF / JWT (Zitadel) path. A future second IdP would use a different value;
+/// the column is the seam that keeps `(provider, subject)` links disjoint.
+///
+/// Public so the member-admin path (`handlers::workspaces::add_member`) can
+/// resolve a subject through the SAME identity spine the resolver writes,
+/// instead of recomputing `v5(subject)` and orphaning reconciled users.
+pub const ZITADEL_PROVIDER: &str = "zitadel";
 
-/// Default `workspace_members` role when auto-provisioning a Zitadel-bound
-/// user. Conservative on first contact; admins can promote later via the
-/// workspace members admin endpoint.
-const DEFAULT_AUTOPROVISION_ROLE: &str = "editor";
+/// Read the OIDC `email_verified` claim, accepting either a JSON boolean
+/// `true` or the string `"true"` (some IdPs/serializers stringify it). Anything
+/// else (absent, `false`, `"false"`, non-bool) is treated as unverified so a
+/// spoofable email can never silently merge two principals.
+fn email_verified_from_claims(claims: &VerifiedClaims) -> bool {
+    match claims.extra.get("email_verified") {
+        Some(Value::Bool(b)) => *b,
+        Some(Value::String(s)) => s.eq_ignore_ascii_case("true"),
+        _ => false,
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct StaticPrincipalResolver;
@@ -108,21 +96,26 @@ impl PrincipalResolver for StaticPrincipalResolver {
         let display_name =
             string_claim(&claims, "name").or_else(|| string_claim(&claims, "preferred_username"));
         // Standard OIDC `picture` claim — a URL to the user's profile photo.
-        // Mirrored into `user_profiles.avatar_url` by the extractor upsert.
+        // Mirrored into `users.avatar_url` by the extractor upsert.
         let avatar_url = string_claim(&claims, "picture");
 
         let roles: Vec<String> = match claims.extra.get(ZITADEL_ROLES_CLAIM) {
             Some(Value::Object(roles_obj)) => roles_obj.keys().cloned().collect(),
             _ => Vec::new(),
         };
-        // `org_id` is metadata only (the authoritative tenant is
-        // `workspace_id`). Keep the legacy "first org id" semantics here; the
-        // multi-org path in `DbPrincipalResolver` reads the full set via
-        // `org_ids_from_claims`.
-        let org_id = org_ids_from_claims(&claims).into_iter().next();
+        // `org_id` is no longer derived from the IdP — mekhan does not couple
+        // tenancy to the upstream org. Always `None`; the authoritative tenant
+        // is `workspace_id`, resolved from explicit `workspace_members` rows.
+        let org_id = None;
 
+        // Legacy v5 hash as the provisional id. `DbPrincipalResolver` overwrites
+        // it with the reconciled `users.id` (`resolve_user_id`) before any
+        // handler runs; the bare static resolver (no DB) keeps the legacy value
+        // so already-seen subjects still map to their historical id.
+        let user_id = AuthUser::legacy_subject_uuid(&claims.subject);
         Ok(AuthUser {
             subject: claims.subject,
+            user_id,
             email,
             display_name,
             roles,
@@ -154,10 +147,6 @@ fn string_claim(claims: &VerifiedClaims, key: &str) -> Option<String> {
 pub struct DbPrincipalResolver {
     inner: StaticPrincipalResolver,
     db: PgPool,
-    /// Mirrors `AuthConfig.multi_org`. `false` (default) returns the single
-    /// resolvable org-workspace directly; `true` picks among the full
-    /// membership set — see [`Self::resolve`].
-    multi_org: bool,
     /// Mirrors `AuthConfig.auto_join_system_workspaces`. `false` (default)
     /// leaves system workspaces (`demos`) un-joined; `true` mints a `viewer`
     /// row in each on every resolve.
@@ -168,38 +157,24 @@ pub struct DbPrincipalResolver {
 }
 
 impl DbPrincipalResolver {
-    /// Construct with the isolation-preserving defaults (single-org, no
-    /// system-workspace auto-join, no platform admins). Zero-config constructor
-    /// for call sites / tests that don't exercise tenancy flags.
+    /// Construct with the isolation-preserving defaults (no system-workspace
+    /// auto-join, no platform admins). Zero-config constructor for call sites /
+    /// tests that don't exercise tenancy flags.
     pub fn new(db: PgPool) -> Self {
-        Self::with_options(db, false, false, Vec::new())
+        Self::with_options(db, false, Vec::new())
     }
 
-    /// Construct with the multi-org flag wired from `AuthConfig.multi_org`,
-    /// leaving the other policies at their isolation-preserving defaults.
-    pub fn with_multi_org(db: PgPool, multi_org: bool) -> Self {
-        Self::with_options(db, multi_org, false, Vec::new())
-    }
-
-    /// Construct with the two tenancy flags (multi-org + system-workspace
-    /// auto-join) and no platform admins. Delegates to [`Self::with_options`].
-    pub fn with_policy(db: PgPool, multi_org: bool, auto_join_system_workspaces: bool) -> Self {
-        Self::with_options(db, multi_org, auto_join_system_workspaces, Vec::new())
-    }
-
-    /// Full constructor: multi-org flag + system-workspace auto-join flag +
-    /// platform-admin allow-list. The composition root (`main.rs`) uses this;
-    /// pass `config.auth.{multi_org, auto_join_system_workspaces, platform_admins}`.
+    /// Full constructor: system-workspace auto-join flag + platform-admin
+    /// allow-list. The composition root (`main.rs`) uses this; pass
+    /// `config.auth.{auto_join_system_workspaces, platform_admins}`.
     pub fn with_options(
         db: PgPool,
-        multi_org: bool,
         auto_join_system_workspaces: bool,
         platform_admins: Vec<String>,
     ) -> Self {
         Self {
             inner: StaticPrincipalResolver,
             db,
-            multi_org,
             auto_join_system_workspaces,
             platform_admins,
         }
@@ -358,12 +333,29 @@ enum PersonalWsInsertError {
 #[async_trait]
 impl PrincipalResolver for DbPrincipalResolver {
     async fn resolve(&self, claims: VerifiedClaims) -> Result<AuthUser, AuthError> {
-        // Extract the full org-id set BEFORE delegating (the inner resolver
-        // consumes `claims` and only keeps the first org id as metadata).
-        let org_ids = org_ids_from_claims(&claims);
+        // Extract the email-verified flag BEFORE delegating (the inner resolver
+        // consumes `claims`).
+        let email_verified = email_verified_from_claims(&claims);
 
         let mut user = self.inner.resolve(claims).await?;
-        let user_id = user.subject_as_uuid();
+
+        // Reconcile the principal onto the `users` spine: an existing
+        // (provider, subject) identity wins; else a verified email matches an
+        // existing user; else a new user is minted keyed by the legacy v5 hash
+        // (so already-seen subjects keep their historical id). MUST run before
+        // any membership / personal-workspace logic, which all key off
+        // `user.user_id` / `subject_as_uuid()`.
+        user.user_id = resolve_user_id(
+            &self.db,
+            ZITADEL_PROVIDER,
+            &user.subject,
+            user.email.as_deref(),
+            email_verified,
+            user.display_name.as_deref(),
+            user.avatar_url.as_deref(),
+        )
+        .await?;
+        let user_id = user.user_id;
 
         // Platform-admin: match the principal's subject OR email against the
         // config allow-list. Stamped once here so every downstream gate reads
@@ -383,51 +375,19 @@ impl PrincipalResolver for DbPrincipalResolver {
             ensure_system_workspace_membership(&self.db, user_id).await?;
         }
 
-        // Resolve every org claim to its bound workspace and auto-provision
-        // membership. A multi-org principal lands in several workspaces here;
-        // a single-org one in (at most) one. `primary_org_workspace` keeps the
-        // first resolvable one for the single-org fast path below.
-        let mut primary_org_workspace: Option<Uuid> = None;
-        for zitadel_org_id in &org_ids {
-            if let Some(ws_id) = lookup_workspace_by_zitadel_org(&self.db, zitadel_org_id).await? {
-                upsert_member(&self.db, ws_id, user_id, DEFAULT_AUTOPROVISION_ROLE).await?;
-                // First resolvable org id seeds the "primary" pick — mirrors
-                // the legacy `user.org_id` (which the static resolver set to
-                // the first org). The membership-preference query below makes
-                // the real choice in multi-org mode; this is only the
-                // single-org fast path.
-                if primary_org_workspace.is_none() {
-                    primary_org_workspace = Some(ws_id);
-                }
-            }
-        }
+        // NOTE: the resolver deliberately does NOT auto-join any workspace from
+        // IdP claims. Earlier builds read the Zitadel org-id set out of the
+        // roles claim and enrolled the principal into each org-bound workspace
+        // as `editor` (via a since-dropped `workspaces` org-binding column), and
+        // before that auto-joined the shared `default` tenant — both broke
+        // isolation.
+        // A principal now holds membership only where they genuinely belong (an
+        // accepted invite, an explicit admin grant, a workspace they created,
+        // or a seeded row like dev_noop's personal workspace); anyone left
+        // without one is given a personal workspace below rather than dropped
+        // into a shared or org-derived tenant.
 
-        // NOTE: the resolver deliberately does NOT auto-join the shared
-        // `default` workspace. Earlier builds enrolled every authenticated
-        // principal there as `editor`, which broke isolation — every Zitadel
-        // user became a member of the shared tenant on first login. A
-        // principal now holds membership only where they genuinely belong (an
-        // org-bound workspace above, an explicit grant, or a seeded row like
-        // dev_noop's personal workspace); anyone left without one is given a
-        // personal workspace below rather than dropped into a shared tenant.
-
-        // Single-org fast path (multi_org OFF): if exactly the legacy behaviour
-        // applies — one resolvable org — return that workspace directly,
-        // preserving the prior `Path 1` semantics and its role re-read.
-        if !self.multi_org {
-            if let Some(ws_id) = primary_org_workspace {
-                user.workspace_id = Some(ws_id);
-                // Re-read rather than trust DEFAULT_AUTOPROVISION_ROLE: the
-                // upsert is `DO NOTHING`, so an existing member keeps whatever
-                // role admins assigned, not `editor`.
-                user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
-                return Ok(user);
-            }
-        }
-
-        // Lazy personal-workspace provisioning. We only reach here when NO org
-        // workspace resolved (the multi_org path falls through, the single-org
-        // path's early return did not fire). A principal with zero non-system
+        // Lazy personal-workspace provisioning. A principal with zero non-system
         // memberships gets a private personal workspace (owner) minted now —
         // BEFORE any handler runs — so the demotion of `default` to a system
         // workspace strands no one. Idempotent: it is a no-op once the principal
@@ -440,18 +400,15 @@ impl PrincipalResolver for DbPrincipalResolver {
         )
         .await?;
 
-        // Active-workspace pick (covers BOTH modes' fall-through):
-        //   - multi_org ON: choose among ALL memberships (org-workspaces +
-        //     any explicit grants + the personal workspace just provisioned);
-        //     the per-session cookie override applied downstream in
-        //     `active_workspace::apply_override` can swap to any other one.
-        //   - multi_org OFF with no resolvable org: the personal workspace
-        //     just provisioned (or a pre-existing non-system membership),
-        //     preferring real tenants over system workspaces, then by age.
-        // `membership_workspace` returns `None` only when the user holds no
-        // membership at all (which the personal-workspace provisioning above
-        // prevents for any real principal), leaving `workspace_id = None` so
-        // handlers reject rather than grant ambient access.
+        // Active-workspace pick: choose among ALL memberships (any explicit
+        // grants + the personal workspace just provisioned), preferring real
+        // tenants over system workspaces, then by age. The per-session cookie
+        // override applied downstream in `active_workspace::apply_override` can
+        // swap to any other membership. `membership_workspace` returns `None`
+        // only when the user holds no membership at all (which the
+        // personal-workspace provisioning above prevents for any real
+        // principal), leaving `workspace_id = None` so handlers reject rather
+        // than grant ambient access.
         user.workspace_id = membership_workspace(&self.db, user_id).await?;
         if let Some(ws_id) = user.workspace_id {
             user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
@@ -475,19 +432,6 @@ async fn ensure_system_workspace_membership(db: &PgPool, user_id: Uuid) -> Resul
     Ok(())
 }
 
-async fn lookup_workspace_by_zitadel_org(
-    db: &PgPool,
-    zitadel_org_id: &str,
-) -> Result<Option<Uuid>, AuthError> {
-    let row: Option<(Uuid,)> =
-        sqlx::query_as("SELECT id FROM workspaces WHERE zitadel_org_id = $1")
-            .bind(zitadel_org_id)
-            .fetch_optional(db)
-            .await
-            .map_err(|e| AuthError::Internal(format!("workspace lookup: {e}")))?;
-    Ok(row.map(|(id,)| id))
-}
-
 async fn upsert_member(
     db: &PgPool,
     workspace_id: Uuid,
@@ -506,6 +450,173 @@ async fn upsert_member(
     .await
     .map_err(|e| AuthError::Internal(format!("workspace membership upsert: {e}")))?;
     Ok(())
+}
+
+/// Reconcile a verified principal onto the `users` identity spine and return
+/// their stable mekhan `users.id`, in ONE transaction. Three-step order:
+///
+///   1. **Identity hit.** `(provider, subject)` already linked → that user_id.
+///      Best-effort refresh of `users.email/display_name/avatar_url` from the
+///      fresh claims (never demotes a set field to NULL).
+///   2. **Verified-email reconciliation.** Only when `email_verified` AND an
+///      email is present: an existing `users.email` (CITEXT, case-insensitive)
+///      adopts this new subject — link the identity and return that id. This is
+///      what lets the same human re-provisioned under a new subject keep their
+///      grants/memberships.
+///   3. **New user.** Mint keyed by the LEGACY v5 hash of the subject so any
+///      already-stamped `created_by`/membership/grant rows for this subject
+///      resolve to the same id. If the email collides with a DIFFERENT existing
+///      user (CITEXT UNIQUE), fall back to inserting this user with email NULL
+///      rather than violate the constraint (an unverified/duplicate email never
+///      hijacks another identity). Then link the identity.
+///
+/// `provider` is the IdP key (`zitadel`); `subject` is the RAW OIDC subject
+/// (never rekeyed). The returned id is the value `AuthUser::subject_as_uuid()`
+/// exposes downstream.
+async fn resolve_user_id(
+    db: &PgPool,
+    provider: &str,
+    subject: &str,
+    email: Option<&str>,
+    email_verified: bool,
+    display_name: Option<&str>,
+    avatar_url: Option<&str>,
+) -> Result<Uuid, AuthError> {
+    let mut tx = db
+        .begin()
+        .await
+        .map_err(|e| AuthError::Internal(format!("resolve_user_id begin: {e}")))?;
+
+    // --- Step 1: existing identity link. --------------------------------
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT user_id FROM user_identities WHERE provider = $1 AND subject = $2")
+            .bind(provider)
+            .bind(subject)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(|e| AuthError::Internal(format!("identity lookup: {e}")))?;
+
+    if let Some((user_id,)) = existing {
+        // Best-effort attribute refresh: only overwrite a column when the fresh
+        // claim carries a value (COALESCE keeps the prior value on NULL). Email
+        // is refreshed only when verified and only if it does not collide with
+        // a different user (guarded by a NOT EXISTS so the CITEXT UNIQUE can't
+        // throw and abort the tx).
+        let refresh_email = if email_verified { email } else { None };
+        sqlx::query(
+            "UPDATE users SET \
+                display_name = COALESCE($2, display_name), \
+                avatar_url   = COALESCE($3, avatar_url), \
+                email = CASE \
+                    WHEN $4::citext IS NOT NULL \
+                     AND NOT EXISTS (SELECT 1 FROM users u2 WHERE u2.email = $4::citext AND u2.id <> $1) \
+                    THEN $4::citext ELSE email END, \
+                updated_at = now() \
+              WHERE id = $1",
+        )
+        .bind(user_id)
+        .bind(display_name)
+        .bind(avatar_url)
+        .bind(refresh_email)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| AuthError::Internal(format!("identity refresh: {e}")))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| AuthError::Internal(format!("resolve_user_id commit: {e}")))?;
+        return Ok(user_id);
+    }
+
+    // --- Step 2: verified-email reconciliation. -------------------------
+    if email_verified {
+        if let Some(addr) = email {
+            let by_email: Option<(Uuid,)> =
+                sqlx::query_as("SELECT id FROM users WHERE email = $1::citext")
+                    .bind(addr)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| AuthError::Internal(format!("user by email: {e}")))?;
+            if let Some((user_id,)) = by_email {
+                sqlx::query(
+                    "INSERT INTO user_identities (provider, subject, user_id, email_verified) \
+                     VALUES ($1, $2, $3, true) \
+                     ON CONFLICT (provider, subject) DO NOTHING",
+                )
+                .bind(provider)
+                .bind(subject)
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| AuthError::Internal(format!("link identity by email: {e}")))?;
+
+                tx.commit()
+                    .await
+                    .map_err(|e| AuthError::Internal(format!("resolve_user_id commit: {e}")))?;
+                return Ok(user_id);
+            }
+        }
+    }
+
+    // --- Step 3: mint a new user keyed by the legacy v5 hash. -----------
+    let new_id = AuthUser::legacy_subject_uuid(subject);
+
+    // Determine whether the email is free to claim. Only set it when it does
+    // not collide with a DIFFERENT existing user; otherwise insert with NULL so
+    // the CITEXT UNIQUE never throws. (When the id ALREADY exists — a legacy
+    // subject reused — the DO UPDATE path applies the same best-effort refresh.)
+    let email_for_insert: Option<&str> = match email {
+        Some(addr) => {
+            let collides: Option<(Uuid,)> =
+                sqlx::query_as("SELECT id FROM users WHERE email = $1::citext AND id <> $2")
+                    .bind(addr)
+                    .bind(new_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| AuthError::Internal(format!("email collision probe: {e}")))?;
+            if collides.is_some() {
+                None
+            } else {
+                Some(addr)
+            }
+        }
+        None => None,
+    };
+
+    sqlx::query(
+        "INSERT INTO users (id, email, display_name, avatar_url, status) \
+         VALUES ($1, $2::citext, $3, $4, 'active') \
+         ON CONFLICT (id) DO UPDATE SET \
+             email = COALESCE(EXCLUDED.email, users.email), \
+             display_name = COALESCE(EXCLUDED.display_name, users.display_name), \
+             avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url), \
+             updated_at = now()",
+    )
+    .bind(new_id)
+    .bind(email_for_insert)
+    .bind(display_name)
+    .bind(avatar_url)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AuthError::Internal(format!("user insert: {e}")))?;
+
+    sqlx::query(
+        "INSERT INTO user_identities (provider, subject, user_id, email_verified) \
+         VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (provider, subject) DO NOTHING",
+    )
+    .bind(provider)
+    .bind(subject)
+    .bind(new_id)
+    .bind(email_verified)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| AuthError::Internal(format!("link new identity: {e}")))?;
+
+    tx.commit()
+        .await
+        .map_err(|e| AuthError::Internal(format!("resolve_user_id commit: {e}")))?;
+    Ok(new_id)
 }
 
 /// Fetch the caller's `role` in a specific workspace, if any. Drives
@@ -588,63 +699,23 @@ mod tests {
         assert_eq!(user.avatar_url, None);
     }
 
-    /// Build a Zitadel roles claim: `{ role: { org_id: "domain" } }`, with
-    /// every `(role, org_id)` pair from the input mapped in.
-    fn roles_claim(pairs: &[(&str, &str)]) -> Value {
-        let mut roles = serde_json::Map::new();
-        for (role, org) in pairs {
-            let entry = roles
-                .entry((*role).to_string())
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            if let Value::Object(orgs) = entry {
-                orgs.insert((*org).to_string(), Value::String(format!("{org}.example")));
-            }
-        }
-        Value::Object(roles)
-    }
-
-    #[test]
-    fn org_ids_empty_when_no_roles_claim() {
-        assert!(org_ids_from_claims(&claims_with(BTreeMap::new())).is_empty());
-    }
-
-    #[test]
-    fn org_ids_single_org() {
-        let mut extra = BTreeMap::new();
-        extra.insert(
-            ZITADEL_ROLES_CLAIM.into(),
-            roles_claim(&[("editor", "org-a"), ("viewer", "org-a")]),
-        );
-        assert_eq!(org_ids_from_claims(&claims_with(extra)), vec!["org-a"]);
-    }
-
-    #[test]
-    fn org_ids_multi_org_deduped() {
-        // Roles spread across two orgs → both ids, each once, deterministic order.
-        let mut extra = BTreeMap::new();
-        extra.insert(
-            ZITADEL_ROLES_CLAIM.into(),
-            roles_claim(&[("editor", "org-a"), ("admin", "org-b"), ("viewer", "org-b")]),
-        );
-        let ids = org_ids_from_claims(&claims_with(extra));
-        assert_eq!(ids.len(), 2);
-        assert!(ids.contains(&"org-a".to_string()));
-        assert!(ids.contains(&"org-b".to_string()));
-    }
-
     #[tokio::test]
-    async fn static_resolver_keeps_first_org_as_metadata() {
+    async fn static_resolver_never_sets_org_id_and_lifts_roles() {
+        // The roles claim is `{ "<role>": { "<org_id>": "<domain>" } }`. We
+        // lift the role names but deliberately ignore the nested org ids —
+        // `org_id` is always `None` now that tenancy is decoupled from the IdP.
+        let mut roles = serde_json::Map::new();
+        let mut org = serde_json::Map::new();
+        org.insert("org-a".into(), Value::String("org-a.example".into()));
+        roles.insert("editor".into(), Value::Object(org));
+
         let mut extra = BTreeMap::new();
-        extra.insert(
-            ZITADEL_ROLES_CLAIM.into(),
-            roles_claim(&[("editor", "org-a"), ("admin", "org-b")]),
-        );
+        extra.insert(ZITADEL_ROLES_CLAIM.into(), Value::Object(roles));
         let user = StaticPrincipalResolver
             .resolve(claims_with(extra))
             .await
             .unwrap();
-        // `org_id` is the first of the sorted set — metadata only.
-        assert!(user.org_id.is_some());
+        assert_eq!(user.org_id, None);
         assert!(user.roles.contains(&"editor".to_string()));
     }
 }

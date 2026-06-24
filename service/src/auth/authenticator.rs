@@ -61,6 +61,9 @@ pub fn dev_user_roster() -> Vec<AuthUser> {
         // user; also the platform admin in dev_noop.
         AuthUser {
             subject: "dev-user".to_string(),
+            // Fixed legacy id so the seeded dev workspaces / profile rows
+            // (3bb26085-…) keep matching without a DB resolve.
+            user_id: AuthUser::legacy_subject_uuid("dev-user"),
             email: Some("dev@local".to_string()),
             display_name: Some("Dev User".to_string()),
             roles: Vec::new(),
@@ -75,6 +78,8 @@ pub fn dev_user_roster() -> Vec<AuthUser> {
         // shows a cleanly isolated tenant (it is not a member of `default`).
         AuthUser {
             subject: "dev-user-2".to_string(),
+            // Fixed legacy id so acme-labs (2141c005-…) keeps matching.
+            user_id: AuthUser::legacy_subject_uuid("dev-user-2"),
             email: Some("dev2@local".to_string()),
             display_name: Some("Dev User Two".to_string()),
             roles: Vec::new(),

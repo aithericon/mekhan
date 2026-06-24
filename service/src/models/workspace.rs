@@ -38,18 +38,18 @@ pub struct WorkspaceMember {
     pub user_id: Uuid,
     pub role: String,
     pub added_at: DateTime<Utc>,
-    /// Human-readable identity, LEFT JOINed from `user_profiles` (populated by
+    /// Human-readable identity, LEFT JOINed from `users` (populated by
     /// the auth extractor on each authenticated request). `None` for a member
     /// who was added by `subject` but has never logged into mekhan.
     /// `#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,
-    /// which don't JOIN `user_profiles`) still satisfy `FromRow`.
+    /// which don't JOIN `users`) still satisfy `FromRow`.
     #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
     #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
-    /// Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`
+    /// Profile photo URL, LEFT JOINed from `users.avatar_url`. `None`
     /// when the member has no profile row or no `picture` claim → SPA initials.
     #[sqlx(default)]
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -61,9 +61,9 @@ pub struct WorkspaceMember {
 /// `display_name` is required. `slug` is optional: when omitted (or empty
 /// after sanitization) the server derives one from `display_name`. Either way
 /// the value is run through the same slugifier so the stored slug is always
-/// URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —
-/// `zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its
-/// `owner` in the same transaction.
+/// URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is a real tenant —
+/// `is_system` is FALSE — and the caller is made its `owner` in the same
+/// transaction.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateWorkspaceRequest {
     pub display_name: String,

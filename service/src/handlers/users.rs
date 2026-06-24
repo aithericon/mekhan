@@ -3,20 +3,19 @@
 //! Mekhan stores principals as OIDC `subject` strings; humans think in
 //! email addresses. The workspace member-admin endpoint expects a
 //! `subject`, so the SPA needs a server-side resolver to turn the address
-//! Alice typed into the canonical id we'll persist to
-//! `workspace_members`. Two modes:
+//! Alice typed into the canonical id we'll persist to `workspace_members`.
 //!
-//!   - **BFF / Zitadel**: brokered query against `/v2/users` with an
-//!     `emailQuery`. Returns the user id (which IS the OIDC `sub`).
-//!   - **dev_noop**: no IdP, no directory — we accept the email as the
-//!     subject. The dev resolver derives a deterministic UUID via
-//!     `uuid_v5(SUBJECT_UUID_NAMESPACE, "alice@corp.com")` and that's the
-//!     same value used for workspace membership. Useful for tests and for
-//!     non-Zitadel deployments that haven't wired a directory yet.
+//! Identity is now email-keyed in the local `users`/`user_identities` spine
+//! (migration `20240195`), so this resolves against those tables directly —
+//! no Zitadel directory call. A matched user's raw OIDC subject (from
+//! `user_identities`) is returned when one exists; otherwise the email itself
+//! stands in as the subject (the dev / not-yet-logged-in case), matching the
+//! deterministic `uuid_v5(SUBJECT_UUID_NAMESPACE, …)` seed the resolver uses
+//! to mint a brand-new user.
 //!
 //! Returns 404 when no match is found so the picker UI can surface a
-//! "user not found" toast without disambiguating "this email isn't in
-//! Zitadel" from "we couldn't reach Zitadel" — those would be observability
+//! "user not found" toast without disambiguating "this email isn't known"
+//! from "we couldn't reach the directory" — those would be observability
 //! signals, not UX cues.
 
 use axum::{extract::State, Json};
@@ -50,9 +49,11 @@ pub struct ResolveEmailResponse {
 /// POST /api/v1/users/resolve
 ///
 /// Resolves an email address to the OIDC subject used by Mekhan as the
-/// principal id. Authenticated (any role) — Zitadel does its own ACL on
-/// the broker PAT; in dev_noop the response is computed locally without
-/// touching any directory.
+/// principal id, against the local `users`/`user_identities` spine.
+/// Authenticated (any role). A known user with a linked identity returns its
+/// raw OIDC subject; an email with no `users` row (the dev / not-yet-seen
+/// case) echoes the email back as the subject, matching the deterministic
+/// `uuid_v5` mint seed.
 #[utoipa::path(
     post,
     path = "/api/v1/users/resolve",
@@ -61,7 +62,6 @@ pub struct ResolveEmailResponse {
         (status = 200, description = "Resolved", body = ResolveEmailResponse),
         (status = 400, description = "Empty / malformed email", body = ErrorResponse),
         (status = 404, description = "No user matches that email", body = ErrorResponse),
-        (status = 503, description = "Directory backend unavailable", body = ErrorResponse),
     ),
     tag = "users",
 )]
@@ -75,33 +75,37 @@ pub async fn resolve_user_by_email(
         return Err(ApiError::bad_request("email is empty or missing '@'"));
     }
 
-    if let Some(mgmt) = state.zitadel_mgmt.as_ref() {
-        return match mgmt.resolve_subject_by_email(email).await {
-            Ok(Some(subject)) => Ok(Json(ResolveEmailResponse {
-                subject,
-                email: email.to_string(),
-            })),
-            Ok(None) => Err(ApiError::not_found(format!("no user matches '{email}'"))),
-            Err(crate::auth::mgmt::MgmtError::NotFound) => {
-                Err(ApiError::not_found(format!("no user matches '{email}'")))
-            }
-            Err(crate::auth::mgmt::MgmtError::Upstream(e)) => {
-                tracing::warn!(error = %e, email, "zitadel mgmt resolve failed");
-                Err(ApiError::service_unavailable(
-                    "directory backend unavailable",
-                ))
-            }
-        };
-    }
+    // Look up the local identity spine: the user matching this email (CITEXT,
+    // case-insensitive) and its linked OIDC subject, if any. The subject lets
+    // `add_member` derive the same `v5(subject)` id a real login produced;
+    // when a matched user has no linked identity (e.g. invited but not yet
+    // logged in) we fall back to the email-as-subject seed.
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT ui.subject \
+           FROM users u \
+           LEFT JOIN user_identities ui ON ui.user_id = u.id \
+          WHERE u.email = $1::citext \
+          ORDER BY ui.linked_at DESC NULLS LAST \
+          LIMIT 1",
+    )
+    .bind(email)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::internal(format!("resolve user by email: {e}")))?;
 
-    // dev_noop / no-mgmt fallback: the email IS the subject. The matching
-    // dev resolver hashes the subject into a UUID via SUBJECT_UUID_NAMESPACE,
-    // so adding `{ subject: "alice@corp.com" }` to workspace_members works
-    // the same way the dev-user is seeded today.
-    Ok(Json(ResolveEmailResponse {
-        subject: email.to_string(),
-        email: email.to_string(),
-    }))
+    match row {
+        // Known user with a linked OIDC identity → its raw subject.
+        Some((Some(subject),)) => Ok(Json(ResolveEmailResponse {
+            subject,
+            email: email.to_string(),
+        })),
+        // Known user without a linked identity, OR no user row at all: the
+        // email IS the subject (the deterministic dev / mint seed).
+        Some((None,)) | None => Ok(Json(ResolveEmailResponse {
+            subject: email.to_string(),
+            email: email.to_string(),
+        })),
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -111,7 +115,7 @@ pub struct BatchProfilesRequest {
     pub ids: Vec<Uuid>,
 }
 
-/// A resolved `user_profiles` row. The identity seam every UUID in the UI
+/// A resolved `users` identity row. The identity seam every UUID in the UI
 /// renders through. Fields are `None`/absent when the user has a row but a
 /// NULL column; unknown UUIDs are simply omitted from the response (never a
 /// per-id 404).
@@ -160,14 +164,14 @@ pub async fn resolve_profiles(
     }
 
     let rows: Vec<UserProfileDto> = sqlx::query_as(
-        "SELECT user_id, display_name, email, avatar_url \
-           FROM user_profiles \
-          WHERE user_id = ANY($1)",
+        "SELECT id AS user_id, display_name, email::text AS email, avatar_url \
+           FROM users \
+          WHERE id = ANY($1)",
     )
     .bind(&req.ids)
     .fetch_all(&state.db)
     .await
-    .map_err(|e| ApiError::internal(format!("user_profiles batch lookup: {e}")))?;
+    .map_err(|e| ApiError::internal(format!("users batch lookup: {e}")))?;
 
     Ok(Json(rows))
 }

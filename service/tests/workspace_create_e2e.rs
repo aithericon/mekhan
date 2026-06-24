@@ -97,14 +97,13 @@ async fn create_workspace_makes_caller_owner() {
     assert_eq!(owners.len(), 1, "exactly one member at birth");
     assert_eq!(owners[0].1, "owner");
 
-    // zitadel_org_id is NULL (standalone) and is_system FALSE.
-    let (org, is_system): (Option<String>, bool) =
-        sqlx::query_as("SELECT zitadel_org_id, is_system FROM workspaces WHERE id = $1")
+    // is_system is FALSE — a self-serve workspace is a real tenant.
+    let (is_system,): (bool,) =
+        sqlx::query_as("SELECT is_system FROM workspaces WHERE id = $1")
             .bind(ws_id)
             .fetch_one(&db)
             .await
             .unwrap();
-    assert_eq!(org, None, "standalone workspace has no Zitadel org binding");
     assert!(!is_system);
 
     // It shows up in the creator's own membership list.

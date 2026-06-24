@@ -104,7 +104,7 @@ impl RosterMemberRow {
 // ── Wire DTOs ──────────────────────────────────────────────────────────────
 
 /// Compact list-row shape. Returned by the roster list endpoint. The
-/// `member_display_name` / `member_email` are joined from `user_profiles`
+/// `member_display_name` / `member_email` are joined from `users`
 /// (LEFT JOIN — absent when the member has no profile row yet) so the UI can
 /// render a person instead of a raw `member_user_id`.
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -115,13 +115,13 @@ pub struct RosterMemberSummary {
     pub concurrency: i32,
     pub available: bool,
     pub enrolled_at: DateTime<Utc>,
-    /// Human-readable name from `user_profiles`; None when no profile row.
+    /// Human-readable name from `users`; None when no profile row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_display_name: Option<String>,
-    /// Member email from `user_profiles`; None when no profile row.
+    /// Member email from `users`; None when no profile row.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_email: Option<String>,
-    /// Member profile photo URL from `user_profiles`; None when absent → initials.
+    /// Member profile photo URL from `users`; None when absent → initials.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_avatar_url: Option<String>,
 }
@@ -146,9 +146,9 @@ impl From<RosterMemberRow> for RosterMemberSummary {
     }
 }
 
-/// List-query row: the summary's base columns plus the `user_profiles` JOIN
+/// List-query row: the summary's base columns plus the `users` JOIN
 /// (`display_name`, `email`). Built by `handlers::roster::list_roster`'s
-/// `SELECT … LEFT JOIN user_profiles` so the identity fields ride along without
+/// `SELECT … LEFT JOIN users` so the identity fields ride along without
 /// a second lookup. Kept off `RosterMemberRow` because those columns aren't on
 /// `roster_members`.
 #[derive(Debug, Clone, sqlx::FromRow)]

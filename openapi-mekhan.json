@@ -6760,7 +6760,7 @@
         "tags": [
           "invites"
         ],
-        "summary": "POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the\ninvitee's identity, then atomically applies membership + grants. Single-use\nvia `SELECT … FOR UPDATE` re-checking `status='pending'`.",
+        "summary": "POST /api/v1/invites/{token}/accept — AUTHED. The logged-in session IS the\njoining identity: the handler requires the session email to match the invite\nemail, then atomically applies membership + grants keyed by the session's\nresolved `user_id`. Single-use via `SELECT … FOR UPDATE` re-checking\n`status='pending'`.",
         "operationId": "accept_invite",
         "parameters": [
           {
@@ -6784,8 +6784,8 @@
               }
             }
           },
-          "404": {
-            "description": "No valid invite",
+          "403": {
+            "description": "Signed-in email does not match the invite",
             "content": {
               "application/json": {
                 "schema": {
@@ -6794,8 +6794,8 @@
               }
             }
           },
-          "503": {
-            "description": "Identity provisioning unavailable",
+          "404": {
+            "description": "No valid invite",
             "content": {
               "application/json": {
                 "schema": {
@@ -15293,7 +15293,7 @@
           "users"
         ],
         "summary": "POST /api/v1/users/resolve",
-        "description": "Resolves an email address to the OIDC subject used by Mekhan as the\nprincipal id. Authenticated (any role) — Zitadel does its own ACL on\nthe broker PAT; in dev_noop the response is computed locally without\ntouching any directory.",
+        "description": "Resolves an email address to the OIDC subject used by Mekhan as the\nprincipal id, against the local `users`/`user_identities` spine.\nAuthenticated (any role). A known user with a linked identity returns its\nraw OIDC subject; an email with no `users` row (the dev / not-yet-seen\ncase) echoes the email back as the subject, matching the deterministic\n`uuid_v5` mint seed.",
         "operationId": "resolve_user_by_email",
         "requestBody": {
           "content": {
@@ -15328,16 +15328,6 @@
           },
           "404": {
             "description": "No user matches that email",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Directory backend unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -15813,7 +15803,7 @@
           "workspaces"
         ],
         "summary": "POST /api/v1/workspaces",
-        "description": "Self-serve workspace (tenant) creation. Any authenticated principal may\ncreate a workspace; they become its `owner` in the same transaction. The\nworkspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is\nFALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with\nmembership (not an IdP org) as the source of truth. An operator can later\nbind it to a Zitadel org out-of-band; the auth resolver is purely additive\nand never prunes the owner membership minted here.",
+        "description": "Self-serve workspace (tenant) creation. Any authenticated principal may\ncreate a workspace; they become its `owner` in the same transaction. The\nworkspace is a real tenant — `is_system` is FALSE — and works identically\nunder `dev_noop` and BFF/Zitadel auth, with `workspace_members` (not an IdP\norg) as the sole source of tenancy. The auth resolver never derives\nmembership from IdP claims and never prunes the owner membership minted here.",
         "operationId": "create_workspace",
         "requestBody": {
           "content": {
@@ -16735,16 +16725,11 @@
     "schemas": {
       "AcceptInviteResponse": {
         "type": "object",
-        "description": "Result of accepting an invite.",
+        "description": "Result of accepting an invite. Accept is authenticated — the logged-in\nsession IS the joining identity — so there is no login bootstrap to signal;\nthe SPA just navigates into the joined workspace.",
         "required": [
-          "workspace_id",
-          "requires_login"
+          "workspace_id"
         ],
         "properties": {
-          "requires_login": {
-            "type": "boolean",
-            "description": "`true` ⇒ the invitee now has a real IdP identity and the SPA must send\nthem through `/api/auth/login` to obtain a session (mekhan does not mint\nit). `false` under `dev_noop` (every request is already the dev user)."
-          },
           "workspace_id": {
             "type": "string",
             "format": "uuid"
@@ -17266,7 +17251,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -17399,7 +17384,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -17486,7 +17471,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -17564,7 +17549,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -17800,7 +17785,7 @@
       },
       "AuthUser": {
         "type": "object",
-        "description": "An authenticated principal. The domain core works in terms of this type,\nnever in terms of JWTs or provider-specific claims.\n\n`Serialize` is hand-written (not derived) so the wire form always carries a\n`user_id` field = `subject_as_uuid()` WITHOUT it being a struct/constructor\nfield. That lets the SPA seed its profile cache by the same UUID every\n`created_by`/`author_id`/grant row uses, without duplicating the v5 namespace\nconstant in JS, and with zero risk of a `None` `user_id` leaking from some\nconstruction site (the failure mode a real `Option<Uuid>` field would invite).\n`Deserialize`/`ToSchema` stay derived; deserialize simply ignores the extra\n`user_id` key on the way back in (it is recomputed from `subject`).",
+        "description": "An authenticated principal. The domain core works in terms of this type,\nnever in terms of JWTs or provider-specific claims.\n\n`Serialize` is hand-written (not derived) so the wire form always carries a\n`user_id` field (the resolved mekhan identity). It is now a REAL struct field\nbacked by the `users` spine (resolved by `DbPrincipalResolver`), not a\nderived v5 hash — `subject_as_uuid()` returns it. The SPA seeds its profile\ncache by the same UUID every `created_by`/`author_id`/grant row uses.\n`Deserialize`/`ToSchema` stay derived; the field carries `#[serde(default)]`\nso old session JSON (which had no real `user_id`, or carried the derived one)\nstill deserializes — the resolver/authenticator overwrites it on the next\nrequest.",
         "required": [
           "subject"
         ],
@@ -17810,7 +17795,7 @@
               "string",
               "null"
             ],
-            "description": "URL to the principal's profile photo, lifted from the OIDC `picture`\nclaim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that\ndoesn't assert a picture → the SPA renders initials. Real struct field\n(so `ToSchema` + the `user_profiles` mirror pick it up); set at every\nconstruction site (mostly `None`)."
+            "description": "URL to the principal's profile photo, lifted from the OIDC `picture`\nclaim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that\ndoesn't assert a picture → the SPA renders initials. Real struct field\n(so `ToSchema` + the `users` mirror pick it up); set at every\nconstruction site (mostly `None`)."
           },
           "display_name": {
             "type": [
@@ -17833,7 +17818,7 @@
               "string",
               "null"
             ],
-            "description": "Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).\nMetadata only — the authoritative tenant is `workspace_id`, looked up\nfrom `workspaces.zitadel_org_id` by `DbPrincipalResolver`."
+            "description": "Legacy upstream identity-provider org id slot. No longer populated —\nmekhan does not derive tenancy from the IdP org. Always `None`; the\nauthoritative tenant is `workspace_id`, resolved from explicit\n`workspace_members` rows. Kept on the struct so old session JSON keeps\ndeserializing."
           },
           "roles": {
             "type": "array",
@@ -17845,13 +17830,18 @@
             "type": "string",
             "description": "OIDC `sub` claim. Stable per identity within an issuer."
           },
+          "user_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The resolved mekhan identity id (`users.id`). Populated by\n`DbPrincipalResolver`/the dev roster/token resolvers BEFORE any handler\nruns; this is the value `subject_as_uuid()` returns and the key every\nmembership / grant / authorship row uses. `#[serde(default)]` keeps old\nsession JSON deserializing (the value is overwritten on the next\nrequest); a bare/test construction may leave it `Uuid::nil()`."
+          },
           "workspace_id": {
             "type": [
               "string",
               "null"
             ],
             "format": "uuid",
-            "description": "Mekhan workspace the principal is currently acting in. Populated by\n`DbPrincipalResolver` from the user's `workspace_members` row (auto-\nprovisioned from `org_id` when a matching `workspaces.zitadel_org_id`\nexists; otherwise the seeded default workspace if the user is a\nmember there). `None` only when no DB handle is available (unit\ntests + legacy session rows; `#[serde(default)]` keeps deserialize\nof old session JSON working)."
+            "description": "Mekhan workspace the principal is currently acting in. Populated by\n`DbPrincipalResolver` from the user's `workspace_members` row (an\naccepted invite, an admin grant, a workspace they created, or the\nlazily-minted personal workspace). `None` only when no DB handle is\navailable (unit tests + legacy session rows; `#[serde(default)]` keeps\ndeserialize of old session JSON working)."
           },
           "workspace_role": {
             "type": [
@@ -18915,7 +18905,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Author (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Author (`subject_as_uuid()`), resolvable via `users`."
           },
           "description": {
             "type": [
@@ -18995,7 +18985,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `user_profiles`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
+            "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `users`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
           },
           "entry_id": {
             "type": [
@@ -20706,7 +20696,7 @@
       },
       "CreateWorkspaceRequest": {
         "type": "object",
-        "description": "Body for `POST /workspaces` — self-serve workspace creation.\n\n`display_name` is required. `slug` is optional: when omitted (or empty\nafter sanitization) the server derives one from `display_name`. Either way\nthe value is run through the same slugifier so the stored slug is always\nURL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —\n`zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its\n`owner` in the same transaction.",
+        "description": "Body for `POST /workspaces` — self-serve workspace creation.\n\n`display_name` is required. `slug` is optional: when omitted (or empty\nafter sanitization) the server derives one from `display_name`. Either way\nthe value is run through the same slugifier so the stored slug is always\nURL/NATS-token-safe (`[a-z0-9-]`). The created workspace is a real tenant —\n`is_system` is FALSE — and the caller is made its `owner` in the same\ntransaction.",
         "required": [
           "display_name"
         ],
@@ -24902,7 +24892,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -24987,7 +24977,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`. NULL for\npre-Phase-2 rows."
           },
           "display_name": {
             "type": "string"
@@ -27204,7 +27194,7 @@
                     "null"
                   ],
                   "format": "uuid",
-                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
                 },
                 "display_name": {
                   "type": "string"
@@ -27316,7 +27306,7 @@
                     "null"
                   ],
                   "format": "uuid",
-                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
                 },
                 "display_name": {
                   "type": "string"
@@ -27676,7 +27666,7 @@
                     "null"
                   ],
                   "format": "uuid",
-                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `users`. NULL for\npre-Phase-2 rows."
                 },
                 "display_name": {
                   "type": "string"
@@ -27912,7 +27902,7 @@
                 "created_by": {
                   "type": "string",
                   "format": "uuid",
-                  "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+                  "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
                 },
                 "display_name": {
                   "type": "string"
@@ -27997,7 +27987,7 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `user_profiles`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
+              "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `users`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
               "required": [
                 "id",
                 "capacity_id",
@@ -28031,21 +28021,21 @@
                     "string",
                     "null"
                   ],
-                  "description": "Member profile photo URL from `user_profiles`; None when absent → initials."
+                  "description": "Member profile photo URL from `users`; None when absent → initials."
                 },
                 "member_display_name": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "Human-readable name from `user_profiles`; None when no profile row."
+                  "description": "Human-readable name from `users`; None when no profile row."
                 },
                 "member_email": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "Member email from `user_profiles`; None when no profile row."
+                  "description": "Member email from `users`; None when no profile row."
                 },
                 "member_user_id": {
                   "type": "string",
@@ -28350,7 +28340,7 @@
                     "null"
                   ],
                   "format": "uuid",
-                  "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `user_profiles`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
+                  "description": "Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by\nthe projector (Phase 2), resolvable via `users`. NULL for legacy\n/ by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit\ncatalogue SELECTs that don't project it still `FromRow` cleanly."
                 },
                 "entry_id": {
                   "type": [
@@ -30477,7 +30467,7 @@
           "created_by": {
             "type": "string",
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -30594,7 +30584,7 @@
           "created_by": {
             "type": "string",
             "format": "uuid",
-            "description": "Creator (`subject_as_uuid()`), resolvable via `user_profiles`."
+            "description": "Creator (`subject_as_uuid()`), resolvable via `users`."
           },
           "display_name": {
             "type": "string"
@@ -30950,7 +30940,7 @@
       },
       "RosterMemberSummary": {
         "type": "object",
-        "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `user_profiles`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
+        "description": "Compact list-row shape. Returned by the roster list endpoint. The\n`member_display_name` / `member_email` are joined from `users`\n(LEFT JOIN — absent when the member has no profile row yet) so the UI can\nrender a person instead of a raw `member_user_id`.",
         "required": [
           "id",
           "capacity_id",
@@ -30984,21 +30974,21 @@
               "string",
               "null"
             ],
-            "description": "Member profile photo URL from `user_profiles`; None when absent → initials."
+            "description": "Member profile photo URL from `users`; None when absent → initials."
           },
           "member_display_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Human-readable name from `user_profiles`; None when no profile row."
+            "description": "Human-readable name from `users`; None when no profile row."
           },
           "member_email": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Member email from `user_profiles`; None when no profile row."
+            "description": "Member email from `users`; None when no profile row."
           },
           "member_user_id": {
             "type": "string",
@@ -31521,7 +31511,7 @@
               "null"
             ],
             "format": "uuid",
-            "description": "Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for\npre-Phase-2 rows."
+            "description": "Author (`subject_as_uuid()`), resolvable via `users`. NULL for\npre-Phase-2 rows."
           },
           "description": {
             "type": [
@@ -34474,7 +34464,7 @@
       },
       "UserProfileDto": {
         "type": "object",
-        "description": "A resolved `user_profiles` row. The identity seam every UUID in the UI\nrenders through. Fields are `None`/absent when the user has a row but a\nNULL column; unknown UUIDs are simply omitted from the response (never a\nper-id 404).",
+        "description": "A resolved `users` identity row. The identity seam every UUID in the UI\nrenders through. Fields are `None`/absent when the user has a row but a\nNULL column; unknown UUIDs are simply omitted from the response (never a\nper-id 404).",
         "required": [
           "user_id"
         ],
@@ -36495,14 +36485,14 @@
               "string",
               "null"
             ],
-            "description": "Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`\nwhen the member has no profile row or no `picture` claim → SPA initials."
+            "description": "Profile photo URL, LEFT JOINed from `users.avatar_url`. `None`\nwhen the member has no profile row or no `picture` claim → SPA initials."
           },
           "display_name": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Human-readable identity, LEFT JOINed from `user_profiles` (populated by\nthe auth extractor on each authenticated request). `None` for a member\nwho was added by `subject` but has never logged into mekhan.\n`#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,\nwhich don't JOIN `user_profiles`) still satisfy `FromRow`."
+            "description": "Human-readable identity, LEFT JOINed from `users` (populated by\nthe auth extractor on each authenticated request). `None` for a member\nwho was added by `subject` but has never logged into mekhan.\n`#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,\nwhich don't JOIN `users`) still satisfy `FromRow`."
           },
           "email": {
             "type": [

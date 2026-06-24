@@ -49,8 +49,10 @@ pub async fn verify_runner_token(db: &PgPool, bearer: &str) -> Result<AuthUser, 
         return Err(AuthError::InvalidToken("runner token mismatch".to_string()));
     }
 
+    let subject = runner_subject(row.id);
     Ok(AuthUser {
-        subject: runner_subject(row.id),
+        user_id: AuthUser::legacy_subject_uuid(&subject),
+        subject,
         email: None,
         display_name: Some(row.name),
         roles: vec![RUNNER_ROLE.to_string()],

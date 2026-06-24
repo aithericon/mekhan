@@ -168,13 +168,13 @@ pub async fn list_roster(
 
     // `capacity_id` is an optional filter: a NULL bind makes the
     // `($N IS NULL OR capacity_id = $N)` clause match every row. The LEFT JOIN
-    // into `user_profiles` surfaces the member's human-readable name + email on
-    // the summary row — a missing profile leaves both NULL (→ None on the DTO).
+    // into `users` surfaces the member's human-readable name + email on the
+    // summary row — a missing user row leaves both NULL (→ None on the DTO).
     let rows = sqlx::query_as::<_, RosterMemberSummaryRow>(
         "SELECT rm.id, rm.capacity_id, rm.member_user_id, rm.concurrency, \
-                rm.available, rm.enrolled_at, up.display_name, up.email, up.avatar_url \
+                rm.available, rm.enrolled_at, up.display_name, up.email::text, up.avatar_url \
            FROM roster_members rm \
-           LEFT JOIN user_profiles up ON up.user_id = rm.member_user_id \
+           LEFT JOIN users up ON up.id = rm.member_user_id \
           WHERE rm.workspace_id = $1 AND rm.revoked_at IS NULL \
             AND ($2::uuid IS NULL OR rm.capacity_id = $2) \
           ORDER BY rm.enrolled_at DESC LIMIT $3 OFFSET $4",

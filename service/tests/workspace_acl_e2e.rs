@@ -536,7 +536,6 @@ async fn test_app_with_authenticator_and_petri_url(
             db.clone(),
         )),
         email: mekhan_service::notify::email::log_mailer(),
-        user_provisioner: None,
     };
     (build_router(state), db)
 }

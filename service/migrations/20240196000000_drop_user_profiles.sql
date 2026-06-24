@@ -1,0 +1,12 @@
+-- Fold `user_profiles` into `users`.
+--
+-- `20240195000000_users_identity.sql` already backfilled `users` from
+-- `user_profiles` (dedupe-by-email winner keeps the email, the rest land with
+-- email NULL). All readers/writers in `service/src` now target `users`
+-- (resolver mints, extractor mirrors, every member/grant/roster/invite JOIN
+-- reads `users` instead of `user_profiles`). Nothing in the codebase touches
+-- `user_profiles` anymore, so drop it.
+--
+-- Forward-only / no down migration: this is pre-prod and the data already lives
+-- in `users` after the Phase 1 backfill.
+DROP TABLE IF EXISTS user_profiles;

@@ -45,18 +45,30 @@
 		if (token !== undefined) load();
 	});
 
+	/** Send the invitee to login, returning to this accept page afterwards. */
+	function signInAndReturn() {
+		const here = window.location.pathname + window.location.search;
+		window.location.assign(`/api/auth/login?return_to=${encodeURIComponent(here)}`);
+	}
+
 	async function accept() {
 		accepting = true;
 		acceptError = null;
 		try {
-			const res = await acceptInvite(token);
-			accepted = true;
-			if (res.requires_login) {
-				goto('/api/auth/login?return_to=/');
-			} else {
-				// dev_noop: no real session to mint — land in the app.
-				goto('/');
+			// Accept is authed: the logged-in session IS the joining identity. If
+			// there's no session, bounce through login and come back here.
+			const probe = await fetch('/api/auth/session', {
+				headers: { Accept: 'application/json' },
+				credentials: 'same-origin'
+			});
+			if (!probe.ok) {
+				signInAndReturn();
+				return;
 			}
+			await acceptInvite(token);
+			accepted = true;
+			// Joined — land in the app on the active workspace.
+			goto('/');
 		} catch (e) {
 			acceptError = e instanceof Error ? e.message : 'Failed to accept invite';
 		} finally {

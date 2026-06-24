@@ -2221,9 +2221,11 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the
-         *     invitee's identity, then atomically applies membership + grants. Single-use
-         *     via `SELECT … FOR UPDATE` re-checking `status='pending'`.
+         * POST /api/v1/invites/{token}/accept — AUTHED. The logged-in session IS the
+         *     joining identity: the handler requires the session email to match the invite
+         *     email, then atomically applies membership + grants keyed by the session's
+         *     resolved `user_id`. Single-use via `SELECT … FOR UPDATE` re-checking
+         *     `status='pending'`.
          */
         post: operations["accept_invite"];
         delete?: never;
@@ -5102,9 +5104,11 @@ export interface paths {
         /**
          * POST /api/v1/users/resolve
          * @description Resolves an email address to the OIDC subject used by Mekhan as the
-         *     principal id. Authenticated (any role) — Zitadel does its own ACL on
-         *     the broker PAT; in dev_noop the response is computed locally without
-         *     touching any directory.
+         *     principal id, against the local `users`/`user_identities` spine.
+         *     Authenticated (any role). A known user with a linked identity returns its
+         *     raw OIDC subject; an email with no `users` row (the dev / not-yet-seen
+         *     case) echoes the email back as the subject, matching the deterministic
+         *     `uuid_v5` mint seed.
          */
         post: operations["resolve_user_by_email"];
         delete?: never;
@@ -5304,11 +5308,10 @@ export interface paths {
          * POST /api/v1/workspaces
          * @description Self-serve workspace (tenant) creation. Any authenticated principal may
          *     create a workspace; they become its `owner` in the same transaction. The
-         *     workspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is
-         *     FALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with
-         *     membership (not an IdP org) as the source of truth. An operator can later
-         *     bind it to a Zitadel org out-of-band; the auth resolver is purely additive
-         *     and never prunes the owner membership minted here.
+         *     workspace is a real tenant — `is_system` is FALSE — and works identically
+         *     under `dev_noop` and BFF/Zitadel auth, with `workspace_members` (not an IdP
+         *     org) as the sole source of tenancy. The auth resolver never derives
+         *     membership from IdP claims and never prunes the owner membership minted here.
          */
         post: operations["create_workspace"];
         delete?: never;
@@ -5584,14 +5587,12 @@ export interface paths {
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
-        /** @description Result of accepting an invite. */
+        /**
+         * @description Result of accepting an invite. Accept is authenticated — the logged-in
+         *     session IS the joining identity — so there is no login bootstrap to signal;
+         *     the SPA just navigates into the joined workspace.
+         */
         AcceptInviteResponse: {
-            /**
-             * @description `true` ⇒ the invitee now has a real IdP identity and the SPA must send
-             *     them through `/api/auth/login` to obtain a session (mekhan does not mint
-             *     it). `false` under `dev_noop` (every request is already the dev user).
-             */
-            requires_login: boolean;
             /** Format: uuid */
             workspace_id: string;
         };
@@ -5848,7 +5849,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             display_name: string;
@@ -5910,7 +5911,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             display_name: string;
@@ -5947,7 +5948,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             display_name: string;
@@ -5980,7 +5981,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             display_name: string;
@@ -6076,20 +6077,21 @@ export interface components {
          *     never in terms of JWTs or provider-specific claims.
          *
          *     `Serialize` is hand-written (not derived) so the wire form always carries a
-         *     `user_id` field = `subject_as_uuid()` WITHOUT it being a struct/constructor
-         *     field. That lets the SPA seed its profile cache by the same UUID every
-         *     `created_by`/`author_id`/grant row uses, without duplicating the v5 namespace
-         *     constant in JS, and with zero risk of a `None` `user_id` leaking from some
-         *     construction site (the failure mode a real `Option<Uuid>` field would invite).
-         *     `Deserialize`/`ToSchema` stay derived; deserialize simply ignores the extra
-         *     `user_id` key on the way back in (it is recomputed from `subject`).
+         *     `user_id` field (the resolved mekhan identity). It is now a REAL struct field
+         *     backed by the `users` spine (resolved by `DbPrincipalResolver`), not a
+         *     derived v5 hash — `subject_as_uuid()` returns it. The SPA seeds its profile
+         *     cache by the same UUID every `created_by`/`author_id`/grant row uses.
+         *     `Deserialize`/`ToSchema` stay derived; the field carries `#[serde(default)]`
+         *     so old session JSON (which had no real `user_id`, or carried the derived one)
+         *     still deserializes — the resolver/authenticator overwrites it on the next
+         *     request.
          */
         AuthUser: {
             /**
              * @description URL to the principal's profile photo, lifted from the OIDC `picture`
              *     claim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that
              *     doesn't assert a picture → the SPA renders initials. Real struct field
-             *     (so `ToSchema` + the `user_profiles` mirror pick it up); set at every
+             *     (so `ToSchema` + the `users` mirror pick it up); set at every
              *     construction site (mostly `None`).
              */
             avatar_url?: string | null;
@@ -6103,9 +6105,11 @@ export interface components {
              */
             is_platform_admin?: boolean;
             /**
-             * @description Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).
-             *     Metadata only — the authoritative tenant is `workspace_id`, looked up
-             *     from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
+             * @description Legacy upstream identity-provider org id slot. No longer populated —
+             *     mekhan does not derive tenancy from the IdP org. Always `None`; the
+             *     authoritative tenant is `workspace_id`, resolved from explicit
+             *     `workspace_members` rows. Kept on the struct so old session JSON keeps
+             *     deserializing.
              */
             org_id?: string | null;
             roles?: string[];
@@ -6113,13 +6117,22 @@ export interface components {
             subject: string;
             /**
              * Format: uuid
+             * @description The resolved mekhan identity id (`users.id`). Populated by
+             *     `DbPrincipalResolver`/the dev roster/token resolvers BEFORE any handler
+             *     runs; this is the value `subject_as_uuid()` returns and the key every
+             *     membership / grant / authorship row uses. `#[serde(default)]` keeps old
+             *     session JSON deserializing (the value is overwritten on the next
+             *     request); a bare/test construction may leave it `Uuid::nil()`.
+             */
+            user_id?: string;
+            /**
+             * Format: uuid
              * @description Mekhan workspace the principal is currently acting in. Populated by
-             *     `DbPrincipalResolver` from the user's `workspace_members` row (auto-
-             *     provisioned from `org_id` when a matching `workspaces.zitadel_org_id`
-             *     exists; otherwise the seeded default workspace if the user is a
-             *     member there). `None` only when no DB handle is available (unit
-             *     tests + legacy session rows; `#[serde(default)]` keeps deserialize
-             *     of old session JSON working).
+             *     `DbPrincipalResolver` from the user's `workspace_members` row (an
+             *     accepted invite, an admin grant, a workspace they created, or the
+             *     lazily-minted personal workspace). `None` only when no DB handle is
+             *     available (unit tests + legacy session rows; `#[serde(default)]` keeps
+             *     deserialize of old session JSON working).
              */
             workspace_id?: string | null;
             /**
@@ -6696,7 +6709,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Author (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Author (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             description?: string | null;
@@ -6733,7 +6746,7 @@ export interface components {
             /**
              * Format: uuid
              * @description Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
-             *     the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+             *     the projector (Phase 2), resolvable via `users`. NULL for legacy
              *     / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
              *     catalogue SELECTs that don't project it still `FromRow` cleanly.
              */
@@ -7583,9 +7596,9 @@ export interface components {
          *     `display_name` is required. `slug` is optional: when omitted (or empty
          *     after sanitization) the server derives one from `display_name`. Either way
          *     the value is run through the same slugifier so the stored slug is always
-         *     URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is standalone —
-         *     `zitadel_org_id` is NULL, `is_system` is FALSE — and the caller is made its
-         *     `owner` in the same transaction.
+         *     URL/NATS-token-safe (`[a-z0-9-]`). The created workspace is a real tenant —
+         *     `is_system` is FALSE — and the caller is made its `owner` in the same
+         *     transaction.
          */
         CreateWorkspaceRequest: {
             display_name: string;
@@ -9347,7 +9360,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by?: string | null;
             display_name: string;
@@ -9382,7 +9395,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`. NULL for
              *     pre-Phase-2 rows.
              */
             created_by?: string | null;
@@ -10600,7 +10613,7 @@ export interface components {
                 created_at: string;
                 /**
                  * Format: uuid
-                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 * @description Creator (`subject_as_uuid()`), resolvable via `users`.
                  */
                 created_by?: string | null;
                 display_name: string;
@@ -10644,7 +10657,7 @@ export interface components {
                 created_at: string;
                 /**
                  * Format: uuid
-                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 * @description Creator (`subject_as_uuid()`), resolvable via `users`.
                  */
                 created_by?: string | null;
                 display_name: string;
@@ -10773,7 +10786,7 @@ export interface components {
                 created_at: string;
                 /**
                  * Format: uuid
-                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+                 * @description Creator (`subject_as_uuid()`), resolvable via `users`. NULL for
                  *     pre-Phase-2 rows.
                  */
                 created_by?: string | null;
@@ -10853,7 +10866,7 @@ export interface components {
                 created_at: string;
                 /**
                  * Format: uuid
-                 * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+                 * @description Creator (`subject_as_uuid()`), resolvable via `users`.
                  */
                 created_by: string;
                 display_name: string;
@@ -10913,11 +10926,11 @@ export interface components {
                 enrolled_at: string;
                 /** Format: uuid */
                 id: string;
-                /** @description Member profile photo URL from `user_profiles`; None when absent → initials. */
+                /** @description Member profile photo URL from `users`; None when absent → initials. */
                 member_avatar_url?: string | null;
-                /** @description Human-readable name from `user_profiles`; None when no profile row. */
+                /** @description Human-readable name from `users`; None when no profile row. */
                 member_display_name?: string | null;
-                /** @description Member email from `user_profiles`; None when no profile row. */
+                /** @description Member email from `users`; None when no profile row. */
                 member_email?: string | null;
                 /** Format: uuid */
                 member_user_id: string;
@@ -11039,7 +11052,7 @@ export interface components {
                 /**
                  * Format: uuid
                  * @description Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
-                 *     the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+                 *     the projector (Phase 2), resolvable via `users`. NULL for legacy
                  *     / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
                  *     catalogue SELECTs that don't project it still `FromRow` cleanly.
                  */
@@ -12067,7 +12080,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by: string;
             display_name: string;
@@ -12140,7 +12153,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+             * @description Creator (`subject_as_uuid()`), resolvable via `users`.
              */
             created_by: string;
             display_name: string;
@@ -12418,7 +12431,7 @@ export interface components {
         };
         /**
          * @description Compact list-row shape. Returned by the roster list endpoint. The
-         *     `member_display_name` / `member_email` are joined from `user_profiles`
+         *     `member_display_name` / `member_email` are joined from `users`
          *     (LEFT JOIN — absent when the member has no profile row yet) so the UI can
          *     render a person instead of a raw `member_user_id`.
          */
@@ -12432,11 +12445,11 @@ export interface components {
             enrolled_at: string;
             /** Format: uuid */
             id: string;
-            /** @description Member profile photo URL from `user_profiles`; None when absent → initials. */
+            /** @description Member profile photo URL from `users`; None when absent → initials. */
             member_avatar_url?: string | null;
-            /** @description Human-readable name from `user_profiles`; None when no profile row. */
+            /** @description Human-readable name from `users`; None when no profile row. */
             member_display_name?: string | null;
-            /** @description Member email from `user_profiles`; None when no profile row. */
+            /** @description Member email from `users`; None when no profile row. */
             member_email?: string | null;
             /** Format: uuid */
             member_user_id: string;
@@ -12695,7 +12708,7 @@ export interface components {
             created_at: string;
             /**
              * Format: uuid
-             * @description Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+             * @description Author (`subject_as_uuid()`), resolvable via `users`. NULL for
              *     pre-Phase-2 rows.
              */
             created_by?: string | null;
@@ -14162,7 +14175,7 @@ export interface components {
             catalog_version?: string | null;
         };
         /**
-         * @description A resolved `user_profiles` row. The identity seam every UUID in the UI
+         * @description A resolved `users` identity row. The identity seam every UUID in the UI
          *     renders through. Fields are `None`/absent when the user has a row but a
          *     NULL column; unknown UUIDs are simply omitted from the response (never a
          *     per-id 404).
@@ -15192,16 +15205,16 @@ export interface components {
             /** Format: date-time */
             added_at: string;
             /**
-             * @description Profile photo URL, LEFT JOINed from `user_profiles.avatar_url`. `None`
+             * @description Profile photo URL, LEFT JOINed from `users.avatar_url`. `None`
              *     when the member has no profile row or no `picture` claim → SPA initials.
              */
             avatar_url?: string | null;
             /**
-             * @description Human-readable identity, LEFT JOINed from `user_profiles` (populated by
+             * @description Human-readable identity, LEFT JOINed from `users` (populated by
              *     the auth extractor on each authenticated request). `None` for a member
              *     who was added by `subject` but has never logged into mekhan.
              *     `#[sqlx(default)]` so `RETURNING`-only mutate queries (add/patch member,
-             *     which don't JOIN `user_profiles`) still satisfy `FromRow`.
+             *     which don't JOIN `users`) still satisfy `FromRow`.
              */
             display_name?: string | null;
             email?: string | null;
@@ -20267,8 +20280,8 @@ export interface operations {
                     "application/json": components["schemas"]["AcceptInviteResponse"];
                 };
             };
-            /** @description No valid invite */
-            404: {
+            /** @description Signed-in email does not match the invite */
+            403: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20276,8 +20289,8 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Identity provisioning unavailable */
-            503: {
+            /** @description No valid invite */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -26530,15 +26543,6 @@ export interface operations {
             };
             /** @description No user matches that email */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Directory backend unavailable */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };

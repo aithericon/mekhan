@@ -37,7 +37,7 @@ pub struct CatalogueEntry {
     pub created_at: DateTime<Utc>,
     pub catalogued_at: DateTime<Utc>,
     /// Author (`subject_as_uuid()`) — inherited from the PRODUCING INSTANCE by
-    /// the projector (Phase 2), resolvable via `user_profiles`. NULL for legacy
+    /// the projector (Phase 2), resolvable via `users`. NULL for legacy
     /// / by-reference / pool-net rows. `#[sqlx(default)]` so the many explicit
     /// catalogue SELECTs that don't project it still `FromRow` cleanly.
     #[sqlx(default)]

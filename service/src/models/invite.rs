@@ -57,12 +57,10 @@ pub struct InvitePreview {
     pub expires_at: DateTime<Utc>,
 }
 
-/// Result of accepting an invite.
+/// Result of accepting an invite. Accept is authenticated — the logged-in
+/// session IS the joining identity — so there is no login bootstrap to signal;
+/// the SPA just navigates into the joined workspace.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct AcceptInviteResponse {
     pub workspace_id: Uuid,
-    /// `true` ⇒ the invitee now has a real IdP identity and the SPA must send
-    /// them through `/api/auth/login` to obtain a session (mekhan does not mint
-    /// it). `false` under `dev_noop` (every request is already the dev user).
-    pub requires_login: bool,
 }

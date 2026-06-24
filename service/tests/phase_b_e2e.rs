@@ -725,7 +725,7 @@ async fn resolver_auto_provisions_demos_membership_when_flag_set() {
     use mekhan_service::auth::{PrincipalResolver, VerifiedClaims};
 
     let db = common::create_test_db().await;
-    let resolver = DbPrincipalResolver::with_policy(db.clone(), false, true);
+    let resolver = DbPrincipalResolver::with_options(db.clone(), true, Vec::new());
     let claims = VerifiedClaims {
         subject: "fresh-user".to_string(),
         issuer: "test".to_string(),

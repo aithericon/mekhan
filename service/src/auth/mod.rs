@@ -29,7 +29,6 @@ pub mod mgmt;
 pub mod model;
 pub mod platform_root;
 pub mod port;
-pub mod provisioner;
 pub mod resolver;
 pub mod runner_token;
 pub mod worker_token;
