@@ -112,3 +112,29 @@ steps:
       - echo "$FORGEJO_REGISTRY_PASSWORD" | docker login forge.aithericon.eu -u "$FORGEJO_REGISTRY_USER" --password-stdin
       - just ci::publish-backend-engine "$REGISTRY" "$CI_COMMIT_SHA" "$CI_COMMIT_BRANCH"
     depends_on: [publish-backend-executor]
+
+  # Push this commit's freshly-built images into the in-cluster zot registry.
+  # zot mirrors the EXTERNAL forge with onDemand:true, so the deploy's first pull
+  # of a fresh tag triggers a cross-internet sync during which no bytes reach the
+  # docker daemon — tripping the driver's 2m pull_activity_timeout ("context
+  # canceled") and churning/auto-reverting the deploy. Copying the tags straight
+  # into zot here (skopeo, registry-to-registry — no docker.sock) makes them
+  # already-local at deploy time, so 40-deploy (depends_on: [30-build]) pulls
+  # instantly with no on-demand sync. See `just ci::push-images-to-registry`.
+  - name: push-images-to-registry
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      REGISTRY: forge.aithericon.eu/milanender
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      # Consul catalog → resolve a healthy zot node IP (no Consul DNS needed
+      # in this container). Same in-cluster control-plane IP family as Vault.
+      CONSUL_HTTP_ADDR: "http://10.20.0.10:8500"
+    commands:
+      - export FORGEJO_REGISTRY_USER=$(vault kv get -field=username secret/docker/registry)
+      - export FORGEJO_REGISTRY_PASSWORD=$(vault kv get -field=token secret/docker/registry)
+      - export CONSUL_HTTP_TOKEN=$(vault kv get -field=token secret/consul/bootstrap)
+      - just ci::push-images-to-registry "$REGISTRY" "$CI_COMMIT_SHA"
+    depends_on: [publish-backend-service, publish-backend-executor, publish-backend-engine]

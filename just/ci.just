@@ -576,6 +576,49 @@ publish-backend-engine registry_image commit_sha ref_slug:
       -f deploy/docker/Dockerfile.engine \
       .
 
+# Push the freshly-built image tags into the in-cluster zot registry so the Nomad
+# deploy never pays for zot's on-demand pull-through sync from the EXTERNAL forge.
+#
+# Why this exists: zot mirrors forge.aithericon.eu with `onDemand: true`. On a
+# fresh tag the node's first pull triggers a cross-internet sync (forge -> zot ->
+# S3) during which ZERO bytes flow to the docker daemon, so the docker driver's
+# `pull_activity_timeout` (default 2m) aborts with "context canceled" and the
+# deploy churns/auto-reverts. Pushing the tag straight into zot here makes it
+# already-local at deploy time -> instant pull, no sync, no activity timeout.
+#
+# zot has no auth/accessControl (writable, unauthenticated in-cluster), so the
+# dest needs no creds; it's plain HTTP on :5000, hence --dest-tls-verify=false.
+# We resolve a healthy zot node from the Consul catalog (no reliance on the CI
+# container having Consul DNS). Requires FORGEJO_REGISTRY_USER/PASSWORD (forge
+# src auth) and CONSUL_HTTP_ADDR/CONSUL_HTTP_TOKEN in the env (see 30-build.yml).
+push-images-to-registry registry_image commit_sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sha="{{commit_sha}}"
+    src="{{registry_image}}"          # e.g. forge.aithericon.eu/milanender
+    : "${CONSUL_HTTP_ADDR:?CONSUL_HTTP_ADDR not set}"
+    : "${FORGEJO_REGISTRY_USER:?FORGEJO_REGISTRY_USER not set}"
+    : "${FORGEJO_REGISTRY_PASSWORD:?FORGEJO_REGISTRY_PASSWORD not set}"
+
+    # Resolve a passing zot instance (Address:Port) from Consul.
+    zot=$(curl -sf -H "X-Consul-Token: ${CONSUL_HTTP_TOKEN:-}" \
+            "${CONSUL_HTTP_ADDR}/v1/health/service/zot?passing=true" \
+          | jq -r '.[0] | (.Service.Address // .Node.Address) + ":" + (.Service.Port|tostring)')
+    if [ -z "${zot:-}" ] || [ "$zot" = "null" ]; then
+      echo "✗ no healthy zot instance found in Consul" >&2; exit 1
+    fi
+    echo "▶ pushing images into in-cluster registry ${zot} from ${src} (sha=${sha})"
+
+    for img in mekhan-service aithericon-engine aithericon-executor; do
+      echo "  → copy ${img}:${sha}"
+      skopeo copy --all --retry-times 3 \
+        --src-creds "${FORGEJO_REGISTRY_USER}:${FORGEJO_REGISTRY_PASSWORD}" \
+        --dest-tls-verify=false \
+        "docker://${src}/${img}:${sha}" \
+        "docker://${zot}/milanender/${img}:${sha}"
+    done
+    echo "✓ images pushed to in-cluster registry for ${sha} — deploy pulls locally, no on-demand sync"
+
 # Build the fat CI builder image and push it to the registry.
 #
 # Every .woodpecker/*.yml step uses this image as `image:`, so rebuilding it

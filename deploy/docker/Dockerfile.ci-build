@@ -141,7 +141,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && unzip /tmp/vault.zip -d /usr/local/bin/ && rm /tmp/vault.zip \
     && curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${ARCH}.zip" -o /tmp/nomad.zip \
     && unzip -o /tmp/nomad.zip -d /usr/local/bin/ && rm /tmp/nomad.zip \
-    && apt-get update && apt-get install -y --no-install-recommends jq \
+    && apt-get update && apt-get install -y --no-install-recommends jq skopeo \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Cross-compile env (matches .cargo/config.toml conventions) ──────────────
