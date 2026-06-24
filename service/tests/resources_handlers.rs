@@ -102,7 +102,6 @@ async fn resources_test_app() -> (Router, PgPool, Arc<InMemoryResourceStore>) {
             db.clone(),
         )),
         email: mekhan_service::notify::email::log_mailer(),
-        user_provisioner: None,
     };
 
     (build_router(state), db, resource_store)

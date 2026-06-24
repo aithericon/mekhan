@@ -27,28 +27,42 @@ use crate::AppState;
 use super::authenticator::SESSION_COOKIE;
 use super::model::{AuthError, AuthUser};
 
-/// Best-effort mirror of the caller's human-readable identity into
-/// `user_profiles`, keyed by `subject_as_uuid()`. Lets member-admin and roster
-/// listings LEFT JOIN a name/email onto the raw UUID without a second IdP
-/// round-trip. Fire-and-forget: any DB error is logged and swallowed so a
-/// transient `user_profiles` failure never 500s an otherwise-valid request.
-/// No-op when the principal carries neither email nor display name (runner /
-/// worker control-plane tokens, anonymous probes).
+/// Best-effort mirror of the caller's human-readable identity into the `users`
+/// table, keyed by `subject_as_uuid()` (the resolved mekhan `user_id`). Lets
+/// member-admin and roster listings LEFT JOIN a name/email onto the raw UUID
+/// without a second IdP round-trip. Fire-and-forget: any DB error is logged and
+/// swallowed so a transient `users` failure never 500s an otherwise-valid
+/// request. No-op when the principal carries neither email nor display name
+/// (runner / worker control-plane tokens, anonymous probes).
+///
+/// The `users.email` CITEXT UNIQUE means we can't blindly clobber the email —
+/// if it already belongs to a DIFFERENT user (a reconciliation the resolver
+/// owns), forcing it here would either steal the handle or hit the UNIQUE. So
+/// the email is only (re)written when no OTHER row already holds it; otherwise
+/// the existing email is left untouched. Display name + avatar always refresh.
 async fn upsert_user_profile(db: &sqlx::PgPool, user: &AuthUser) {
     if user.email.is_none() && user.display_name.is_none() {
         return;
     }
     let res = sqlx::query(
-        "INSERT INTO user_profiles (user_id, email, display_name, avatar_url) \
-              VALUES ($1, $2, $3, $4) \
-         ON CONFLICT (user_id) DO UPDATE \
-            SET email = EXCLUDED.email, \
+        "INSERT INTO users (id, email, display_name, avatar_url) \
+              VALUES ($1, \
+                      CASE WHEN $2::citext IS NOT NULL \
+                            AND NOT EXISTS (SELECT 1 FROM users u \
+                                             WHERE u.email = $2::citext AND u.id <> $1) \
+                           THEN $2::citext ELSE NULL END, \
+                      $3, $4) \
+         ON CONFLICT (id) DO UPDATE \
+            SET email = CASE WHEN $2::citext IS NOT NULL \
+                              AND NOT EXISTS (SELECT 1 FROM users u \
+                                               WHERE u.email = $2::citext AND u.id <> $1) \
+                             THEN $2::citext ELSE users.email END, \
                 display_name = EXCLUDED.display_name, \
                 avatar_url = EXCLUDED.avatar_url, \
                 updated_at = now() \
-          WHERE user_profiles.email IS DISTINCT FROM EXCLUDED.email \
-             OR user_profiles.display_name IS DISTINCT FROM EXCLUDED.display_name \
-             OR user_profiles.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url",
+          WHERE users.email IS DISTINCT FROM EXCLUDED.email \
+             OR users.display_name IS DISTINCT FROM EXCLUDED.display_name \
+             OR users.avatar_url IS DISTINCT FROM EXCLUDED.avatar_url",
     )
     .bind(user.subject_as_uuid())
     .bind(user.email.as_deref())
@@ -57,7 +71,7 @@ async fn upsert_user_profile(db: &sqlx::PgPool, user: &AuthUser) {
     .execute(db)
     .await;
     if let Err(e) = res {
-        tracing::debug!(error = %e, "user_profiles upsert failed (non-fatal)");
+        tracing::debug!(error = %e, "users profile upsert failed (non-fatal)");
     }
 }
 
@@ -261,7 +275,7 @@ pub async fn require_auth_middleware(
         .authenticate(req.headers(), &jar)
         .await?;
     super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
-    // Mirror identity into `user_profiles` on the hot path — every gated
+    // Mirror identity into `users` on the hot path — every gated
     // `/api/v1/*` request flows through here. Best-effort, non-blocking.
     upsert_user_profile(&state.db, &user).await;
     // Stash the user on the request so downstream handlers can pick it up via

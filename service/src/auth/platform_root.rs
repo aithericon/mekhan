@@ -61,6 +61,9 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub fn platform_root_user() -> AuthUser {
     AuthUser {
         subject: PLATFORM_ROOT_SUBJECT.to_string(),
+        // Synthetic principal, no workspace: a fixed legacy id is fine (it
+        // never keys a real `users` row).
+        user_id: AuthUser::legacy_subject_uuid(PLATFORM_ROOT_SUBJECT),
         email: None,
         display_name: Some("Platform Root".to_string()),
         roles: vec![PLATFORM_ROOT_ROLE.to_string()],

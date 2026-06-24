@@ -167,10 +167,6 @@ pub struct AppState {
     /// Transactional-email delivery. The hexagonal `Mailer` port — SMTP / Brevo
     /// / log adapter chosen from `EmailConfig` (log by default, offline).
     pub email: Arc<dyn crate::notify::email::Mailer>,
-    /// Invite-accept identity provisioner (Phase 4). `None` only when a real
-    /// auth mode lacks broker credentials → accept 503s. Under `dev_noop` it's
-    /// the deterministic Noop. Boot-checked against `auth.mode`.
-    pub user_provisioner: Option<Arc<dyn crate::auth::provisioner::UserProvisioner>>,
 }
 
 /// Public OpenApiRouter — routes mounted OUTSIDE the auth gate.
@@ -194,13 +190,15 @@ fn build_public_openapi_router() -> OpenApiRouter<AppState> {
         // cookie, and this returns only the in-cluster runner base_urls/model_ids
         // the router already holds to route. No credential, no workspace leak.
         .routes(routes!(handlers::model_pool::list_model_serving_runners))
-        // Invite preview + accept — PUBLIC by design (Phase 4 auth-bootstrap
-        // exception, like /api/auth/*): an invitee has no session yet. Authed by
-        // the opaque token in the path, not the session cookie. Registered here
-        // (not a raw merged router) so the typed wrappers land in the OpenAPI
-        // spec and openapi-drift catches changes.
+        // Invite preview — PUBLIC by design (auth-bootstrap exception, like
+        // /api/auth/*): an invitee has no session yet and the accept page shows
+        // the workspace/role/email before login. Authed by the opaque token in
+        // the path, not the session cookie. Registered here (not a raw merged
+        // router) so the typed wrapper lands in the OpenAPI spec and
+        // openapi-drift catches changes. The matching `accept_invite` is INSIDE
+        // the auth gate (see build_protected_openapi_router): the logged-in
+        // session IS the joining identity.
         .routes(routes!(handlers::invites::preview_invite))
-        .routes(routes!(handlers::invites::accept_invite))
 }
 
 /// Protected OpenApiRouter — every `#[utoipa::path]`-annotated handler that
@@ -723,7 +721,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::workspaces::remove_member))
         .routes(routes!(handlers::workspaces::update_member_role))
         // Invites (Phase 4) — Admin-gated create/list, plus per-invite resend/
-        // revoke. The PUBLIC preview/accept endpoints are registered in
+        // revoke. `accept` is AUTHED (the logged-in session is the joining
+        // identity); only the PUBLIC `preview` endpoint is registered in
         // build_public_openapi_router (auth-bootstrap exception).
         .routes(routes!(
             handlers::invites::create_invite,
@@ -731,6 +730,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::invites::resend_invite))
         .routes(routes!(handlers::invites::revoke_invite))
+        .routes(routes!(handlers::invites::accept_invite))
         // Object grants (Phase 3) — per-object ACLs for folders / templates /
         // instances. GET = effective access list; PUT/DELETE edit direct grants.
         .routes(routes!(handlers::object_grants::list_folder_grants))

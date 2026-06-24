@@ -15,6 +15,7 @@ use axum::{
 use uuid::Uuid;
 
 use crate::auth::model::SUBJECT_UUID_NAMESPACE;
+use crate::auth::resolver::ZITADEL_PROVIDER;
 use crate::auth::{map_to_api_error, require_member, require_role, AuthUser, Role};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -57,11 +58,10 @@ pub(crate) fn slugify(input: &str) -> String {
 ///
 /// Self-serve workspace (tenant) creation. Any authenticated principal may
 /// create a workspace; they become its `owner` in the same transaction. The
-/// workspace is **standalone** — `zitadel_org_id` is NULL and `is_system` is
-/// FALSE — so it works identically under `dev_noop` and BFF/Zitadel auth, with
-/// membership (not an IdP org) as the source of truth. An operator can later
-/// bind it to a Zitadel org out-of-band; the auth resolver is purely additive
-/// and never prunes the owner membership minted here.
+/// workspace is a real tenant — `is_system` is FALSE — and works identically
+/// under `dev_noop` and BFF/Zitadel auth, with `workspace_members` (not an IdP
+/// org) as the sole source of tenancy. The auth resolver never derives
+/// membership from IdP claims and never prunes the owner membership minted here.
 #[utoipa::path(
     post,
     path = "/api/v1/workspaces",
@@ -311,9 +311,9 @@ pub async fn list_members(
         .map_err(map_to_api_error)?;
     let rows: Vec<WorkspaceMember> = sqlx::query_as(
         "SELECT m.workspace_id, m.user_id, m.role, m.added_at, \
-                up.display_name, up.email, up.avatar_url \
+                up.display_name, up.email::text, up.avatar_url \
            FROM workspace_members m \
-           LEFT JOIN user_profiles up ON up.user_id = m.user_id \
+           LEFT JOIN users up ON up.id = m.user_id \
           WHERE m.workspace_id = $1 \
           ORDER BY m.added_at",
     )
@@ -325,10 +325,13 @@ pub async fn list_members(
 
 /// POST /api/v1/workspaces/{id}/members
 ///
-/// Adds a member identified by OIDC `subject`. Server derives `user_id`
-/// via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for
-/// principals that haven't yet logged into mekhan. Upserts so calling
-/// twice with a different role flips the role rather than failing.
+/// Adds a member identified by OIDC `subject`. Server resolves `user_id`
+/// through the identity spine — an existing `(provider, subject)` link wins
+/// (so reconciled / re-provisioned users get the membership on their real
+/// `users.id`), falling back to `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`
+/// when no identity is linked yet so this still works for principals that
+/// haven't logged into mekhan. Upserts so calling twice with a different role
+/// flips the role rather than failing.
 #[utoipa::path(
     post,
     path = "/api/v1/workspaces/{id}/members",
@@ -360,7 +363,23 @@ pub async fn add_member(
         )));
     }
 
-    let target_user_id = Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, req.subject.as_bytes());
+    // Resolve the subject through the identity spine, NOT by recomputing
+    // `v5(subject)`. Verified-email reconciliation can link a subject onto an
+    // existing `users.id` that is NOT `v5(that subject)`, so a blind recompute
+    // would key the membership to an orphaned id the user never resolves to.
+    // Fall back to the `v5(subject)` mint seed only when no identity is linked
+    // yet (the not-yet-logged-in / dev case), matching the resolver's Step 3.
+    let target_user_id: Uuid = match sqlx::query_as::<_, (Uuid,)>(
+        "SELECT user_id FROM user_identities WHERE provider = $1 AND subject = $2",
+    )
+    .bind(ZITADEL_PROVIDER)
+    .bind(&req.subject)
+    .fetch_optional(&state.db)
+    .await?
+    {
+        Some((user_id,)) => user_id,
+        None => Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, req.subject.as_bytes()),
+    };
     let row: WorkspaceMember = sqlx::query_as(
         "INSERT INTO workspace_members (workspace_id, user_id, role) \
               VALUES ($1, $2, $3) \
@@ -389,7 +408,7 @@ async fn notify_member(
     role_changed: bool,
 ) {
     let profile: Option<(Option<String>, Option<String>)> =
-        sqlx::query_as("SELECT email, display_name FROM user_profiles WHERE user_id = $1")
+        sqlx::query_as("SELECT email::text, display_name FROM users WHERE id = $1")
             .bind(target_user_id)
             .fetch_optional(&state.db)
             .await

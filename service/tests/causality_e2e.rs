@@ -328,7 +328,6 @@ async fn causality_full_pipeline() {
             db.clone(),
         )),
         email: mekhan_service::notify::email::log_mailer(),
-        user_provisioner: None,
     };
     // Re-point the nil workspace's `default` worker group to the live executor's
     // bound partition (no-op unless TEST_WORKER_DEFAULT_PARTITION is set) so the

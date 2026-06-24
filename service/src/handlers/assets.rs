@@ -2099,6 +2099,7 @@ mod tests {
     fn test_user(ws: Uuid) -> AuthUser {
         AuthUser {
             subject: "dev".into(),
+            user_id: AuthUser::legacy_subject_uuid("dev"),
             email: None,
             display_name: None,
             roles: vec![],

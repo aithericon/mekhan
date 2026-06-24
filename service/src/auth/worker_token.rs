@@ -51,8 +51,10 @@ pub async fn verify_worker_token(db: &PgPool, bearer: &str) -> Result<AuthUser, 
         return Err(AuthError::InvalidToken("worker token mismatch".to_string()));
     }
 
+    let subject = worker_subject(row.id);
     Ok(AuthUser {
-        subject: worker_subject(row.id),
+        user_id: AuthUser::legacy_subject_uuid(&subject),
+        subject,
         email: None,
         display_name: Some(row.name),
         roles: vec![WORKER_ROLE.to_string()],

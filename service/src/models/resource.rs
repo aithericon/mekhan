@@ -84,7 +84,7 @@ pub struct ResourceSummary {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     pub created_by: Uuid,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +154,7 @@ pub struct ResourceDetail {
     pub latest_version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     pub created_by: Uuid,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]

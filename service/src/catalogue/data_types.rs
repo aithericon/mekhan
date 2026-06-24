@@ -58,7 +58,7 @@ pub struct CatalogueDataType {
     pub entry_count: i64,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Author (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Author (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`).

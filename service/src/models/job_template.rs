@@ -32,7 +32,7 @@ pub struct JobTemplateRow {
     pub visibility: String,
     pub consumer_locked: bool,
     pub latest_version: i32,
-    /// Legacy raw OIDC subject string (deprecated). Cannot join `user_profiles`
+    /// Legacy raw OIDC subject string (deprecated). Cannot join `users`
     /// — superseded by `created_by_uuid`. Kept one release; dropped in a
     /// follow-up migration.
     pub created_by: Option<String>,
@@ -44,7 +44,7 @@ pub struct JobTemplateRow {
     /// Appended last to match the `ALTER ADD COLUMN` physical order so
     /// `SELECT *` → `FromRow` reads it back without reordering.
     pub container_resource_id: Option<Uuid>,
-    /// `subject_as_uuid()` of the creator — joins `user_profiles` (Phase 2).
+    /// `subject_as_uuid()` of the creator — joins `users` (Phase 2).
     /// NULL for pre-migration rows (legacy `created_by` TEXT is unrecoverable).
     pub created_by_uuid: Option<Uuid>,
     /// `subject_as_uuid()` of whoever last mutated the template (Phase 2).
@@ -67,7 +67,7 @@ pub struct JobTemplateVersionRow {
     /// Legacy raw OIDC subject string (deprecated) — see [`JobTemplateRow`].
     pub created_by: Option<String>,
     pub created_at: DateTime<Utc>,
-    /// `subject_as_uuid()` of the version author — joins `user_profiles`.
+    /// `subject_as_uuid()` of the version author — joins `users`.
     pub created_by_uuid: Option<Uuid>,
 }
 
@@ -158,7 +158,7 @@ pub struct JobTemplateSummary {
     pub updated_at: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_resource_id: Option<Uuid>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+    /// Creator (`subject_as_uuid()`), resolvable via `users`. NULL for
     /// pre-Phase-2 rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
@@ -250,7 +250,7 @@ pub struct JobTemplateDetail {
     /// Optional `container_image` resource bound to this template (docs/22).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container_resource_id: Option<Uuid>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`).

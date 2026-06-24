@@ -122,9 +122,9 @@ async fn list_grants_core(
     // Direct object grants (editable).
     let direct: Vec<DirectGrantRow> = sqlx::query_as(
         "SELECT g.id, g.user_id, g.role, g.granted_by, g.granted_at, \
-                p.display_name, p.email, p.avatar_url \
+                p.display_name, p.email::text, p.avatar_url \
            FROM object_grants g \
-           LEFT JOIN user_profiles p ON p.user_id = g.user_id \
+           LEFT JOIN users p ON p.id = g.user_id \
           WHERE g.object_type = $1::object_kind AND g.object_id = $2 \
           ORDER BY g.granted_at",
     )
@@ -157,10 +157,10 @@ async fn list_grants_core(
         let folder_rows: Vec<FolderGrantRow> = sqlx::query_as(
             "SELECT g.user_id, g.role, g.granted_by, g.granted_at, \
                     f.id AS folder_id, f.path AS folder_path, \
-                    p.display_name, p.email, p.avatar_url \
+                    p.display_name, p.email::text, p.avatar_url \
                FROM object_grants g \
                JOIN folders f ON f.id = g.object_id \
-               LEFT JOIN user_profiles p ON p.user_id = g.user_id \
+               LEFT JOIN users p ON p.id = g.user_id \
               WHERE g.object_type = 'folder'::object_kind \
                 AND ($1 = f.path OR $1 LIKE f.path || '/%') \
                 AND ($2 = FALSE OR f.path <> $1) \
@@ -190,9 +190,9 @@ async fn list_grants_core(
 
     // Workspace-member floor.
     let members: Vec<MemberRow> = sqlx::query_as(
-        "SELECT m.user_id, m.role, p.display_name, p.email, p.avatar_url \
+        "SELECT m.user_id, m.role, p.display_name, p.email::text, p.avatar_url \
            FROM workspace_members m \
-           LEFT JOIN user_profiles p ON p.user_id = m.user_id \
+           LEFT JOIN users p ON p.id = m.user_id \
           WHERE m.workspace_id = $1 \
           ORDER BY m.added_at",
     )
@@ -283,9 +283,9 @@ async fn put_grant_core(
     // Read back the persisted row + identity for the response.
     let row: DirectGrantRow = sqlx::query_as(
         "SELECT g.id, g.user_id, g.role, g.granted_by, g.granted_at, \
-                p.display_name, p.email, p.avatar_url \
+                p.display_name, p.email::text, p.avatar_url \
            FROM object_grants g \
-           LEFT JOIN user_profiles p ON p.user_id = g.user_id \
+           LEFT JOIN users p ON p.id = g.user_id \
           WHERE g.object_type = $1::object_kind AND g.object_id = $2 AND g.user_id = $3",
     )
     .bind(kind.as_db())
