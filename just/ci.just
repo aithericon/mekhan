@@ -345,9 +345,8 @@ build-cli:
 #   FORGEJO_URL        Forgejo base URL (default https://forge.aithericon.eu)
 #   FORGEJO_REPO       owner/name (CI sets FORGEJO_REPO=$CI_REPO)
 #   FORGEJO_API_TOKEN  Forgejo PAT with `write:repository` scope — REQUIRED.
-#                      In CI this reuses the registry token:
-#                        vault kv get -field=token secret/docker/registry
-#                      (`registry-token` carries write:repository + write:package).
+#                      In CI: vault kv get -field=token secret/forgejo/api.
+#                      (The registry token is package-scoped → 403 on releases.)
 publish-cli-release ref_slug commit_sha:
     #!/usr/bin/env bash
     set -euo pipefail

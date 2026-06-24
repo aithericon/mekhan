@@ -14,10 +14,11 @@
 # CARGO_TARGET_DIR keeps it from contending on 30-build's target lock; sccache
 # still gives shared-crate cache hits across the two dirs.
 #
-# Release auth: reuses the existing `secret/docker/registry` token — the same
-# Forgejo PAT used to push the OCI images. That token (`registry-token`) carries
-# `write:repository` in addition to `write:package`, which is exactly what the
-# release API needs, so no extra Vault secret is required.
+# Release auth: a dedicated Forgejo PAT with `write:repository` scope, stored at
+# vault `secret/forgejo/api` (field `token`). The container-registry token
+# (secret/docker/registry) is package-scoped only and the release API rejects
+# it (HTTP 403), so releases get their own token:
+#   vault kv put secret/forgejo/api token=<PAT-with-write:repository>
 # =============================================================================
 
 when:
@@ -51,6 +52,6 @@ steps:
       FORGEJO_URL: "https://forge.aithericon.eu"
     commands:
       - export FORGEJO_REPO="$CI_REPO"
-      - export FORGEJO_API_TOKEN=$(vault kv get -field=token secret/docker/registry)
+      - export FORGEJO_API_TOKEN=$(vault kv get -field=token secret/forgejo/api)
       - just ci::publish-cli-release "$CI_COMMIT_BRANCH" "$CI_COMMIT_SHA"
     depends_on: [build-cli]
