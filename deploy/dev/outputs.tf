@@ -23,29 +23,6 @@ output "database_url" {
   sensitive   = true
 }
 
-# ── Zitadel PAT-feature credentials ─────────────────────────────────────────
-# Surfaced for debugging via `tofu output -raw <name>`. The same values are
-# rendered into the Nomad jobspec via templatefile() in main.tf — these
-# outputs are not the wiring path, just a way to read them back.
-
-output "auth_introspection_client_id" {
-  description = "client_id of the Mekhan introspection API app. Used as HTTP Basic username when Mekhan validates Bearer PATs via Zitadel /oauth/v2/introspect."
-  value       = zitadel_application_api.introspect.client_id
-  sensitive   = true
-}
-
-output "auth_introspection_client_secret" {
-  description = "client_secret of the Mekhan introspection API app. Returned once at create-time, captured in tfstate; `tofu taint` to rotate."
-  value       = zitadel_application_api.introspect.client_secret
-  sensitive   = true
-}
-
-output "auth_broker_pat" {
-  description = "PAT minted on the mekhan-token-broker machine user. Mekhan presents this to Zitadel Management API to broker per-user PATs. `tofu taint` zitadel_personal_access_token.token_broker to rotate."
-  value       = zitadel_personal_access_token.token_broker.token
-  sensitive   = true
-}
-
 # ── Mekhan Testers org ───────────────────────────────────────────────────────
 
 output "mekhan_testers_org_id" {
