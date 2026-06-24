@@ -11,14 +11,14 @@
       "data": {
         "type": "automated_step",
         "label": "Query Error Logs",
-        "description": "Loki `query_range` backend. Runs the LogQL query `{nomad_task=~\".+\"} |~ \"(?i)(error|fatal|panic|exception)\"` against the `aithericon_loki` resource over a 15m lookback window (`since: 15m`, end defaults to now), `limit: 40`, `direction: backward`. The matcher selects every Nomad task and the line filter keeps only error-level lines (case-insensitive). `limit` is kept small (40) on purpose: the full entry envelope (line + labels per match) is fed to the downstream Agent, and a few hundred entries overflow a typical 32K-token model context. The query is static (no `{{ }}` placeholders), so it passes through verbatim. Output is the fixed Loki envelope: `entries` (array of {ts, line, labels}), `entry_count`, `series`, `result_type`, `stats`.",
+        "description": "Loki `query_range` backend. Runs the LogQL query `{nomad_task=~\".+\", nomad_task!=\"loki\", nomad_task!=\"grafana\", nomad_task!=\"tempo\"} | logfmt | level=~\"(?i)error|fatal|critical|panic\"` against the `suessco_loki` resource over a 15m lookback (`since: 15m`, end defaults to now), `limit: 8`, `direction: backward`. It parses `logfmt` and keeps only genuine error-level lines via the `level` field (`error|fatal|critical|panic`, case-insensitive) \u2014 not a substring grep for the word 'error', which would pull in INFO lines that merely mention it. The observability stack itself (`nomad_task!=\"loki\"`, `!=\"grafana\"`, `!=\"tempo\"`) is excluded so the alert isn't tripped by Loki's own query-retry logs or Grafana's auth-parse noise \u2014 those are an artifact of *querying* Loki, not real incidents. This step pins `deploymentModel.group: \"suessco\"`, so it runs on the executor inside the Suessco *dev* cluster and reads that cluster's Loki. `limit` is kept small (8) on purpose: the full entry envelope (line + labels) feeds the downstream Agent, and too many entries overflow a typical 32K-token model context. The query is static (no `{{ }}` placeholders). Output is the fixed Loki envelope: `entries`, `entry_count`, `series`, `result_type`, `stats`.",
         "executionSpec": {
           "backendType": "loki",
           "config": {
             "resource_alias": "suessco_loki",
             "since": "15m",
             "operation": "query_range",
-            "query": "{nomad_task=~\".+\"} | logfmt | level=~\"(?i)error|fatal|critical|panic\"",
+            "query": "{nomad_task=~\".+\", nomad_task!=\"loki\", nomad_task!=\"grafana\", nomad_task!=\"tempo\"} | logfmt | level=~\"(?i)error|fatal|critical|panic\"",
             "limit": 8,
             "direction": "backward"
           }
