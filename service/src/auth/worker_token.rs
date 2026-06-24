@@ -2,9 +2,10 @@
 //! enrolled workers (Phase A, Grouped + Enrolled Workers).
 //!
 //! The exact parallel of [`super::runner_token`] for the *worker* pool. A worker
-//! authenticates with `Authorization: Bearer wkr_{id}.{secret}`. This is NOT a
-//! Zitadel PAT and never touches introspection — it resolves entirely against the
-//! local `workers` table, so it works offline in `dev_noop`:
+//! authenticates with `Authorization: Bearer wkr_{id}.{secret}`. This is a
+//! non-human machine credential (distinct from the `uat_` user PAT) — it
+//! resolves entirely against the local `workers` table, so it works offline in
+//! `dev_noop`:
 //!
 //!   1. Parse the `wkr_` prefix → `(worker_id, secret)`.
 //!   2. Fetch the `workers` row by id (rejecting revoked / soft-deleted rows).

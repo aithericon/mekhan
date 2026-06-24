@@ -239,11 +239,7 @@ impl DbPrincipalResolver {
             .and_then(|e| e.split('@').next())
             .map(slugify)
             .filter(|s| !s.is_empty())
-            .or_else(|| {
-                display_name
-                    .map(slugify)
-                    .filter(|s: &String| !s.is_empty())
-            })
+            .or_else(|| display_name.map(slugify).filter(|s: &String| !s.is_empty()))
             .unwrap_or_else(|| hex_fallback.clone());
 
         // Try the preferred slug, then `-{n}` variants, then the subject-hex
@@ -257,7 +253,10 @@ impl DbPrincipalResolver {
                 // Final attempt: the subject-hex slug, unique per principal.
                 _ => hex_fallback.clone(),
             };
-            match self.insert_personal_workspace(&slug, &display, user_id).await {
+            match self
+                .insert_personal_workspace(&slug, &display, user_id)
+                .await
+            {
                 Ok(()) => return Ok(()),
                 Err(PersonalWsInsertError::SlugTaken) => continue,
                 Err(PersonalWsInsertError::Db(e)) => return Err(e),
@@ -276,11 +275,10 @@ impl DbPrincipalResolver {
         display_name: &str,
         owner_id: Uuid,
     ) -> Result<(), PersonalWsInsertError> {
-        let mut tx = self
-            .db
-            .begin()
-            .await
-            .map_err(|e| PersonalWsInsertError::Db(AuthError::Internal(format!("begin: {e}"))))?;
+        let mut tx =
+            self.db.begin().await.map_err(|e| {
+                PersonalWsInsertError::Db(AuthError::Internal(format!("begin: {e}")))
+            })?;
 
         let row: Result<(Uuid,), sqlx::Error> = sqlx::query_as(
             "INSERT INTO workspaces (slug, display_name) VALUES ($1, $2) RETURNING id",
@@ -316,9 +314,9 @@ impl DbPrincipalResolver {
             )))
         })?;
 
-        tx.commit().await.map_err(|e| {
-            PersonalWsInsertError::Db(AuthError::Internal(format!("commit: {e}")))
-        })?;
+        tx.commit()
+            .await
+            .map_err(|e| PersonalWsInsertError::Db(AuthError::Internal(format!("commit: {e}"))))?;
         Ok(())
     }
 }
@@ -360,9 +358,10 @@ impl PrincipalResolver for DbPrincipalResolver {
         // Platform-admin: match the principal's subject OR email against the
         // config allow-list. Stamped once here so every downstream gate reads
         // it off the resolved `AuthUser`.
-        user.is_platform_admin = self.platform_admins.iter().any(|entry| {
-            entry == &user.subject || user.email.as_deref() == Some(entry.as_str())
-        });
+        user.is_platform_admin = self
+            .platform_admins
+            .iter()
+            .any(|entry| entry == &user.subject || user.email.as_deref() == Some(entry.as_str()));
 
         // Auto-membership in every system workspace (currently just `demos`),
         // gated behind `auth.auto_join_system_workspaces` (default OFF). When
@@ -622,7 +621,7 @@ async fn resolve_user_id(
 /// Fetch the caller's `role` in a specific workspace, if any. Drives
 /// `AuthUser.workspace_role` so the SPA can gate admin-only affordances
 /// (server still enforces via `require_role`).
-async fn lookup_role(
+pub(crate) async fn lookup_role(
     db: &PgPool,
     workspace_id: Uuid,
     user_id: Uuid,
@@ -648,7 +647,10 @@ async fn lookup_role(
 /// workspace (migration `20240189`) and real tenants must outrank it. The
 /// workspace picker exposes the full membership list and lets the user override
 /// this default per session via the active-workspace cookie.
-async fn membership_workspace(db: &PgPool, user_id: Uuid) -> Result<Option<Uuid>, AuthError> {
+pub(crate) async fn membership_workspace(
+    db: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<Uuid>, AuthError> {
     let row: Option<(Uuid,)> = sqlx::query_as(
         "SELECT w.id \
            FROM workspaces w \
