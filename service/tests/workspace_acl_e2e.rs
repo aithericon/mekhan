@@ -139,23 +139,30 @@ async fn public_visibility_crosses_workspace() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. Demos workspace is system-owned + public — visible to non-members
+// 3. Demos workspace is system-owned + public — a non-member does NOT get its
+//    templates leaked into their own-workspace listing (lists are own-ws only),
+//    but the workspace itself is surfaced as a browse-only entry in
+//    `/api/v1/workspaces` so they can VISIT it. This is the post-overlay model
+//    (cross-workspace public templates are no longer folded into every list).
 // ---------------------------------------------------------------------------
 #[tokio::test]
 async fn demo_workspace_is_visible_to_authenticated_non_members() {
     let (app, db) = header_driven_app().await;
 
     // Seed a public template owned by the existing demos workspace.
-    // Migration 20240123 inserted '00000000-0000-0000-0000-0000000000de'.
+    // Migration 20240123 inserted '00000000-0000-0000-0000-0000000000de'
+    // with is_system = TRUE.
     let demo_ws: Uuid = "00000000-0000-0000-0000-0000000000de".parse().unwrap();
     let _ = seed_template_in_workspace(&db, demo_ws, "fake demo", "public").await;
 
-    // A user who isn't a member of the demos workspace still sees it via
-    // visibility = 'public'.
+    // carol is a member of her own workspace, NOT of demos.
     let ws_other = seed_workspace(&db, &format!("ws-other-{}", Uuid::new_v4().simple())).await;
     seed_member(&db, ws_other, "carol", "owner").await;
 
+    // (a) Her own-workspace template listing is isolated — the demos public
+    //     template is NOT leaked in (no cross-workspace overlay).
     let resp = app
+        .clone()
         .oneshot(
             req_as("carol", Some(ws_other))
                 .method("GET")
@@ -174,8 +181,37 @@ async fn demo_workspace_is_visible_to_authenticated_non_members() {
         .map(|t| t["name"].as_str().unwrap_or("").to_string())
         .collect();
     assert!(
-        names.iter().any(|n| n == "fake demo"),
-        "expected the public demo template in carol's list, got {names:?}"
+        !names.iter().any(|n| n == "fake demo"),
+        "demos public template must NOT leak into carol's own-workspace list, got {names:?}"
+    );
+
+    // (b) The demos workspace IS surfaced to her as a browse-only entry in the
+    //     workspace switcher (system workspace holding a public template, with a
+    //     null role), so she can choose to visit it.
+    let resp = app
+        .oneshot(
+            req_as("carol", Some(ws_other))
+                .method("GET")
+                .uri("/api/v1/workspaces")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp.into_body()).await;
+    let rows = body.as_array().expect("workspace list is an array");
+    let demo_row = rows
+        .iter()
+        .find(|w| w["id"].as_str() == Some(&demo_ws.to_string()))
+        .unwrap_or_else(|| panic!("expected demos workspace in carol's switcher, got {body}"));
+    assert_eq!(
+        demo_row["is_system"], true,
+        "demos must surface as a system workspace"
+    );
+    assert!(
+        demo_row["my_role"].is_null(),
+        "carol is not a member of demos, so her role there is browse-only (null)"
     );
 }
 
