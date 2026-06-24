@@ -609,14 +609,32 @@ push-images-to-registry registry_image commit_sha:
     fi
     echo "▶ pushing images into in-cluster registry ${zot} from ${src} (sha=${sha})"
 
-    for img in mekhan-service aithericon-engine aithericon-executor; do
+    # Copy the three images CONCURRENTLY (they're independent), and only the
+    # linux/arm64 RUNTIME image — `--override-arch arm64` instead of `--all`
+    # skips buildx's unknown/unknown build-attestation manifest, which the
+    # deploy never pulls (the full attestation still lives on forge). --quiet
+    # keeps the interleaved parallel logs readable.
+    imgs=(mekhan-service aithericon-engine aithericon-executor)
+    pids=()
+    for img in "${imgs[@]}"; do
       echo "  → copy ${img}:${sha}"
-      skopeo copy --all --retry-times 3 \
+      skopeo copy --quiet --retry-times 3 \
+        --override-os linux --override-arch arm64 \
         --src-creds "${FORGEJO_REGISTRY_USER}:${FORGEJO_REGISTRY_PASSWORD}" \
         --dest-tls-verify=false \
         "docker://${src}/${img}:${sha}" \
-        "docker://${zot}/milanender/${img}:${sha}"
+        "docker://${zot}/milanender/${img}:${sha}" &
+      pids+=("$!")
     done
+
+    fail=0
+    for i in "${!pids[@]}"; do
+      if ! wait "${pids[$i]}"; then
+        echo "✗ copy failed: ${imgs[$i]}:${sha}" >&2
+        fail=1
+      fi
+    done
+    [ "${fail}" -eq 0 ] || { echo "✗ one or more image copies failed" >&2; exit 1; }
     echo "✓ images pushed to in-cluster registry for ${sha} — deploy pulls locally, no on-demand sync"
 
 # Build the fat CI builder image and push it to the registry.
