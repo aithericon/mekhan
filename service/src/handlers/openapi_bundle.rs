@@ -218,8 +218,8 @@ pub async fn folder_openapi_bundle(
         }
     }
 
-    // Session cookie + machine PAT (bearer) both authenticate the protected
-    // `/fire` + `/invoke` + `/instances` routes (RFC 7662 introspection in
+    // Session cookie + mekhan-native user PAT (bearer) both authenticate the
+    // protected `/fire` + `/invoke` + `/instances` routes (the `uat_` path in
     // `require_auth_middleware`). Advertise both whenever a secured op exists.
     let secured_present = paths
         .keys()
@@ -239,7 +239,7 @@ pub async fn folder_openapi_bundle(
             json!({
                 "type": "http",
                 "scheme": "bearer",
-                "description": "Machine personal access token (PAT), validated via RFC 7662 introspection.",
+                "description": "Mekhan-native user personal access token (uat_), validated against the local user_pats table.",
             }),
         );
     }

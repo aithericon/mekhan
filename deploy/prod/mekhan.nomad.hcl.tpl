@@ -181,8 +181,6 @@ EOH
         data        = <<-EOH
 {{- with secret "${runtime_secret_path}" }}
 MEKHAN__DATABASE_URL={{ .Data.data.database_url }}
-MEKHAN__AUTH__INTROSPECTION_CLIENT_SECRET={{ .Data.data.introspection_client_secret }}
-MEKHAN__AUTH__BROKER_PAT={{ .Data.data.broker_pat }}
 MEKHAN__EMAIL__SMTP_USERNAME={{ .Data.data.smtp_username }}
 MEKHAN__EMAIL__SMTP_PASSWORD={{ .Data.data.smtp_password }}
 # Headless provisioning (see bootstrap.tf): a platform root token for automated
@@ -246,7 +244,6 @@ EOH
         MEKHAN__AUTH__AUDIENCE            = "${auth_audience}"
         MEKHAN__AUTH__REDIRECT_URI        = "${auth_redirect_uri}"
         MEKHAN__AUTH__POST_LOGIN_REDIRECT = "${auth_post_login_redirect}"
-        MEKHAN__AUTH__INTROSPECTION_CLIENT_ID = "${auth_introspection_client_id}"
         # Platform admins — comma-separated OIDC subjects/emails that get
         # `is_platform_admin`. REQUIRED in BFF mode to curate the shared platform
         # pool (mint the worker registration token, manage platform-tier infra);

@@ -197,54 +197,7 @@ resource "vault_kv_secret_v2" "tester_password" {
 
 # =============================================================================
 # PAT feature — Zitadel side
-# =============================================================================
-# Mekhan's "Profile → Access tokens" UI mints machine-user PATs that CI clients
-# (`mekhan apply`, `MEKHAN_CLI_TOKEN`) present as `Authorization: Bearer …`.
-# Zitadel is the sole source of truth — Mekhan stores no token state itself.
-# =============================================================================
-
-# Confidential API app — credentials Mekhan uses to authenticate to Zitadel's
-# introspection endpoint. BASIC auth = client_id + client_secret as HTTP Basic.
-resource "zitadel_application_api" "introspect" {
-  org_id           = zitadel_org.mekhan_testers.id
-  project_id       = zitadel_project.mekhan.id
-  name             = "Mekhan SPA-introspect"
-  auth_method_type = "API_AUTH_METHOD_TYPE_BASIC"
-}
-
-# Service identity Mekhan uses when brokering per-user PATs through Zitadel's
-# Management API. One machine user, one PAT — the bootstrap script's old
-# "delete-and-remint on every run" pattern is unnecessary in TF because the
-# PAT secret is captured in tfstate at create-time.
-# user_name is env-suffixed: Zitadel enforces instance-wide unique usernames,
-# so dev's `mekhan-token-broker-dev` and prod's `mekhan-token-broker-prod` can
-# coexist (they live in separate orgs but share the instance).
-resource "zitadel_machine_user" "token_broker" {
-  org_id      = zitadel_org.mekhan_testers.id
-  user_name   = "mekhan-token-broker-${local.env}"
-  name        = "Mekhan Token Broker"
-  description = "Brokers per-user automation PATs for the embedded /api/auth/tokens feature"
-}
-
-# ORG_OWNER is the minimum role that lets the broker create/delete machine
-# users and their PATs in this org. Without it, /api/auth/tokens 502s.
-resource "zitadel_org_member" "token_broker" {
-  org_id  = zitadel_org.mekhan_testers.id
-  user_id = zitadel_machine_user.token_broker.id
-  roles   = ["ORG_OWNER"]
-}
-
-# The PAT Mekhan presents as the broker. `token` is sensitive and only
-# exposed by Zitadel at creation — TF captures it in state.
-#
-# Far-future expiration: matches the registry example pattern and keeps the
-# broker credential from silently expiring. To rotate, `tofu taint` this
-# resource (or bump expiration_date) and re-apply.
-resource "zitadel_personal_access_token" "token_broker" {
-  # org_id is REQUIRED here: without it the provider resolves the broker user
-  # against its default org (the cluster's), not the Mekhan Testers org where
-  # the machine user actually lives → "User could not be found".
-  org_id          = zitadel_org.mekhan_testers.id
-  user_id         = zitadel_machine_user.token_broker.id
-  expiration_date = "2099-01-01T00:00:00Z"
-}
+# NOTE: the Zitadel token-broker + introspection API app that used to live here
+# were retired when Mekhan moved to native `uat_` Personal Access Tokens
+# (mekhan owns the `user_pats` table; no Zitadel round-trip). Zitadel is now a
+# login-only IdP.

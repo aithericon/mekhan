@@ -15,9 +15,6 @@
 # apt/root in the builder image). Still UNPROVEN on the CI runner — validate
 # with one manual run before relying on it.
 #
-# The heavier real-Zitadel auth e2e is a SEPARATE manual lane —
-# see 60-e2e-zitadel.yml.disabled / just ci::test-e2e-zitadel.
-#
 # All logic is in just/ci.just::test-e2e — keep changes there.
 # =============================================================================
 

@@ -2,8 +2,9 @@
 //! (Phase 1, Lab Runner Fleet).
 //!
 //! A runner authenticates with `Authorization: Bearer rnr_{id}.{secret}`. This
-//! is NOT a Zitadel PAT and never touches introspection — it resolves entirely
-//! against the local `runners` table, so it works offline in `dev_noop`:
+//! is a non-human machine credential (distinct from the `uat_` user PAT) — it
+//! resolves entirely against the local `runners` table, so it works offline in
+//! `dev_noop`:
 //!
 //!   1. Parse the `rnr_` prefix → `(runner_id, secret)`.
 //!   2. Fetch the `runners` row by id (rejecting revoked / soft-deleted rows).

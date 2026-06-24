@@ -107,7 +107,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         // Dual-use: `require_auth_middleware` has already resolved the
-        // principal — Bearer→introspection (machine PAT) *or* session cookie
+        // principal — Bearer (mekhan-native `uat_` user PAT) *or* session cookie
         // (browser) — and stashed it as a request extension. Consume that so a
         // plain `user: AuthUser` handler arg works for *both* client kinds
         // with no per-handler opt-in. This is what makes the GitOps/CI CLI
@@ -132,8 +132,8 @@ where
     }
 }
 
-/// A strictly **cookie-authenticated** principal — never the
-/// Bearer/introspection path, even behind `require_auth_middleware`. This is
+/// A strictly **cookie-authenticated** principal — never the Bearer/PAT
+/// path, even behind `require_auth_middleware`. This is
 /// the pre-dual-use `AuthUser` behaviour, now opt-in and explicit. Used only
 /// where a machine PAT must be refused: the `/api/v1/auth/tokens` endpoints, so a
 /// token can never be used to mint or revoke tokens (the privilege-escalation
@@ -150,7 +150,7 @@ where
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
         // Deliberately ignores any middleware-injected extension and the
-        // Bearer path: only a valid `mekhan_session` cookie authenticates.
+        // Bearer/PAT path: only a valid `mekhan_session` cookie authenticates.
         let state = AppState::from_ref(state);
         let jar = CookieJar::from_headers(&parts.headers);
         let mut user = state
@@ -212,8 +212,8 @@ pub async fn require_auth_middleware(
     // Platform root token path: a `plat_`-prefixed bearer matching the configured
     // `auth.platform_root_token` resolves to a synthetic platform-admin principal
     // (headless provisioning — CI / Terraform). Checked FIRST so a `plat_` bearer
-    // never leaks to Zitadel introspection. Disabled when no root token is set; a
-    // non-matching `plat_` bearer falls through to the cookie 401.
+    // never leaks to another credential path. Disabled when no root token is set;
+    // a non-matching `plat_` bearer falls through to the cookie 401.
     if let Some(token) = bearer_token(req.headers()) {
         if super::platform_root::matches_root_token(
             state.config.auth.platform_root_token.as_deref(),
@@ -225,24 +225,18 @@ pub async fn require_auth_middleware(
         }
     }
 
-    // Machine-PAT path for non-interactive clients (CI `mekhan apply`):
-    // RFC 7662 introspection against Zitadel, resolved to the *real* service
-    // user via the shared `PrincipalResolver` (same mapping the BFF callback
-    // uses). Disabled unless an introspection API credential is configured;
-    // a missing / invalid / inactive Bearer just falls through to the cookie
-    // path below (so browsers are unaffected and the failure surfaces as the
-    // normal cookie 401). The resolved principal is stashed as a request
-    // extension; the dual-use `AuthUser` `FromRequestParts` consumes it, so a
-    // plain `user: AuthUser` handler arg accepts *either* client. Endpoints
-    // that must stay browser-only use `CookieAuthUser` instead.
-    if let Some(verifier) = state.introspection.as_ref() {
-        if let Some(token) = bearer_token(req.headers()) {
-            if let Ok(claims) = verifier.verify(token).await {
-                let mut user = state.principal_resolver.resolve(claims).await?;
-                super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
-                req.extensions_mut().insert(user);
-                return Ok(next.run(req).await);
-            }
+    // User PAT path for non-interactive clients (CI `mekhan apply`): a
+    // `uat_`-prefixed bearer resolves against the local `user_pats` table to the
+    // OWNING human principal (mekhan-native, offline in dev_noop — this replaces
+    // the retired Zitadel RFC 7662 introspection path). Unlike the rnr_/wkr_
+    // machine paths below, a user PAT acts AS the human, so it honors the
+    // active-workspace cookie via `apply_override` exactly like the cookie path.
+    if let Some(token) = bearer_token(req.headers()) {
+        if token.starts_with("uat_") {
+            let mut user = super::user_pat::verify_user_pat(&state, token).await?;
+            super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
+            req.extensions_mut().insert(user);
+            return Ok(next.run(req).await);
         }
     }
 
