@@ -143,7 +143,6 @@ fn user(subject: &str) -> AuthUser {
         email: Some(format!("{subject}@test")),
         display_name: Some(subject.to_string()),
         roles: Vec::new(),
-        org_id: None,
         is_platform_admin: false,
         workspace_id: None,
         workspace_role: None,

@@ -18,8 +18,8 @@
 //! tenancy from the upstream IdP org. Membership now comes only from explicit
 //! sources — an invite the user accepts, an admin-granted `workspace_members`
 //! row, a workspace they create, or the personal workspace minted below. The
-//! `org_id` claim is dropped entirely (`AuthUser.org_id = None`); only role
-//! names are still lifted off the roles claim.
+//! IdP org claim is dropped entirely (mekhan tracks no org); only role names
+//! are still lifted off the roles claim.
 //!
 //! Earlier revisions also auto-joined every principal into the seeded `default`
 //! (nil) workspace and into every system workspace (`demos`). Both are gone:
@@ -103,11 +103,6 @@ impl PrincipalResolver for StaticPrincipalResolver {
             Some(Value::Object(roles_obj)) => roles_obj.keys().cloned().collect(),
             _ => Vec::new(),
         };
-        // `org_id` is no longer derived from the IdP — mekhan does not couple
-        // tenancy to the upstream org. Always `None`; the authoritative tenant
-        // is `workspace_id`, resolved from explicit `workspace_members` rows.
-        let org_id = None;
-
         // Legacy v5 hash as the provisional id. `DbPrincipalResolver` overwrites
         // it with the reconciled `users.id` (`resolve_user_id`) before any
         // handler runs; the bare static resolver (no DB) keeps the legacy value
@@ -119,7 +114,6 @@ impl PrincipalResolver for StaticPrincipalResolver {
             email,
             display_name,
             roles,
-            org_id,
             // The DB resolver wrapping this one stamps platform-admin from the
             // config allow-list; the bare static resolver never grants it.
             is_platform_admin: false,
@@ -702,10 +696,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn static_resolver_never_sets_org_id_and_lifts_roles() {
+    async fn static_resolver_lifts_role_names_ignoring_nested_org_ids() {
         // The roles claim is `{ "<role>": { "<org_id>": "<domain>" } }`. We
         // lift the role names but deliberately ignore the nested org ids —
-        // `org_id` is always `None` now that tenancy is decoupled from the IdP.
+        // tenancy is fully decoupled from the IdP.
         let mut roles = serde_json::Map::new();
         let mut org = serde_json::Map::new();
         org.insert("org-a".into(), Value::String("org-a.example".into()));
@@ -717,7 +711,6 @@ mod tests {
             .resolve(claims_with(extra))
             .await
             .unwrap();
-        assert_eq!(user.org_id, None);
         assert!(user.roles.contains(&"editor".to_string()));
     }
 }

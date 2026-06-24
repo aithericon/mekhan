@@ -17837,13 +17837,6 @@
             "type": "boolean",
             "description": "Whether this principal is a platform administrator — granted by the\n`auth.platform_admins` allow-list (subject or email) or the dev-noop\nseed. Gates platform-global governance affordances (the platform scope).\n`#[serde(default)]` keeps old session JSON deserializing to `false`."
           },
-          "org_id": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Legacy upstream identity-provider org id slot. No longer populated —\nmekhan does not derive tenancy from the IdP org. Always `None`; the\nauthoritative tenant is `workspace_id`, resolved from explicit\n`workspace_members` rows. Kept on the struct so old session JSON keeps\ndeserializing."
-          },
           "roles": {
             "type": "array",
             "items": {

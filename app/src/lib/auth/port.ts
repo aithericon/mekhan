@@ -23,8 +23,6 @@ export interface AuthUser {
 	/** Profile photo URL from the OIDC `picture` claim; absent → initials. */
 	avatarUrl?: string;
 	roles: string[];
-	/** Zitadel org the principal belongs to, when the IdP asserts one. */
-	orgId?: string;
 	/**
 	 * Mekhan workspace the session is currently scoped to. Populated by the
 	 * resolver from `workspace_members`, optionally overridden per-session
