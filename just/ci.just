@@ -282,6 +282,112 @@ build-frontend:
     fi
     echo "✓ Frontend built — $(du -sh build | cut -f1)"
 
+# ── CLI release (cross-compile the `mekhan` GitOps CLI + publish to Forgejo) ─
+#
+# `mekhan` is the GitOps CLI bin of mekhan-service (service/Cargo.toml,
+# src/bin/cli/main.rs — pull/apply/push/diff/run/openapi). The release stage
+# ships it as standalone static binaries for BOTH linux-musl arches so it can
+# be dropped onto any dev/CI box without a libc match.
+#
+#   aarch64 — native build using the musl gcc baked into the CI builder
+#             (same path as build-backend-service).
+#   x86_64  — cross-compiled FROM the ARM worker via cargo-zigbuild. A plain
+#             `cargo build --target x86_64-unknown-linux-musl` can't link the
+#             x86_64 C/asm objects of aws-lc-sys / ring / zstd-sys on an
+#             aarch64 host; zig supplies the x86_64-linux-musl C cross-toolchain.
+#             Same mechanism dev.just::slurm-up uses for the executor.
+#
+# Output: dist/cli/mekhan-cli-<target>{,.sha256}. CARGO_PROFILE_RELEASE_STRIP
+# strips via rustc (LLVM, target-aware) so we don't need a per-arch `strip`.
+build-cli:
+    #!/usr/bin/env bash
+    cd ..
+    source just/scripts/ci-cargo-env.sh
+    export CARGO_PROFILE_RELEASE_STRIP=symbols
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    dist="dist/cli"
+    rm -rf "$dist"; mkdir -p "$dist"
+
+    echo "▶ aarch64-unknown-linux-musl (native musl gcc)"
+    SQLX_OFFLINE=true cargo build --release \
+      --target aarch64-unknown-linux-musl \
+      --manifest-path service/Cargo.toml --bin mekhan
+
+    echo "▶ x86_64-unknown-linux-musl (cargo-zigbuild)"
+    command -v cargo-zigbuild >/dev/null 2>&1 || {
+      echo "✗ cargo-zigbuild not on PATH — rebuild the CI builder image" >&2
+      echo "  (deploy/docker/Dockerfile.ci-build → just ci::build-ci-builder)" >&2
+      exit 1; }
+    SQLX_OFFLINE=true cargo zigbuild --release \
+      --target x86_64-unknown-linux-musl \
+      --manifest-path service/Cargo.toml --bin mekhan
+
+    for t in aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+      src="$target_dir/$t/release/mekhan"
+      [ -f "$src" ] || { echo "✗ missing $src" >&2; exit 1; }
+      out="mekhan-cli-$t"
+      cp "$src" "$dist/$out"
+      ( cd "$dist" && sha256sum "$out" > "$out.sha256" )
+      echo "  ✓ $dist/$out ($(du -h "$dist/$out" | cut -f1))"
+    done
+    echo "✓ staged $(ls "$dist" | grep -c . ) files under $dist/"
+
+# Publish the dist/cli artifacts as a ROLLING Forgejo release for the branch.
+# Every push to a branch refreshes one release tagged `cli-<branch>` (cli-dev,
+# cli-main) at the pushed SHA — the release + its tag are recreated so the tag
+# always points at the latest build and stale assets never linger.
+#
+# Args:
+#   ref_slug   — branch name (CI sets CI_COMMIT_BRANCH)
+#   commit_sha — git SHA, used as the release's target commit + recorded in body
+#
+# Env:
+#   FORGEJO_URL        Forgejo base URL (default https://forge.aithericon.eu)
+#   FORGEJO_REPO       owner/name (CI sets FORGEJO_REPO=$CI_REPO)
+#   FORGEJO_API_TOKEN  Forgejo PAT with `write:repository` scope — REQUIRED.
+#                      In CI this reuses the registry token:
+#                        vault kv get -field=token secret/docker/registry
+#                      (`registry-token` carries write:repository + write:package).
+publish-cli-release ref_slug commit_sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    : "${FORGEJO_API_TOKEN:?set FORGEJO_API_TOKEN (Forgejo PAT, write:repository scope)}"
+    base="${FORGEJO_URL:-https://forge.aithericon.eu}"
+    repo="${FORGEJO_REPO:?set FORGEJO_REPO=owner/name (CI: \$CI_REPO)}"
+    api="$base/api/v1/repos/$repo"
+    tag="cli-{{ref_slug}}"
+    dist="dist/cli"
+    auth=(-H "Authorization: token $FORGEJO_API_TOKEN")
+    [ -d "$dist" ] && ls "$dist"/* >/dev/null 2>&1 || {
+      echo "✗ no artifacts in $dist — run \`just ci::build-cli\` first" >&2; exit 1; }
+
+    # Recreate the rolling release: drop any existing release + tag, then make a
+    # fresh one at this commit. Forgejo creates the tag from target_commitish.
+    rid=$(curl -sf "${auth[@]}" "$api/releases/tags/$tag" 2>/dev/null | jq -r '.id // empty' || true)
+    if [ -n "$rid" ]; then
+      echo "▶ deleting existing release #$rid ($tag)"
+      curl -sf "${auth[@]}" -X DELETE "$api/releases/$rid" >/dev/null || true
+    fi
+    curl -sf "${auth[@]}" -X DELETE "$api/tags/$tag" >/dev/null 2>&1 || true
+
+    echo "▶ creating release $tag @ {{commit_sha}}"
+    body=$'Rolling `mekhan` CLI build from `{{ref_slug}}` @ `{{commit_sha}}`.\n\nStatic linux-musl binaries (aarch64 + x86_64). Verify with the adjacent `.sha256`.'
+    rel=$(curl -sf "${auth[@]}" -H 'Content-Type: application/json' -X POST "$api/releases" \
+      -d "$(jq -n --arg t "$tag" --arg c "{{commit_sha}}" \
+                  --arg n "mekhan CLI ({{ref_slug}})" --arg b "$body" \
+            '{tag_name:$t, target_commitish:$c, name:$n, body:$b, draft:false, prerelease:true}')")
+    rid=$(jq -r '.id' <<<"$rel")
+    [ -n "$rid" ] && [ "$rid" != null ] || { echo "✗ release create failed: $rel" >&2; exit 1; }
+
+    for f in "$dist"/*; do
+      name=$(basename "$f")
+      echo "▶ uploading $name"
+      curl -sf "${auth[@]}" -X POST "$api/releases/$rid/assets?name=$name" \
+        -F "attachment=@$f;type=application/octet-stream" >/dev/null
+    done
+    echo "✓ published $(ls "$dist" | grep -c .) assets → $base/$repo/releases/tag/$tag"
+
 # ── GitOps: publish git-authored workflow templates ─────────────────────────
 
 # Build the mekhan CLI and `apply` every template directory under `dir` (each

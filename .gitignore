@@ -4,6 +4,9 @@ target/
 Cargo.lock.bak
 *.rs.bk
 
+# CLI release artifacts staged by `just ci::build-cli`
+dist/
+
 # Node
 node_modules/
 app/.output/
