@@ -158,11 +158,16 @@
 				toast.info('This pool has no backing net to repair.');
 			} else {
 				const armed = r.runners_rearmed + r.members_rearmed;
-				toast.success(
-					armed > 0
-						? `Pool net re-deployed · re-arming ${armed} live ${armed === 1 ? 'member' : 'members'} (capacity returns on next heartbeat).`
-						: 'Pool net re-deployed. No live members to re-arm.'
-				);
+				const parts = ['Pool net re-deployed'];
+				if (r.leases_reclaimed > 0)
+					parts.push(
+						`reclaimed ${r.leases_reclaimed} stale lease${r.leases_reclaimed === 1 ? '' : 's'}`
+					);
+				if (armed > 0)
+					parts.push(
+						`re-arming ${armed} live ${armed === 1 ? 'member' : 'members'} (capacity returns on next heartbeat)`
+					);
+				toast.success(parts.join(' · ') + '.');
 			}
 			await load();
 		} catch (e) {

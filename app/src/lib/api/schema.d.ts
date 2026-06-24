@@ -3553,12 +3553,19 @@ export interface paths {
          *     and every run that binds it starves on its lease. The same dead-end is
          *     reached when the resource was created while the engine was down.
          *
-         *     Repair is two idempotent steps, both safe to run on a HEALTHY pool:
+         *     Repair is three idempotent steps, all safe to run on a HEALTHY pool:
          *     1. RE-DEPLOY the backing pool net from the resource's persisted config
          *        (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is
          *        rebuilt — seeded with its token capacity, or as the capacity-less presence
          *        scaffold. This is the launch-time self-heal made operator-triggerable.
-         *     2. RE-ARM presence: every present runner / roster member admitted to this
+         *     2. RECLAIM stale held leases: every `in_use` token whose HOLDER instance is
+         *        terminal (completed/failed/cancelled) or gone is released back to the pool
+         *        via the net's own `t_release` (`reclaim_dead_holder_leases`). This is the
+         *        "cancel didn't release the lease" leak — the same release I injected by
+         *        hand during the prod incident. LIVE leases (holder still running) are
+         *        deliberately NOT reclaimed: yanking one would let the engine re-grant a
+         *        slot a runner is actively using.
+         *     3. RE-ARM presence: every present runner / roster member admitted to this
          *        pool is flipped to absent (WITHOUT an expire), so its next heartbeat
          *        re-acquires its capacity tokens through the proven absent→present path.
          *        The engine-count top-up there makes this idempotent — a pool that was not
@@ -11991,6 +11998,13 @@ export interface components {
              *     resource is a no-op repair). `false` means nothing was redeployed.
              */
             has_pool_net: boolean;
+            /**
+             * @description Number of stale held leases reclaimed — `in_use` tokens whose holder
+             *     instance was terminal (completed/failed/cancelled) or gone, released back
+             *     to the pool via the net's own `t_release`. Live leases (holder still
+             *     running) are never reclaimed.
+             */
+            leases_reclaimed: number;
             /**
              * @description Number of present roster members (human pools) re-armed to re-acquire on
              *     their next presence heartbeat.

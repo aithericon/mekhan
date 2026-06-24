@@ -1974,12 +1974,19 @@ pub async fn delete_resource(
 /// and every run that binds it starves on its lease. The same dead-end is
 /// reached when the resource was created while the engine was down.
 ///
-/// Repair is two idempotent steps, both safe to run on a HEALTHY pool:
+/// Repair is three idempotent steps, all safe to run on a HEALTHY pool:
 /// 1. RE-DEPLOY the backing pool net from the resource's persisted config
 ///    (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is
 ///    rebuilt — seeded with its token capacity, or as the capacity-less presence
 ///    scaffold. This is the launch-time self-heal made operator-triggerable.
-/// 2. RE-ARM presence: every present runner / roster member admitted to this
+/// 2. RECLAIM stale held leases: every `in_use` token whose HOLDER instance is
+///    terminal (completed/failed/cancelled) or gone is released back to the pool
+///    via the net's own `t_release` (`reclaim_dead_holder_leases`). This is the
+///    "cancel didn't release the lease" leak — the same release I injected by
+///    hand during the prod incident. LIVE leases (holder still running) are
+///    deliberately NOT reclaimed: yanking one would let the engine re-grant a
+///    slot a runner is actively using.
+/// 3. RE-ARM presence: every present runner / roster member admitted to this
 ///    pool is flipped to absent (WITHOUT an expire), so its next heartbeat
 ///    re-acquires its capacity tokens through the proven absent→present path.
 ///    The engine-count top-up there makes this idempotent — a pool that was not
@@ -2070,8 +2077,17 @@ pub async fn repair_pool(
     )
     .await;
 
-    // Step 2 — re-arm live presence so the next heartbeat re-injects capacity.
     let pool_net_id = crate::compiler::well_known::pool_net_id(row.id);
+
+    // Step 2 — reclaim STALE held leases: an `in_use` token whose holder instance
+    // is terminal/gone (the classic "cancel didn't release the lease" leak) is
+    // released back to the pool via the net's own `t_release`. LIVE leases (holder
+    // still running) are left alone — releasing one would let the engine re-grant
+    // a slot a runner is actively using.
+    let leases_reclaimed =
+        reclaim_dead_holder_leases(&state, &pool_net_id, deploy_workspace).await;
+
+    // Step 3 — re-arm live presence so the next heartbeat re-injects capacity.
     let runners_rearmed = state.runner_presence.rearm_pool(&pool_net_id).await;
     let members_rearmed = state.human_presence.rearm_pool(&pool_net_id).await;
 
@@ -2079,9 +2095,10 @@ pub async fn repair_pool(
         resource_id = %row.id,
         %pool_net_id,
         has_pool_net,
+        leases_reclaimed,
         runners_rearmed,
         members_rearmed,
-        "pool repair: net re-ensured + presence re-armed"
+        "pool repair: net re-ensured + stale leases reclaimed + presence re-armed"
     );
 
     Ok(Json(RepairPoolResponse {
@@ -2089,7 +2106,104 @@ pub async fn repair_pool(
         has_pool_net,
         runners_rearmed,
         members_rearmed,
+        leases_reclaimed,
     }))
+}
+
+/// Read the pool net's `in_use` place and, for every held lease whose HOLDER is
+/// terminal or gone, inject a `release{grant_id}` into the pool's `release_inbox`
+/// so the net's own `t_release` returns the unit to `pool`. The targeted, safe
+/// reap (pool repair): a lease whose holder is still `created`/`running` is LEFT
+/// UNTOUCHED — yanking a live lease would let the engine re-grant a slot a runner
+/// is actively using. Reads through the engine (the leak-free authority), never
+/// mekhan's in-memory view. Returns the number of leases released.
+async fn reclaim_dead_holder_leases(
+    state: &AppState,
+    pool_net_id: &str,
+    workspace: Uuid,
+) -> usize {
+    use crate::presence::core::{inject_bridge, PoolInjection};
+
+    let Some(net_state) = state.petri.try_get_state(pool_net_id).await else {
+        // Engine down or net missing — nothing readable to reclaim (a net that was
+        // wiped has no held tokens anyway; the redeploy already handled that).
+        return 0;
+    };
+    let Ok(marking) = serde_json::to_value(&net_state.marking) else {
+        return 0;
+    };
+    let Some(held) = marking["tokens"]["in_use"].as_array() else {
+        return 0;
+    };
+
+    let ws = workspace.to_string();
+    let mut released = 0usize;
+    let mut seen = HashSet::new();
+    for tok in held {
+        let Some(grant_id) = tok["color"]["value"]["grant_id"].as_str() else {
+            continue;
+        };
+        // Each held grant is unique, but guard against a malformed marking
+        // double-listing a token (we'd otherwise inject two identical releases).
+        if !seen.insert(grant_id.to_string()) {
+            continue;
+        }
+        // grant_id == `<holder_net_id>:<holder_node_id>` (lease_bridge lowers it
+        // as `input._instance_id + ":" + <node_id>`); the holder net id is the
+        // segment before the FIRST ':'.
+        let holder_net_id = grant_id.split(':').next().unwrap_or(grant_id);
+        if !holder_is_dead(&state.db, holder_net_id).await {
+            continue; // live holder — never yank an active lease
+        }
+        // A stable dedup keyed on the grant so two repair clicks don't double
+        // inject. Once `t_release` consumes the held token the grant is gone, and
+        // the holder (terminal) never re-acquires under the same grant_id, so a
+        // late duplicate can match nothing.
+        let inj = PoolInjection {
+            source_net_id: "mekhan-pool-repair",
+            source_place_name: "release",
+            token_color: serde_json::json!({ "grant_id": grant_id }),
+            signal_key: format!("pool-repair-release-{grant_id}"),
+            dedup_id: format!("pool-repair-release:{grant_id}"),
+        };
+        inject_bridge(
+            &state.nats,
+            &ws,
+            pool_net_id,
+            crate::compiler::well_known::POOL_RELEASE_INBOX,
+            inj,
+            "pool repair release",
+        )
+        .await;
+        released += 1;
+    }
+
+    if released > 0 {
+        tracing::info!(%pool_net_id, released, "pool repair: reclaimed stale held leases");
+    }
+    released
+}
+
+/// Whether a lease holder net is TERMINAL or GONE — i.e. safe to reclaim its
+/// lease. A holder still `created`/`running` is LIVE → `false` (skip, never yank
+/// an active lease). A missing row (the holder net no longer exists) is treated
+/// as gone → reclaimable: an orphaned lease can never be released by a holder
+/// finalizer, so the repair is the only path back.
+async fn holder_is_dead(db: &sqlx::PgPool, holder_net_id: &str) -> bool {
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM instances WHERE net_id = $1")
+            .bind(holder_net_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten();
+    match status.as_deref() {
+        Some("completed") | Some("failed") | Some("cancelled") => true,
+        // created / running — a live holder; leave its lease alone.
+        Some(_) => false,
+        // No such net: the holder is gone → its lease is orphaned, reclaim it.
+        None => true,
+    }
 }
 
 /// `PATCH /api/v1/resources/{id}/scope` — reparent a resource to a different
