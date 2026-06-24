@@ -28,6 +28,7 @@
 	import ArrowUpRight from '@lucide/svelte/icons/arrow-up-right';
 	import Pencil from '@lucide/svelte/icons/pencil';
 	import Trash2 from '@lucide/svelte/icons/trash-2';
+	import Wrench from '@lucide/svelte/icons/wrench';
 	import MachinesTable from '$lib/components/fleet/MachinesTable.svelte';
 	import PoolMembersHumans from '$lib/components/fleet/PoolMembersHumans.svelte';
 	import InterfacesCatalog from '$lib/components/fleet/InterfacesCatalog.svelte';
@@ -37,7 +38,7 @@
 	import { fmtDate } from '$lib/components/fleet/format';
 	import { listCapacities, type CapacitySummary } from '$lib/api/capacities';
 	import { isPlatformCapacity, canMutateCapacity } from '$lib/api/resource-tier';
-	import { deleteResource } from '$lib/api/resources';
+	import { deleteResource, repairPool } from '$lib/api/resources';
 	import {
 		listRegistrationTokens,
 		revokeRegistrationToken,
@@ -60,6 +61,7 @@
 	// Edit via the same kind-switcher modal the list page uses (edit mode).
 	let editOpen = $state(false);
 	let deleting = $state(false);
+	let repairing = $state(false);
 
 	// Human pools: the band's "Enroll member" forwards into the roster
 	// component's exported openEnroll() (it owns the HumanEnrollSheet).
@@ -144,6 +146,29 @@
 			toast.error(`Delete failed: ${e instanceof Error ? e.message : e}`);
 		} finally {
 			deleting = false;
+		}
+	}
+
+	async function handleRepair() {
+		if (repairing) return;
+		repairing = true;
+		try {
+			const r = await repairPool(resourceId);
+			if (!r.has_pool_net) {
+				toast.info('This pool has no backing net to repair.');
+			} else {
+				const armed = r.runners_rearmed + r.members_rearmed;
+				toast.success(
+					armed > 0
+						? `Pool net re-deployed · re-arming ${armed} live ${armed === 1 ? 'member' : 'members'} (capacity returns on next heartbeat).`
+						: 'Pool net re-deployed. No live members to re-arm.'
+				);
+			}
+			await load();
+		} catch (e) {
+			toast.error(`Repair failed: ${e instanceof Error ? e.message : e}`);
+		} finally {
+			repairing = false;
 		}
 	}
 
@@ -455,6 +480,39 @@
 								{/each}
 							</div>
 						{/if}
+					</section>
+				{/if}
+
+				<!-- Recovery — re-ensure the backing pool net + re-arm live presence.
+					 For a pool whose engine net was lost (a NATS reset) or drifted: the
+					 runners keep heartbeating but the empty net never regains capacity
+					 until something re-acquires them. Idempotent — safe on a healthy
+					 pool. Only pools with a backing net can be repaired. -->
+				{#if canCurate && hasPoolNet}
+					<section class="space-y-2">
+						<h4 class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
+							Recovery
+						</h4>
+						<div
+							class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card px-4 py-3"
+						>
+							<p class="max-w-prose text-sm text-muted-foreground">
+								Re-deploy this pool's backing net and re-acquire its machines'
+								capacity. Use after an engine reset left the pool empty or stuck.
+								Safe to run when healthy.
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								class="shrink-0 gap-1.5"
+								onclick={handleRepair}
+								disabled={repairing}
+								data-testid="pool-repair-button"
+							>
+								<Wrench class="size-3.5" />
+								{repairing ? 'Repairing…' : 'Repair pool'}
+							</Button>
+						</div>
 					</section>
 				{/if}
 

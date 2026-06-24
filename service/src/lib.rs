@@ -99,17 +99,9 @@ pub struct AppState {
     /// JWT verifier — still used, but only internally by the BFF callback to
     /// verify the token the IdP returns before caching the `AuthUser`.
     pub token_verifier: Arc<dyn TokenVerifier>,
-    /// Claims → `AuthUser` mapper. Reused unchanged by the BFF callback and
-    /// the introspection Bearer path.
+    /// Claims → `AuthUser` mapper. Reused unchanged by the BFF callback to map
+    /// the IdP token after the OIDC login flow.
     pub principal_resolver: Arc<dyn PrincipalResolver>,
-    /// RFC 7662 introspection for machine PATs (CI `mekhan apply`). `None`
-    /// unless an introspection API credential is configured — then the
-    /// Bearer path in `require_auth_middleware` is disabled.
-    pub introspection: Option<Arc<crate::auth::IntrospectionVerifier>>,
-    /// Zitadel Management broker for the embedded `/api/v1/auth/tokens` feature
-    /// (per-user automation PATs). `None` unless `auth.broker_pat` is
-    /// configured — then those endpoints 503 and the SPA hides the section.
-    pub zitadel_mgmt: Option<Arc<crate::auth::ZitadelMgmt>>,
     pub triggers: Arc<TriggerDispatcher>,
     /// In-flight WaitForResult waiters, shared with the lifecycle consumer.
     pub result_waiters: Arc<crate::triggers::ResultWaiters>,
@@ -532,6 +524,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::move_resource))
+        .routes(routes!(handlers::resources::repair_pool))
         .routes(routes!(handlers::resources::list_resource_audit))
         // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
         // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router

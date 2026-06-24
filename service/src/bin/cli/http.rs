@@ -1,10 +1,11 @@
 //! Shared HTTP auth for the CLI.
 //!
 //! The CLI is a non-interactive client. Against an auth-enabled server every
-//! request needs the Zitadel service-user PAT, supplied as `MEKHAN_CLI_TOKEN`
-//! and validated server-side via RFC 7662 introspection (the dual-use
-//! `AuthUser` extractor accepts it exactly like a browser session cookie).
-//! No-op when the env var is unset — local `dev_noop` servers need no token.
+//! request needs a mekhan-native user PAT (`uat_...`), supplied as
+//! `MEKHAN_CLI_TOKEN` and validated server-side against the local `user_pats`
+//! table (the dual-use `AuthUser` extractor accepts it exactly like a browser
+//! session cookie). No-op when the env var is unset — local `dev_noop` servers
+//! need no token.
 
 use anyhow::{Context, Result};
 use reqwest::RequestBuilder;

@@ -3532,6 +3532,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources/{id}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/resources/{id}/repair` — operator recovery for a POOL resource
+         *     (a `capacity`) whose backing engine net was lost or drifted.
+         * @description The recurring failure this fixes: an engine NATS reset (a `just dev reset`,
+         *     or a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled
+         *     against the pool keep heartbeating. mekhan's presence map still holds them as
+         *     `present`, so the heartbeat fast path only bumps `last_seen` — a
+         *     `presence_acquire` is injected ONLY on the absent→present edge — and the
+         *     freshly-empty pool net never regains capacity. The pool sits at `0` forever
+         *     and every run that binds it starves on its lease. The same dead-end is
+         *     reached when the resource was created while the engine was down.
+         *
+         *     Repair is two idempotent steps, both safe to run on a HEALTHY pool:
+         *     1. RE-DEPLOY the backing pool net from the resource's persisted config
+         *        (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is
+         *        rebuilt — seeded with its token capacity, or as the capacity-less presence
+         *        scaffold. This is the launch-time self-heal made operator-triggerable.
+         *     2. RE-ARM presence: every present runner / roster member admitted to this
+         *        pool is flipped to absent (WITHOUT an expire), so its next heartbeat
+         *        re-acquires its capacity tokens through the proven absent→present path.
+         *        The engine-count top-up there makes this idempotent — a pool that was not
+         *        actually lost re-arms to the same marking instead of double-admitting.
+         *
+         *     Auth mirrors `delete_resource`: platform admin for a platform-scoped pool,
+         *     `Editor` on the resource ACL for a tenant pool.
+         */
+        post: operations["repair_pool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/resources/{id}/rotate": {
         parameters: {
             query?: never;
@@ -5475,10 +5517,13 @@ export interface paths {
         put?: never;
         /**
          * POST /api/v1/workspaces/{id}/members
-         * @description Adds a member identified by OIDC `subject`. Server derives `user_id`
-         *     via `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)` so this works for
-         *     principals that haven't yet logged into mekhan. Upserts so calling
-         *     twice with a different role flips the role rather than failing.
+         * @description Adds a member identified by OIDC `subject`. Server resolves `user_id`
+         *     through the identity spine — an existing `(provider, subject)` link wins
+         *     (so reconciled / re-provisioned users get the membership on their real
+         *     `users.id`), falling back to `uuid_v5(SUBJECT_UUID_NAMESPACE, subject)`
+         *     when no identity is linked yet so this still works for principals that
+         *     haven't logged into mekhan. Upserts so calling twice with a different role
+         *     flips the role rather than failing.
          */
         post: operations["add_member"];
         delete?: never;
@@ -7562,14 +7607,11 @@ export interface components {
         };
         /** @description Request body for `POST /api/v1/auth/tokens`. */
         CreateTokenRequest: {
-            /** @description Optional longer note — stored as the machine-user `description`. */
+            /** @description Optional longer note — stored as `user_pats.description`. */
             description?: string | null;
-            /** @description Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry. */
+            /** @description Optional RFC 3339 expiry for the token. Omit for no expiry. */
             expires_at?: string | null;
-            /**
-             * @description Human-friendly label — stored as the backing Zitadel machine-user
-             *     `name`, shown in the token list.
-             */
+            /** @description Human-friendly label — stored as `user_pats.name`, shown in the list. */
             name: string;
         };
         /** @description Request body for `POST /api/v1/workers/registration-tokens`. */
@@ -7633,7 +7675,10 @@ export interface components {
             expires_at?: string | null;
             id: string;
             name: string;
-            /** @description The Personal Access Token. Present only here, only once. */
+            /**
+             * @description The Personal Access Token (`uat_{id}.{secret}`). Present only here, only
+             *     once — mekhan stores only the SHA-256 of the secret half.
+             */
             secret: string;
         };
         /**
@@ -11943,6 +11988,31 @@ export interface components {
             uses: number;
         };
         /**
+         * @description Outcome of `POST /api/v1/resources/{id}/repair` — operator recovery for a
+         *     pool whose backing net was lost or drifted. Reports the deterministic pool
+         *     net id that was (re)deployed and how many live presence sources were re-armed
+         *     to re-acquire their capacity on their next heartbeat.
+         */
+        RepairPoolResponse: {
+            /**
+             * @description Whether the resource resolves to a backing pool net at all (a non-pool
+             *     resource is a no-op repair). `false` means nothing was redeployed.
+             */
+            has_pool_net: boolean;
+            /**
+             * @description Number of present roster members (human pools) re-armed to re-acquire on
+             *     their next presence heartbeat.
+             */
+            members_rearmed: number;
+            /** @description The backing pool net id (`pool-<resource_id>`) that was re-ensured. */
+            pool_net_id: string;
+            /**
+             * @description Number of present runners (machine pools) re-armed to re-acquire their
+             *     capacity tokens on their next heartbeat.
+             */
+            runners_rearmed: number;
+        };
+        /**
          * @description Request body for `PUT /api/v1/assets/{id}/records`. Replaces (or appends to)
          *     the record set; bumps `version` and validates each row against the type's
          *     schema.
@@ -13818,13 +13888,13 @@ export interface components {
         };
         /** @description One token row in `GET /api/v1/auth/tokens`. Never carries the secret. */
         TokenSummary: {
-            /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
+            /** @description RFC 3339 creation timestamp. */
             created_at?: string | null;
             description?: string | null;
-            /** @description RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it). */
+            /** @description RFC 3339 token expiry — omitted when the token never expires. */
             expires_at?: string | null;
             /**
-             * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
+             * @description Opaque token id (the `user_pats.id`). Pass back to
              *     `DELETE /api/v1/auth/tokens/{id}` to revoke.
              */
             id: string;
@@ -16524,15 +16594,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Token management disabled */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
         };
     };
     create_token: {
@@ -16557,26 +16618,17 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedToken"];
                 };
             };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description No session */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Identity provider error */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Token management disabled */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16616,15 +16668,6 @@ export interface operations {
             };
             /** @description Unknown token, or not the caller's */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Token management disabled */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23070,6 +23113,47 @@ export interface operations {
                 };
             };
             /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    repair_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pool (capacity) resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pool net re-ensured + presence re-armed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairPoolResponse"];
+                };
+            };
+            /** @description Editor role (tenant) or platform admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
             404: {
                 headers: {
                     [name: string]: unknown;

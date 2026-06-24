@@ -1,6 +1,7 @@
 //! Integration tests for the embedded `/api/v1/auth/tokens` endpoints, driving
-//! the real router (so `require_auth_middleware` + the `AuthUser` cookie
-//! extractor are exercised) with the broker pointed at a wiremock Zitadel.
+//! the real router (so `require_auth_middleware` + the `AuthUser`/`CookieAuthUser`
+//! extractors are exercised) against the mekhan-native `user_pats` store — no
+//! Zitadel, no wiremock.
 //!
 //! Requires Postgres/NATS test infra (`just -f aithericon-test-infra/justfile
 //! up`) because the app is built with the full `AppState`.
@@ -14,11 +15,8 @@ use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
-use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
 
-use mekhan_service::auth::mgmt::token_user_prefix;
-use mekhan_service::auth::ZitadelMgmt;
+use common::mock_auth::MockAuthenticator;
 
 async fn body_json(body: Body) -> Value {
     let bytes = body.collect().await.unwrap().to_bytes();
@@ -28,60 +26,20 @@ async fn body_json(body: Body) -> Value {
 /// The subject `MockAuthenticator::cookie_required` resolves any cookie to.
 const COOKIE_USER: &str = "cookie-user";
 
+/// Build a router whose cookie `Authenticator` requires a cookie (so a bare
+/// Bearer 401s on the token-management endpoints), backing the mekhan-native
+/// `user_pats` store.
+async fn token_app() -> axum::Router {
+    let (app, _db) = common::test_app_with_authenticator(Arc::new(
+        MockAuthenticator::cookie_required(COOKIE_USER),
+    ))
+    .await;
+    app
+}
+
 #[tokio::test]
 async fn create_list_revoke_round_trip_over_cookie_auth() {
-    let zitadel = MockServer::start().await;
-    let prefix = token_user_prefix(COOKIE_USER);
-    let owned_username = format!("{prefix}deadbeef");
-
-    // create_token: machine user → PAT.
-    Mock::given(method("POST"))
-        .and(path("/management/v1/users/machine"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "userId": "u-1" })))
-        .mount(&zitadel)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/management/v1/users/u-1/pats"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_body_json(json!({ "tokenId": "t-1", "token": "the-secret" })),
-        )
-        .mount(&zitadel)
-        .await;
-    // list_tokens: search + best-effort per-token expiry.
-    Mock::given(method("POST"))
-        .and(path("/v2/users"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "result": [{
-                "userId": "u-1",
-                "username": owned_username,
-                "details": { "creationDate": "2026-05-17T10:00:00Z" },
-                "machine": { "name": "ci", "description": "" }
-            }]
-        })))
-        .mount(&zitadel)
-        .await;
-    Mock::given(method("POST"))
-        .and(path("/management/v1/users/u-1/pats/_search"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "result": [] })))
-        .mount(&zitadel)
-        .await;
-    // revoke_token: ownership probe (owned) + delete.
-    Mock::given(method("GET"))
-        .and(path("/v2/users/u-1"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "user": { "userId": "u-1", "username": owned_username }
-        })))
-        .mount(&zitadel)
-        .await;
-    Mock::given(method("DELETE"))
-        .and(path("/management/v1/users/u-1"))
-        .respond_with(ResponseTemplate::new(200))
-        .mount(&zitadel)
-        .await;
-
-    let mgmt = Arc::new(ZitadelMgmt::new(&zitadel.uri(), "bp".into()).unwrap());
-    let (app, _db) = common::test_app_with_mgmt(mgmt).await;
+    let app = token_app().await;
 
     // Create (cookie present ⇒ authenticated as COOKIE_USER).
     let resp = app
@@ -99,10 +57,15 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
         .unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
     let created = body_json(resp.into_body()).await;
-    assert_eq!(created["id"], "u-1");
-    assert_eq!(created["secret"], "the-secret");
+    assert_eq!(created["name"], "ci");
+    let secret = created["secret"].as_str().expect("secret present");
+    assert!(
+        secret.starts_with("uat_"),
+        "minted secret must be a mekhan-native PAT, got {secret}"
+    );
+    let token_id = created["id"].as_str().expect("id present").to_string();
 
-    // List.
+    // List — exactly one, no secret leaked.
     let resp = app
         .clone()
         .oneshot(
@@ -118,7 +81,8 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
     assert_eq!(resp.status(), StatusCode::OK);
     let list = body_json(resp.into_body()).await;
     assert_eq!(list.as_array().unwrap().len(), 1);
-    assert_eq!(list[0]["id"], "u-1");
+    assert_eq!(list[0]["id"], token_id);
+    assert_eq!(list[0]["name"], "ci");
     assert!(
         list[0].get("secret").is_none(),
         "list must not leak secrets"
@@ -126,10 +90,11 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
 
     // Revoke.
     let resp = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/auth/tokens/u-1")
+                .uri(format!("/api/v1/auth/tokens/{token_id}"))
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::empty())
                 .unwrap(),
@@ -137,23 +102,37 @@ async fn create_list_revoke_round_trip_over_cookie_auth() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NO_CONTENT);
+
+    // List again — now empty (the revoked row is filtered out).
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/auth/tokens")
+                .header("cookie", "mekhan_session=valid")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let list = body_json(resp.into_body()).await;
+    assert_eq!(list.as_array().unwrap().len(), 0);
 }
 
 #[tokio::test]
 async fn bearer_without_cookie_cannot_reach_token_endpoints() {
-    // No Zitadel interaction should ever happen: the cookie gate rejects
-    // first. `introspection: None` in the seam means a Bearer is never even
-    // tried — this is the privilege-escalation guard (a PAT can't mint PATs).
-    let zitadel = MockServer::start().await;
-    let mgmt = Arc::new(ZitadelMgmt::new(&zitadel.uri(), "bp".into()).unwrap());
-    let (app, _db) = common::test_app_with_mgmt(mgmt).await;
+    // The token-management endpoints use `CookieAuthUser`: a Bearer never
+    // authenticates them, even a valid `uat_` PAT. This is the
+    // privilege-escalation guard — a token can't mint or revoke tokens.
+    let app = token_app().await;
 
     let resp = app
         .oneshot(
             Request::builder()
                 .method("GET")
                 .uri("/api/v1/auth/tokens")
-                .header("authorization", "Bearer some-pat")
+                .header("authorization", "Bearer uat_not-a-real-token")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -163,33 +142,15 @@ async fn bearer_without_cookie_cannot_reach_token_endpoints() {
 }
 
 #[tokio::test]
-async fn revoking_another_users_token_id_is_404() {
-    let zitadel = MockServer::start().await;
-    // The id resolves to a machine user under a *different* subject's prefix.
-    Mock::given(method("GET"))
-        .and(path("/v2/users/u-bob"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "user": { "userId": "u-bob", "username": "mekhan-tok-bob-cafef00d" }
-        })))
-        .mount(&zitadel)
-        .await;
-    // DELETE must never fire — if it does, wiremock returns 404 and the test
-    // still asserts NOT_FOUND, but the ownership guard should stop us first.
-    Mock::given(method("DELETE"))
-        .and(path("/management/v1/users/u-bob"))
-        .respond_with(ResponseTemplate::new(200))
-        .expect(0)
-        .mount(&zitadel)
-        .await;
-
-    let mgmt = Arc::new(ZitadelMgmt::new(&zitadel.uri(), "bp".into()).unwrap());
-    let (app, _db) = common::test_app_with_mgmt(mgmt).await;
+async fn revoking_a_random_token_id_is_404() {
+    let app = token_app().await;
+    let random = uuid::Uuid::new_v4();
 
     let resp = app
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri("/api/v1/auth/tokens/u-bob")
+                .uri(format!("/api/v1/auth/tokens/{random}"))
                 .header("cookie", "mekhan_session=valid")
                 .body(Body::empty())
                 .unwrap(),
@@ -197,4 +158,71 @@ async fn revoking_another_users_token_id_is_404() {
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn creating_a_token_with_a_blank_name_is_400() {
+    // The only validation branch on these endpoints: an empty/whitespace name
+    // is rejected before the DB is touched.
+    let app = token_app().await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/tokens")
+                .header("content-type", "application/json")
+                .header("cookie", "mekhan_session=valid")
+                .body(Body::from(json!({ "name": "   " }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn minted_pat_authenticates_a_protected_endpoint() {
+    // End-to-end: mint a `uat_` PAT over cookie auth, then present it as a
+    // Bearer on a normal authenticated endpoint — exercising the middleware
+    // `uat_` branch + `verify_user_pat` reconstructing the human principal.
+    let app = token_app().await;
+
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/tokens")
+                .header("content-type", "application/json")
+                .header("cookie", "mekhan_session=valid")
+                .body(Body::from(json!({ "name": "automation" }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let created = body_json(resp.into_body()).await;
+    let secret = created["secret"]
+        .as_str()
+        .expect("secret present")
+        .to_string();
+
+    // GET /api/v1/workspaces with the PAT as a Bearer — no cookie.
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri("/api/v1/workspaces")
+                .header("authorization", format!("Bearer {secret}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "a minted uat_ PAT must authenticate the same endpoints the cookie does"
+    );
 }

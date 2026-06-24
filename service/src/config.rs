@@ -327,25 +327,6 @@ pub struct AuthConfig {
     /// clients that still send a Bearer (future).
     #[serde(default)]
     pub cors_origins: Vec<String>,
-    /// OIDC client_id of the confidential **API application** Mekhan uses to
-    /// authenticate itself when calling Zitadel's token-introspection
-    /// endpoint (RFC 7662) to validate machine PATs (CI `mekhan apply`).
-    /// Distinct from the public SPA `client_id`. Unset ⇒ the Bearer
-    /// introspection path is disabled (cookie auth only).
-    #[serde(default)]
-    pub introspection_client_id: Option<String>,
-    /// Client secret of that API application (HTTP Basic on the introspect
-    /// call). Provisioned by `deploy/zitadel/bootstrap.sh`.
-    #[serde(default)]
-    pub introspection_client_secret: Option<String>,
-    /// Personal Access Token of the dedicated `mekhan-token-broker` Zitadel
-    /// service user. Mekhan presents this as a Bearer when brokering the
-    /// embedded `/api/v1/auth/tokens` feature (creating the per-token machine
-    /// users + their PATs via the Management API). Provisioned by
-    /// `deploy/zitadel/bootstrap.sh`. Unset ⇒ token management is disabled
-    /// (the endpoints 503 and the UI hides the section).
-    #[serde(default)]
-    pub broker_pat: Option<String>,
     /// Platform-administrator allow-list. Each entry matches a principal's
     /// OIDC `subject` OR `email`; a match sets `AuthUser.is_platform_admin`,
     /// gating platform-global governance (the platform scope). Empty (the
@@ -390,9 +371,6 @@ impl Default for AuthConfig {
             cookie_secure: false,
             cookie_domain: None,
             cors_origins: Vec::new(),
-            introspection_client_id: None,
-            introspection_client_secret: None,
-            broker_pat: None,
             platform_admins: Vec::new(),
             platform_root_token: None,
             auto_join_system_workspaces: false,
@@ -607,8 +585,10 @@ mod platform_admins_env_tests {
     }
 
     fn parse(env: &[(&str, &str)]) -> Vec<String> {
-        let map: std::collections::HashMap<String, String> =
-            env.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+        let map: std::collections::HashMap<String, String> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
         let cfg = Config::builder()
             .add_source(
                 Environment::with_prefix("MEKHAN")
