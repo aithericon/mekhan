@@ -1,0 +1,57 @@
+# =============================================================================
+# CLI release — cross-compile the `mekhan` GitOps CLI, publish to Forgejo
+# =============================================================================
+# Builds the `mekhan` CLI bin (service/Cargo.toml → src/bin/cli/main.rs:
+# pull/apply/push/diff/run/openapi) as static linux-musl binaries for BOTH
+# arches and uploads them as a ROLLING Forgejo release.
+#
+# Trigger: every push to dev/main (+ manual). Each push refreshes one release
+# per branch — `cli-dev` / `cli-main` — recreating the tag at the pushed SHA so
+# it always points at the latest build. (This is the rolling-artifacts model;
+# switch the recipe to a `v*` tag trigger if you later want immutable releases.)
+#
+# Independent of 30-build (no image needed), so it runs in parallel. Its own
+# CARGO_TARGET_DIR keeps it from contending on 30-build's target lock; sccache
+# still gives shared-crate cache hits across the two dirs.
+#
+# Release auth: a dedicated Forgejo PAT with `write:repository` scope, stored at
+# vault `secret/forgejo/api` (field `token`). The container-registry token
+# (secret/docker/registry) is package-scoped only and the release API rejects
+# it (HTTP 403), so releases get their own token:
+#   vault kv put secret/forgejo/api token=<PAT-with-write:repository>
+# =============================================================================
+
+when:
+  - branch: [dev, main]
+    event: push
+  - event: manual
+
+labels:
+  role: build
+  host: worker-stateful-arm
+
+steps:
+  - name: build-cli
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      CARGO_HOME: /woodpecker/cache/cargo
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan-cli
+    commands:
+      - just ci::build-cli
+    depends_on: []
+
+  - name: publish-cli
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      VAULT_ADDR: "http://10.20.0.20:8200"
+      VAULT_TOKEN:
+        from_secret: vault_token
+      CARGO_TARGET_DIR: /woodpecker/cache/target/mekhan-cli
+      FORGEJO_URL: "https://forge.aithericon.eu"
+    commands:
+      - export FORGEJO_REPO="$CI_REPO"
+      - export FORGEJO_API_TOKEN=$(vault kv get -field=token secret/forgejo/api)
+      - just ci::publish-cli-release "$CI_COMMIT_BRANCH" "$CI_COMMIT_SHA"
+    depends_on: [build-cli]

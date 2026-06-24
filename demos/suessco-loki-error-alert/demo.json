@@ -1,6 +1,0 @@
-{
-  "templateId": "00000000-0000-0000-0000-0000000000a2",
-  "folder": "integrations",
-  "name": "Suessco Loki Error-Log Alert",
-  "description": "Scheduled error-log email alert for the Suessco prod cluster, run by a cross-cluster worker: Cron (every 12h) → Loki query for error/fatal/panic lines → Agent incident summary → Decision (email only if errors found) → SMTP send. The Loki step pins deploymentModel.group `suessco`, so it dispatches to the executor enrolled in mekhan's `suessco` worker pool — that worker runs inside the Suessco cluster and reaches its in-cluster Loki locally. The agent uses Hugging Face Inference (provider: openai, resource `hf_inference`, model Qwen/Qwen2.5-7B-Instruct) billed to the `Aithericon` HF org via X-HF-Bill-To. Requires workspace resources `suessco_loki` (loki), `hf_inference` (openai) and `mail` (smtp), all auto-seeded from demos/resources/; provide a real HF token + SMTP relay for production use."
-}

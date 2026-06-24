@@ -1,7 +1,7 @@
-# Suessco Loki Error-Log Alert
+# Suessco Dev Loki Error-Log Alert
 
-Scheduled error-log alert for the **Suessco** prod cluster, driven by a
-**cross-cluster worker**. Same shape as the `loki-error-alert` demo, but the
+Scheduled error-log alert for the **dev** environment of the **Suessco** cluster,
+driven by a **cross-cluster worker**. Same shape as the `aithericon-loki-error-alert` demo, but the
 Loki query runs on an executor that lives *inside the Suessco cluster* and
 enrolls into this mekhan's `suessco` worker pool — so it reaches Suessco's
 in-cluster Loki locally while the control plane stays on aithericon.
@@ -95,7 +95,7 @@ The agent step (no group) stays on the aithericon side.
 This template has **no HumanTask sidecars**, so it applies directly:
 
 ```bash
-mekhan apply demos/suessco-loki-error-alert/
+mekhan apply demos/suessco-dev-loki-error-alert/
 ```
 
 It is also seeded automatically at service startup (`MEKHAN__DEMOS__SEED=true`),

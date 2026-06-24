@@ -1,4 +1,4 @@
-# Loki Error-Log Alert
+# Aithericon Loki Error-Log Alert
 
 Scheduled error-log alert for the Aithericon cluster. Composes the **cron
 trigger**, the **Loki/LogQL backend**, an **Agent**, and the **SMTP backend**
@@ -23,11 +23,12 @@ Cron(12h) → Start{fire_time} → Loki query_range → Agent(summarize) → Dec
    and a few hundred entries overflow a typical 32K-token model context.
 3. **summarize** — a single-shot Agent (`maxTurns: 1`, no tools) reads
    `{{ query_logs.entries }}` / `{{ query_logs.entry_count }}` and writes a
-   concise incident summary into its `response` output. Bound to the in-cluster
-   **inference router** (`provider: internal`, `resourceAlias:
-   internal_pool_router`, model `qwen3.5:9b`) — the GDPR-safe internal-LLM
-   pattern from demo 37; inference never leaves the router and the compiler
-   emits the OpenAI-compatible wire shape.
+   concise incident summary into its `response` output. Bound to **Hugging Face
+   Inference** (`provider: openai`, `resourceAlias: hf_inference`, model
+   `Qwen/Qwen2.5-7B-Instruct`) — the same agent binding as the suessco sibling.
+   Usage is billed to the **`Aithericon` HF org** via the `X-HF-Bill-To` header
+   (emitted from the resource's `organization` field), so it draws the org's
+   credits instead of the token owner's depletable personal allowance.
 4. **has_errors** — a Decision node that gates the email on whether the Loki
    query actually returned error lines. The query already filters for
    error/fatal/panic/exception, so the guard `query_logs.entry_count > 0` means
@@ -37,6 +38,9 @@ Cron(12h) → Start{fire_time} → Loki query_range → Agent(summarize) → Dec
 5. **send_alert** — SMTP backend. Subject + text + HTML are Tera-rendered
    against `{{ query_logs.entry_count }}`, `{{ start.fire_time }}`, and the
    agent's `{{ summarize.response }}`, then sent through the `mail` resource.
+   `retryPolicy.maxRetries` is **0** on purpose: the engine wraps the SMTP
+   secret in a single-use Vault token, so a net-level retry would re-use a spent
+   token and re-fire the send — an email storm. One attempt = one email.
 6. **end** — maps `entry_count`, the send `outcome`, and the `subject`.
    **end_noalert** (the no-errors path) maps just `entry_count` — `send_alert`
    never runs there, so its outputs aren't available to map.
@@ -50,10 +54,10 @@ Cron(12h) → Start{fire_time} → Loki query_range → Agent(summarize) → Dec
 | Step | Backend | Resource | Where it points |
 |------|---------|----------|-----------------|
 | query_logs | `loki` | `aithericon_loki` | `http://loki.service.consul:3100` (cluster Loki, Consul-resolved) |
-| summarize | `internal_llm` | `internal_pool_router` | the in-cluster inference router (`${MEKHAN_ROUTER_URL:-http://127.0.0.1:13200}`) |
+| summarize | `openai` | `hf_inference` | `https://router.huggingface.co` — HF Inference, billed to org `Aithericon` |
 | send_alert | `smtp` | `mail` | dev SMTP relay (mailhog `localhost:1025`) — **replace for prod** |
 
-Both resources auto-seed at startup:
+All three resources auto-seed at startup:
 
 - **`aithericon_loki`** (`demos/resources/aithericon_loki.json`) — the cluster
   Loki. The `base_url` is `${AITHERICON_LOKI_URL:-http://loki.service.consul:3100}`,
@@ -67,6 +71,10 @@ Both resources auto-seed at startup:
   The Consul address only resolves **from inside the cluster** (an executor on a
   Nomad node). On a laptop, either override `AITHERICON_LOKI_URL` or run the
   demo against a local Loki.
+- **`hf_inference`** (`demos/resources/hf_inference.json`) — the HF Inference
+  router. `api_key` is `${HF_API_KEY}` (provide a real token via env at seed
+  time — never commit it), and `organization: "Aithericon"` is what makes the
+  executor send `X-HF-Bill-To: Aithericon`.
 - **`mail`** (`demos/resources/mail.json`) — the demo SMTP relay. Pair with
   `just dev mailhog-up` to capture the alert at http://localhost:8025 without a
   real mail server.
@@ -81,7 +89,7 @@ This template has **no HumanTask sidecars**, so it applies directly (unlike the
 sidecar-carrying demos):
 
 ```bash
-mekhan apply demos/loki-error-alert/
+mekhan apply demos/aithericon-loki-error-alert/
 ```
 
 It is also seeded automatically at service startup (`MEKHAN__DEMOS__SEED=true`),
@@ -94,8 +102,9 @@ idempotent by templateId `00000000-0000-0000-0000-0000000000a1`.
   passed per-run.
 - **Schedule / window** — change the cron `schedule` and keep the Loki
   `since` in step (both default to 15 min).
-- **Agent model** — bound to the internal inference router (`internal_pool_router`,
-  model `qwen3.5:9b`). The router endpoint comes from `MEKHAN_ROUTER_URL` on the
-  service/executor env; the model must be in `internal_pool_registry` and loaded.
+- **Agent model** — bound to HF Inference (`hf_inference`, model
+  `Qwen/Qwen2.5-7B-Instruct`). Change `summarize.data.model.model` to any model
+  the HF router serves. Billing follows the resource's `organization`
+  (`X-HF-Bill-To`).
   To pick a different model, change `summarize.data.model.model` to another
   approved+loaded id.
