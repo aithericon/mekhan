@@ -162,6 +162,27 @@ impl HumanPresence {
         })
         .await
     }
+
+    /// Re-arm the acquire edge for every PRESENT member admitted to `pool_net_id`
+    /// by flipping its `present` flag to `false` WITHOUT injecting an expire.
+    /// Returns the number of entries re-armed. The human analogue of
+    /// [`super::runners::RunnerPresence::rearm_pool`] — the in-memory half of the
+    /// pool-repair recovery (`POST /api/v1/resources/{id}/repair`): after a pool
+    /// net is lost and redeployed empty, an admitted member is still tracked
+    /// `present`, so only the absent→present edge re-injects its unit. Flipping
+    /// to absent makes the next availability/presence heartbeat re-acquire
+    /// through the proven path (engine-count top-up keeps it idempotent).
+    pub async fn rearm_pool(&self, pool_net_id: &str) -> usize {
+        let mut map = self.0.lock().await;
+        let mut rearmed = 0usize;
+        for entry in map.values_mut() {
+            if entry.present && entry.pool_net_id == pool_net_id {
+                entry.present = false;
+                rearmed += 1;
+            }
+        }
+        rearmed
+    }
 }
 
 impl Default for HumanPresence {

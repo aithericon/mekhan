@@ -44,9 +44,9 @@ use crate::auth::{
 use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::resource::{
-    CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, ResourceAuditEntry,
-    ResourceDetail, ResourceRow, ResourceSummary, ResourceTypeInfo, ResourceVersionRow,
-    RotateResourceRequest, UpdateResourceRequest,
+    CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, RepairPoolResponse,
+    ResourceAuditEntry, ResourceDetail, ResourceRow, ResourceSummary, ResourceTypeInfo,
+    ResourceVersionRow, RotateResourceRequest, UpdateResourceRequest,
 };
 use crate::models::template::PaginatedResponse;
 use crate::petri::resource_resolver::AuditAction;
@@ -1960,6 +1960,136 @@ pub async fn delete_resource(
     .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/resources/{id}/repair` — operator recovery for a POOL resource
+/// (a `capacity`) whose backing engine net was lost or drifted.
+///
+/// The recurring failure this fixes: an engine NATS reset (a `just dev reset`,
+/// or a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled
+/// against the pool keep heartbeating. mekhan's presence map still holds them as
+/// `present`, so the heartbeat fast path only bumps `last_seen` — a
+/// `presence_acquire` is injected ONLY on the absent→present edge — and the
+/// freshly-empty pool net never regains capacity. The pool sits at `0` forever
+/// and every run that binds it starves on its lease. The same dead-end is
+/// reached when the resource was created while the engine was down.
+///
+/// Repair is two idempotent steps, both safe to run on a HEALTHY pool:
+/// 1. RE-DEPLOY the backing pool net from the resource's persisted config
+///    (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is
+///    rebuilt — seeded with its token capacity, or as the capacity-less presence
+///    scaffold. This is the launch-time self-heal made operator-triggerable.
+/// 2. RE-ARM presence: every present runner / roster member admitted to this
+///    pool is flipped to absent (WITHOUT an expire), so its next heartbeat
+///    re-acquires its capacity tokens through the proven absent→present path.
+///    The engine-count top-up there makes this idempotent — a pool that was not
+///    actually lost re-arms to the same marking instead of double-admitting.
+///
+/// Auth mirrors `delete_resource`: platform admin for a platform-scoped pool,
+/// `Editor` on the resource ACL for a tenant pool.
+#[utoipa::path(
+    post,
+    path = "/api/v1/resources/{id}/repair",
+    params(("id" = Uuid, Path, description = "Pool (capacity) resource id")),
+    responses(
+        (status = 200, description = "Pool net re-ensured + presence re-armed", body = RepairPoolResponse),
+        (status = 403, description = "Editor role (tenant) or platform admin required", body = ErrorResponse),
+        (status = 404, description = "Resource not found", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn repair_pool(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> Result<Json<RepairPoolResponse>, ApiError> {
+    use crate::models::capacity::{axes_for_resource, CapacityBackend};
+
+    let row = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources WHERE id = $1 AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or_else(|| ApiError::not_found("resource not found"))?;
+
+    // Same gate as delete: platform rows are admin-flag gated (ACL bypassed),
+    // tenant rows require Editor on the object ACL.
+    if row.scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?;
+    }
+
+    // The pool net is stamped with the workspace the presence resolver looks the
+    // capacity up in — the resource's OWN workspace for a tenant pool; the
+    // platform scope for a platform pool (the same stamp the create/update path
+    // uses). The runner/human presence resolvers resolve `pool-<id>` in the
+    // runner's workspace, which for a tenant fleet equals the resource workspace.
+    let deploy_workspace = if row.scope_kind == "platform" {
+        PLATFORM_SCOPE_ID
+    } else {
+        row.workspace_id
+    };
+
+    // Load the latest version's public_config (the persisted pool shape).
+    let public_config: Option<Value> = sqlx::query_scalar(
+        "SELECT public_config FROM resource_versions WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(row.id)
+    .bind(row.latest_version)
+    .fetch_optional(&state.db)
+    .await?;
+    let public = public_config
+        .as_ref()
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+
+    // Does this resource resolve to a backing pool net at all? A non-pool
+    // resource (or a Queue capacity, which has no admission net) is a no-op
+    // repair — report `has_pool_net = false` rather than pretending.
+    let has_pool_net = axes_for_resource(&row.resource_type, &public)
+        .map(|axes| !matches!(axes.backend(), CapacityBackend::Queue))
+        .unwrap_or(false);
+
+    // Step 1 — re-ensure the backing net (idempotent + engine-down-tolerant).
+    ensure_pool_net_for_resource(
+        &state,
+        &row.resource_type,
+        deploy_workspace,
+        row.id,
+        row.latest_version,
+        &public,
+    )
+    .await;
+
+    // Step 2 — re-arm live presence so the next heartbeat re-injects capacity.
+    let pool_net_id = crate::compiler::well_known::pool_net_id(row.id);
+    let runners_rearmed = state.runner_presence.rearm_pool(&pool_net_id).await;
+    let members_rearmed = state.human_presence.rearm_pool(&pool_net_id).await;
+
+    tracing::info!(
+        resource_id = %row.id,
+        %pool_net_id,
+        has_pool_net,
+        runners_rearmed,
+        members_rearmed,
+        "pool repair: net re-ensured + presence re-armed"
+    );
+
+    Ok(Json(RepairPoolResponse {
+        pool_net_id,
+        has_pool_net,
+        runners_rearmed,
+        members_rearmed,
+    }))
 }
 
 /// `PATCH /api/v1/resources/{id}/scope` — reparent a resource to a different

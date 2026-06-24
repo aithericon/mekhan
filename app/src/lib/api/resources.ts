@@ -43,6 +43,7 @@ export type CreateResourceRequest = components['schemas']['CreateResourceRequest
 export type UpdateResourceRequest = components['schemas']['UpdateResourceRequest'];
 export type RotateResourceRequest = components['schemas']['RotateResourceRequest'];
 export type ResourceAuditEntry = components['schemas']['ResourceAuditEntry'];
+export type RepairPoolResponse = components['schemas']['RepairPoolResponse'];
 export type PaginatedResources = components['schemas']['PaginatedResponse_ResourceSummary'];
 export type PaginatedResourceAudit = components['schemas']['PaginatedResponse_ResourceAuditEntry'];
 
@@ -134,6 +135,16 @@ export async function deleteResource(id: string): Promise<void> {
 		const detail = res.error ? JSON.stringify(res.error) : '';
 		throw new Error(`API error ${res.response.status}: ${detail}`);
 	}
+}
+
+/** Operator recovery for a pool (`capacity`) resource whose backing engine net
+ *  was lost or drifted (`POST …/{id}/repair`). Re-deploys the pool net and
+ *  re-arms live presence so capacity re-establishes on the next heartbeat.
+ *  Idempotent — safe to run on a healthy pool. */
+export async function repairPool(id: string): Promise<RepairPoolResponse> {
+	return unwrap(
+		await client.POST('/api/v1/resources/{id}/repair', { params: { path: { id } } })
+	);
 }
 
 export async function rotateResource(

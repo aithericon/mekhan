@@ -532,6 +532,7 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         ))
         .routes(routes!(handlers::resources::rotate_resource))
         .routes(routes!(handlers::resources::move_resource))
+        .routes(routes!(handlers::resources::repair_pool))
         .routes(routes!(handlers::resources::list_resource_audit))
         // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
         // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router

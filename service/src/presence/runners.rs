@@ -209,6 +209,36 @@ impl RunnerPresence {
             .collect()
     }
 
+    /// Re-arm the absent→present acquire edge for every PRESENT runner admitted
+    /// to `pool_net_id` by flipping its `present` flag to `false` WITHOUT
+    /// injecting any expire signal. Returns the number of entries re-armed.
+    ///
+    /// This is the in-memory half of the pool-repair recovery
+    /// (`POST /api/v1/resources/{id}/repair`). After a pool net is lost (an
+    /// engine NATS reset wipes `pool-<id>`) and then redeployed empty, the
+    /// runners are still heartbeating — so mekhan's map still holds them as
+    /// `present`, and the heartbeat fast path only bumps `last_seen` (acquire
+    /// fires ONLY on the absent→present edge). The pool therefore stays at zero
+    /// capacity forever. Re-arming makes the very next heartbeat take the
+    /// re-acquire branch, which re-injects the runner's slots through the proven
+    /// path — and the engine-count top-up there (`count_runner_units`) keeps it
+    /// idempotent, so a pool that was NOT actually lost is re-armed to the same
+    /// state (top-up of 0) rather than double-admitted. No expire is injected
+    /// because there may be nothing on the engine to reap (the net was wiped);
+    /// the absent flag alone re-arms the edge exactly as a TTL miss would, minus
+    /// the (here unwanted) reap.
+    pub async fn rearm_pool(&self, pool_net_id: &str) -> usize {
+        let mut map = self.0.lock().await;
+        let mut rearmed = 0usize;
+        for entry in map.values_mut() {
+            if entry.present && entry.pool_net_id == pool_net_id {
+                entry.present = false;
+                rearmed += 1;
+            }
+        }
+        rearmed
+    }
+
     /// Test-only: seed a runner's pool membership directly so `pool_membership`
     /// can be exercised without the full acquire/heartbeat machinery.
     #[cfg(test)]
@@ -938,6 +968,46 @@ mod tests {
             let map = presence.lock().await;
             assert!(!map.get(&rid).unwrap().present, "absent → re-acquire armed");
         }
+    }
+
+    #[tokio::test]
+    async fn rearm_pool_flips_only_present_matching_entries() {
+        // The pool-repair re-arm: flip present→absent for entries admitted to the
+        // target pool ONLY, leaving other pools + already-absent entries untouched,
+        // so the next heartbeat re-acquires through the proven absent→present path.
+        let presence = RunnerPresence::new();
+        let here_present = Uuid::new_v4();
+        let here_absent = Uuid::new_v4();
+        let other_pool = Uuid::new_v4();
+
+        let mk = |pool_net_id: &str, present: bool| PresenceEntry {
+            last_seen: Instant::now(),
+            concurrency: 1,
+            pool_net_id: pool_net_id.to_string(),
+            pool_workspace: "ws-x".to_string(),
+            pool_alias: Some("agridos_nas".to_string()),
+            backends: vec!["python".to_string()],
+            host: None,
+            present,
+        };
+        {
+            let mut map = presence.map().lock().await;
+            map.insert(here_present, mk("pool-target", true));
+            map.insert(here_absent, mk("pool-target", false)); // already absent
+            map.insert(other_pool, mk("pool-other", true)); // different pool
+        }
+
+        // Only the one present entry in pool-target is re-armed.
+        assert_eq!(presence.rearm_pool("pool-target").await, 1);
+        {
+            let map = presence.map().lock().await;
+            assert!(!map.get(&here_present).unwrap().present, "target re-armed to absent");
+            assert!(!map.get(&here_absent).unwrap().present, "already-absent untouched");
+            assert!(map.get(&other_pool).unwrap().present, "other pool untouched");
+        }
+
+        // Idempotent: a second pass finds nothing present to re-arm.
+        assert_eq!(presence.rearm_pool("pool-target").await, 0);
     }
 
     #[test]

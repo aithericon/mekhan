@@ -262,6 +262,25 @@ pub struct RotateResourceRequest {
     pub config: serde_json::Value,
 }
 
+/// Outcome of `POST /api/v1/resources/{id}/repair` — operator recovery for a
+/// pool whose backing net was lost or drifted. Reports the deterministic pool
+/// net id that was (re)deployed and how many live presence sources were re-armed
+/// to re-acquire their capacity on their next heartbeat.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct RepairPoolResponse {
+    /// The backing pool net id (`pool-<resource_id>`) that was re-ensured.
+    pub pool_net_id: String,
+    /// Whether the resource resolves to a backing pool net at all (a non-pool
+    /// resource is a no-op repair). `false` means nothing was redeployed.
+    pub has_pool_net: bool,
+    /// Number of present runners (machine pools) re-armed to re-acquire their
+    /// capacity tokens on their next heartbeat.
+    pub runners_rearmed: usize,
+    /// Number of present roster members (human pools) re-armed to re-acquire on
+    /// their next presence heartbeat.
+    pub members_rearmed: usize,
+}
+
 /// One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.
 #[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow, ToSchema)]
 pub struct ResourceAuditEntry {
