@@ -609,17 +609,20 @@ push-images-to-registry registry_image commit_sha:
     fi
     echo "▶ pushing images into in-cluster registry ${zot} from ${src} (sha=${sha})"
 
-    # Copy the three images CONCURRENTLY (they're independent), and only the
-    # linux/arm64 RUNTIME image — `--override-arch arm64` instead of `--all`
-    # skips buildx's unknown/unknown build-attestation manifest, which the
-    # deploy never pulls (the full attestation still lives on forge). --quiet
-    # keeps the interleaved parallel logs readable.
+    # Copy the three images CONCURRENTLY (they're independent). Use --all (the
+    # FULL manifest list, incl. buildx's unknown/unknown attestation) so zot's
+    # stored digest is byte-identical to forge's. This matters: on the deploy
+    # pull zot STILL runs an onDemand sync CHECK against forge, and if its local
+    # digest differs from forge it RE-SYNCS (the slow cross-internet pull that
+    # trips the docker driver's pull_activity_timeout). A single-arch copy has a
+    # different digest than forge's manifest list, so it triggered a re-sync and
+    # the pull still hung — a faithful --all copy makes the check a fast no-op.
+    # --quiet keeps the interleaved parallel logs readable.
     imgs=(mekhan-service aithericon-engine aithericon-executor)
     pids=()
     for img in "${imgs[@]}"; do
       echo "  → copy ${img}:${sha}"
-      skopeo copy --quiet --retry-times 3 \
-        --override-os linux --override-arch arm64 \
+      skopeo copy --quiet --all --retry-times 3 \
         --src-creds "${FORGEJO_REGISTRY_USER}:${FORGEJO_REGISTRY_PASSWORD}" \
         --dest-tls-verify=false \
         "docker://${src}/${img}:${sha}" \
