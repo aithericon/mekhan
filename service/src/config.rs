@@ -346,25 +346,6 @@ pub struct AuthConfig {
     /// (the endpoints 503 and the UI hides the section).
     #[serde(default)]
     pub broker_pat: Option<String>,
-    /// **Multi-org tenancy switch.** Default `false` (single-org behaviour,
-    /// safe for dev / the current deployed single-tenant instance).
-    ///
-    /// When `true`: real multi-org tenancy. Each Zitadel org claim maps to
-    /// its org-bound workspace (`workspaces.zitadel_org_id`); a user may
-    /// belong to several org-workspaces at once. The per-session
-    /// `active_workspace` cookie picks among the full membership set.
-    ///
-    /// In **either** mode the resolver only ever auto-provisions the
-    /// logged-in principal into an **org-bound** workspace whose
-    /// `zitadel_org_id` matches one of their claims — it never auto-joins the
-    /// shared `default` tenant (see the removed `ensure_default_workspace_membership`)
-    /// and never bulk-imports an org's other members. A principal with no
-    /// resolvable org binding and no explicit grant holds no membership and
-    /// gets `workspace_id = None` (handlers reject rather than grant ambient
-    /// access). `dev_noop` is unaffected: the seeded dev-user keeps its
-    /// `default`-as-owner membership regardless.
-    #[serde(default)]
-    pub multi_org: bool,
     /// Platform-administrator allow-list. Each entry matches a principal's
     /// OIDC `subject` OR `email`; a match sets `AuthUser.is_platform_admin`,
     /// gating platform-global governance (the platform scope). Empty (the
@@ -412,7 +393,6 @@ impl Default for AuthConfig {
             introspection_client_id: None,
             introspection_client_secret: None,
             broker_pat: None,
-            multi_org: false,
             platform_admins: Vec::new(),
             platform_root_token: None,
             auto_join_system_workspaces: false,

@@ -1,15 +1,18 @@
 //! Invite lifecycle (Phase 4). Admin creates/lists/resends/revokes invites;
-//! the invitee accepts via a PUBLIC token link that provisions/resolves their
-//! identity and applies the workspace membership + pre-seeded object grants in
-//! one transaction.
+//! the invitee accepts — while logged in — via a token link that applies the
+//! workspace membership + pre-seeded object grants in one transaction.
+//!
+//! Identity is fully in-app: there is no IdP provisioner. The accept endpoint
+//! is AUTHED — the logged-in session IS the joining identity. The handler
+//! requires the session's email to match the invite email (case-insensitive),
+//! then writes `workspace_members` / object grants keyed by the session's
+//! resolved `user_id` (`users.id`).
 //!
 //! Security: the raw token is a 32-byte CSPRNG value (base64url) sent only in
-//! the accept link; only its SHA-256 hash is stored. The two public endpoints
-//! return a single generic 404 for unknown/expired/revoked/accepted (one code
-//! path, no enumeration). The accept re-checks `status='pending'` under
-//! `SELECT … FOR UPDATE` for single-use atomicity, and calls the provisioner
-//! BEFORE the db tx (idempotent by resolve-by-email) so a tx failure can't
-//! orphan a freshly created IdP user.
+//! the accept link; only its SHA-256 hash is stored. `preview` (public) and
+//! `accept` return a single generic 404 for unknown/expired/revoked/accepted
+//! (one code path, no enumeration). The accept re-checks `status='pending'`
+//! under `SELECT … FOR UPDATE` for single-use atomicity.
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -20,12 +23,10 @@ use rand::RngCore;
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use crate::auth::model::SUBJECT_UUID_NAMESPACE;
 use crate::auth::{
     apply_grant, effective_object_role, grant_context, map_to_api_error, require_role, AuthUser,
     ObjectKind, ObjectRef, Role,
 };
-use crate::config::AuthMode;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::invite::{
     AcceptInviteResponse, CreateInviteRequest, InvitePreview, InviteSummary,
@@ -292,7 +293,7 @@ pub async fn list_invites(
         "SELECT i.id, i.workspace_id, i.email, i.role, i.status, i.invited_by, \
                 p.display_name AS invited_by_display_name, i.created_at, i.expires_at \
            FROM pending_invites i \
-           LEFT JOIN user_profiles p ON p.user_id = i.invited_by \
+           LEFT JOIN users p ON p.id = i.invited_by \
           WHERE i.workspace_id = $1 \
           ORDER BY i.created_at DESC",
     )
@@ -457,28 +458,31 @@ pub async fn preview_invite(
     }))
 }
 
-/// POST /api/v1/invites/{token}/accept — PUBLIC. Provisions/resolves the
-/// invitee's identity, then atomically applies membership + grants. Single-use
-/// via `SELECT … FOR UPDATE` re-checking `status='pending'`.
+/// POST /api/v1/invites/{token}/accept — AUTHED. The logged-in session IS the
+/// joining identity: the handler requires the session email to match the invite
+/// email, then atomically applies membership + grants keyed by the session's
+/// resolved `user_id`. Single-use via `SELECT … FOR UPDATE` re-checking
+/// `status='pending'`.
 #[utoipa::path(
     post,
     path = "/api/v1/invites/{token}/accept",
     params(("token" = String, Path, description = "Opaque invite token")),
     responses(
         (status = 200, description = "Accepted", body = AcceptInviteResponse),
+        (status = 403, description = "Signed-in email does not match the invite", body = ErrorResponse),
         (status = 404, description = "No valid invite", body = ErrorResponse),
-        (status = 503, description = "Identity provisioning unavailable", body = ErrorResponse),
     ),
     tag = "invites",
 )]
 pub async fn accept_invite(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(token): Path<String>,
 ) -> Result<Json<AcceptInviteResponse>, ApiError> {
     let token_hash = hash_token(&token);
 
-    // Read the invite (unlocked) to get the email for provisioning. The tx below
-    // re-checks status under FOR UPDATE for single-use atomicity.
+    // Read the invite (unlocked) to get the target email. The tx below re-checks
+    // status under FOR UPDATE for single-use atomicity.
     let invite: Option<(Uuid, Uuid, String, String, Uuid)> = sqlx::query_as(
         "SELECT id, workspace_id, email, role, invited_by FROM pending_invites \
           WHERE token_hash = $1 AND status = 'pending' AND expires_at > now()",
@@ -489,23 +493,22 @@ pub async fn accept_invite(
     let (invite_id, workspace_id, email, role_str, invited_by) =
         invite.ok_or_else(|| ApiError::not_found("invite is not valid"))?;
 
-    let provisioner = state
-        .user_provisioner
-        .as_ref()
-        .ok_or_else(|| ApiError::service_unavailable("identity provisioning unavailable"))?;
+    // The logged-in user IS the joining identity. Require their session email to
+    // match the invite email (case-insensitive); otherwise refuse so an invite
+    // can't be redeemed onto a different account.
+    let session_email = user.email.as_deref().unwrap_or_default().trim();
+    if session_email.is_empty() || !session_email.eq_ignore_ascii_case(email.trim()) {
+        let signed_in_as = if session_email.is_empty() {
+            "an account with no email".to_string()
+        } else {
+            format!("'{session_email}'")
+        };
+        return Err(ApiError::forbidden(format!(
+            "this invite was sent to '{email}'; you are signed in as {signed_in_as}"
+        )));
+    }
 
-    // Provision FIRST (idempotent by resolve-by-email) so a tx failure can't
-    // orphan a freshly created IdP user.
-    let (subject, newly) = provisioner
-        .provision_or_resolve(&email, None)
-        .await
-        .map_err(|e| {
-            tracing::error!(%email, "invite accept: provisioner failed: {e}");
-            ApiError::service_unavailable("identity provisioning failed")
-        })?;
-    // The REAL resolved sub → uuid (never a synthetic one) so a later real login
-    // maps onto the same membership + grants.
-    let user_id = Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, subject.as_bytes());
+    let user_id = user.subject_as_uuid();
 
     let mut tx = state.db.begin().await?;
     // Single-use lock + re-check.
@@ -557,20 +560,7 @@ pub async fn accept_invite(
     .await?;
     tx.commit().await?;
 
-    // Welcome a genuinely new account (skip returning users re-accepting). The
-    // local-part stands in for a display name we don't have yet. Best-effort.
-    if newly {
-        let display = email.split('@').next().unwrap_or(email.as_str());
-        crate::notify::dispatch::welcome(&state, &email, display, Some(workspace_id)).await;
-    }
-
-    // Under dev_noop the synthetic sub never backs a real session; the SPA stays
-    // on the fixed dev user. Any real auth mode → the invitee must log in.
-    let requires_login = state.config.auth.mode != AuthMode::DevNoop;
-    Ok(Json(AcceptInviteResponse {
-        workspace_id,
-        requires_login,
-    }))
+    Ok(Json(AcceptInviteResponse { workspace_id }))
 }
 
 // ── row mapping ──────────────────────────────────────────────────────────────
@@ -612,7 +602,7 @@ async fn load_invite_summary(
         "SELECT i.id, i.workspace_id, i.email, i.role, i.status, i.invited_by, \
                 p.display_name AS invited_by_display_name, i.created_at, i.expires_at \
            FROM pending_invites i \
-           LEFT JOIN user_profiles p ON p.user_id = i.invited_by \
+           LEFT JOIN users p ON p.id = i.invited_by \
           WHERE i.id = $1",
     )
     .bind(invite_id)

@@ -8,7 +8,7 @@
 //!   just dev up   # Postgres + NATS + S3 + executor + engine + mekhan
 //!
 //! The engine/executor connect to the dev NATS broker (`docker-compose.yml`
-//! maps `4333:4222`); the test harness defaults to that same broker.
+//! maps `14333:4222`); the test harness defaults to that same broker.
 //!
 //! Run with:
 //!   cargo test --test causality_e2e -- --test-threads=1 --nocapture
@@ -328,7 +328,6 @@ async fn causality_full_pipeline() {
             db.clone(),
         )),
         email: mekhan_service::notify::email::log_mailer(),
-        user_provisioner: None,
     };
     // Re-point the nil workspace's `default` worker group to the live executor's
     // bound partition (no-op unless TEST_WORKER_DEFAULT_PARTITION is set) so the

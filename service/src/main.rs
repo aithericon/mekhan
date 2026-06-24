@@ -365,16 +365,14 @@ async fn main() -> anyhow::Result<()> {
     // `StaticPrincipalResolver` (no DB) — that path yields `workspace_id =
     // None` which handlers tolerate by falling back to the default
     // workspace at the call site.
-    // `auth.multi_org` (default false) gates real per-org tenancy: each Zitadel
-    // org claim maps to its bound workspace, and the legacy auto-join-`default`-
-    // as-editor fallback is dropped. `auth.auto_join_system_workspaces` (default
-    // false) gates the legacy `demos`-as-viewer auto-join; `auth.platform_admins`
-    // sets `is_platform_admin`. The resolver never auto-joins the shared
-    // `default` tenant in either mode (a homeless principal gets a personal
-    // workspace instead).
+    // The resolver no longer derives tenancy from the IdP org claim — that
+    // org→workspace auto-provisioning is gone. `auth.auto_join_system_workspaces`
+    // (default false) gates the legacy `demos`-as-viewer auto-join;
+    // `auth.platform_admins` sets `is_platform_admin`. The resolver never
+    // auto-joins the shared `default` tenant (a homeless principal gets a
+    // personal workspace instead).
     let principal_resolver: Arc<dyn PrincipalResolver> = Arc::new(DbPrincipalResolver::with_options(
         db.clone(),
-        config.auth.multi_org,
         config.auth.auto_join_system_workspaces,
         config.auth.platform_admins.clone(),
     ));
@@ -470,16 +468,10 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
     ));
 
-    // Invite (Phase 4) delivery + identity provisioning seams. Email defaults to
-    // log-mode (offline); the provisioner is the deterministic Noop under
-    // dev_noop and the real Zitadel broker under any auth mode. The boot
-    // invariant rejects a synthetic provisioner under a real auth mode.
+    // Invite (Phase 4) email delivery seam. Defaults to log-mode (offline).
+    // Identity is now resolved in-app from the local `users` spine on the
+    // invitee's authenticated accept — no IdP provisioner.
     let email = mekhan_service::notify::email::build_mailer(&config);
-    let user_provisioner = mekhan_service::auth::provisioner::build_user_provisioner(&config);
-    mekhan_service::auth::provisioner::assert_provisioner_invariant(
-        config.auth.mode,
-        &user_provisioner,
-    );
 
     let state = AppState {
         db,
@@ -509,7 +501,6 @@ async fn main() -> anyhow::Result<()> {
         fleet,
         asset_resolver,
         email,
-        user_provisioner,
     };
 
     // Close the dispatcher's forward reference to `AppState` (the dispatcher was

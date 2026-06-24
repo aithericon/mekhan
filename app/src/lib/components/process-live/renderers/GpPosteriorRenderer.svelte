@@ -60,6 +60,23 @@
 	let fetching = $state(false);
 	let error = $state<string | null>(null);
 
+	// Container-aware column count. The grid must key off the *container* width
+	// (this renderer lives in a media panel that can be far narrower than the
+	// viewport), not a Tailwind `lg:` breakpoint that reads the viewport — a
+	// viewport-keyed `lg:grid-cols-3` packs three panels into a narrow dialog
+	// and collapses each heatmap to a vertical strip (grid margins alone eat
+	// ~150px), clipping titles and overlapping axis labels. `bind:clientWidth`
+	// gives a reactive, ResizeObserver-backed measurement of the real width.
+	let containerWidth = $state(0);
+	// Below this each panel's plot area (width − left/right grid margins) is too
+	// narrow to read; drop a column instead of squeezing.
+	const MIN_PANEL_WIDTH = 280;
+	let cols = $derived(
+		containerWidth === 0
+			? 1
+			: Math.max(1, Math.min(3, Math.floor(containerWidth / MIN_PANEL_WIDTH)))
+	);
+
 	// Unified Viridis palette across all three panels so spatial correlations
 	// are legible by eye: each panel keeps its own colorbar range so the
 	// absolute values stay unambiguous, but the shared perceptual scale lets
@@ -67,20 +84,29 @@
 	// Viridis is also perceptually uniform, colorblind-safe, and grayscale-safe.
 	const VIRIDIS = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];
 
+	let ro: ResizeObserver | null = null;
+
 	onMount(() => {
 		if (meanEl) meanChart = echarts.init(meanEl);
 		if (stdEl) stdChart = echarts.init(stdEl);
 		if (eiEl) eiChart = echarts.init(eiEl);
-		const onResize = () => {
+		// Observe each chart element directly rather than `window.resize`: this
+		// fires for viewport changes, container reflow (sidebar/dialog resize),
+		// *and* column-count flips — when `cols` changes the cell width changes
+		// without the window moving, so a window listener would miss it.
+		ro = new ResizeObserver(() => {
 			meanChart?.resize();
 			stdChart?.resize();
 			eiChart?.resize();
-		};
-		window.addEventListener('resize', onResize);
-		return () => window.removeEventListener('resize', onResize);
+		});
+		if (meanEl) ro.observe(meanEl);
+		if (stdEl) ro.observe(stdEl);
+		if (eiEl) ro.observe(eiEl);
 	});
 
 	onDestroy(() => {
+		ro?.disconnect();
+		ro = null;
 		meanChart?.dispose();
 		stdChart?.dispose();
 		eiChart?.dispose();
@@ -347,7 +373,11 @@
 <div class="flex flex-col gap-3">
 	<!-- Chart divs always mounted so setOption transitions smoothly between
 	     iterations instead of re-initializing on every scrub. -->
-	<div class="relative grid grid-cols-1 gap-3 lg:grid-cols-3">
+	<div
+		class="relative grid gap-3"
+		style="grid-template-columns: repeat({cols}, minmax(0, 1fr))"
+		bind:clientWidth={containerWidth}
+	>
 		<div class="rounded-lg bg-white p-2 shadow-md dark:bg-zinc-900">
 			<div bind:this={meanEl} class="h-80 w-full"></div>
 		</div>

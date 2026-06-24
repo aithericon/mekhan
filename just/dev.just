@@ -49,6 +49,15 @@ s3_endpoint  := env_var_or_default("MEKHAN_S3_ENDPOINT", "http://localhost:19005
 vault_addr   := env_var_or_default("MEKHAN_VAULT_ADDR", "http://localhost:18200")
 vault_token  := "root"
 service_url  := env_var_or_default("MEKHAN_SERVICE_URL", "http://localhost:13100")
+# The seeded system `demos` workspace (DEMO_WORKSPACE_ID, slug `demos`,
+# `…00de`). The robot-fleet `capacity` resources (xarm_fleet/ros_fleet) and the
+# `ros` capability type are seeded into THIS workspace, not the dev user's
+# default — fallout of the platform-tier/workspace rework. The robot runner
+# recipes below send `mekhan_active_workspace=<this>` as a cookie on their
+# readiness-probe + token-mint curls so dev_noop resolves to demos and can see
+# the `ros` cap / mint an xarm_fleet|ros_fleet token. Requires the dev user to
+# be a demos member (seeded by migration 20240194).
+demos_ws     := "00000000-0000-0000-0000-0000000000de"
 engine_url   := env_var_or_default("MEKHAN_ENGINE_URL", "http://localhost:13030")
 router_url   := env_var_or_default("MEKHAN_ROUTER_URL", "http://localhost:13200")
 router_port  := env_var_or_default("MEKHAN_ROUTER_PORT", "13200")
@@ -199,8 +208,8 @@ psql:
 # from its identity.json and exports it as TEST_WORKER_DEFAULT_PARTITION, so the
 # test harness seeds its fresh DB's nil-workspace `default` group with the SAME
 # id the running executor drains. It also points the test at this slot's NATS /
-# engine / pg / S3 endpoints (the test defaults assume the separate test-infra
-# NATS on :4333, not the dev stack). The stack must be up (`just dev up`).
+# engine / pg / S3 endpoints (only needed for non-zero slots — the test defaults
+# target slot 0's dev stack). The stack must be up (`just dev up`).
 #
 #   just dev::e2e-partition                    # default: automated_step_e2e
 #   just dev::e2e-partition http_borrow_e2e    # a specific test binary
@@ -1252,10 +1261,13 @@ ros-up:
 
     # 3) Wait for mekhan + the `ros` capability-type seed (same pattern as
     #    up-runner waits for `xrd`). Soft-skip if it never appears.
+    # The `ros` cap type lives in the demos workspace — probe AS demos
+    # (active-workspace cookie) so dev_noop's default workspace doesn't see zero.
     echo "▶ waiting for mekhan + ros capability seed…"
     ready=""
     for _ in $(seq 1 60); do
-      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+      if curl -fsS "{{service_url}}/api/v1/capability-types" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" 2>/dev/null \
            | jq -e '.items[]? | select(.name=="ros")' >/dev/null 2>&1; then
         ready=1; break
       fi
@@ -1329,7 +1341,8 @@ ros-up:
     reuse=""
     if [ -f "$identity" ]; then
       rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
-      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" >/dev/null 2>&1; then
         echo "▶ reusing enrolled ros runner $rid (row still live)"
         reuse=1
       fi
@@ -1337,9 +1350,12 @@ ros-up:
 
     if [ -z "$reuse" ]; then
       rm -rf "$runner_base/runner"   # drop any stale identity (e.g. post-reset)
+      # Mint AS demos — the ros_fleet capacity resource lives there.
       echo "▶ minting registration token (pool=ros_fleet)…"
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{"group":"ros_fleet"}' | jq -r '.token')
+          -H 'content-type: application/json' \
+          -H "Cookie: mekhan_active_workspace={{demos_ws}}" \
+          -d '{"group":"ros_fleet"}' | jq -r '.token')
       if [ -z "$rt" ] || [ "$rt" = "null" ]; then
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1
@@ -1427,10 +1443,14 @@ xarm-up:
     docker run -d --name "$cname" -e ROS_DOMAIN_ID="$ros_domain" -p "$bridge_port:9090" -p "$vnc_port:6080" aithericon-xarm:jazzy >/dev/null
 
     # 3) Wait for mekhan + the `ros` capability-type seed (shared with the turtle).
+    #    The `ros` cap type lives in the demos workspace, so probe AS demos
+    #    (active-workspace cookie) — without it dev_noop's default workspace
+    #    sees zero cap types and this loop would never go ready.
     echo "▶ waiting for mekhan + ros capability seed…"
     ready=""
     for _ in $(seq 1 60); do
-      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+      if curl -fsS "{{service_url}}/api/v1/capability-types" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" 2>/dev/null \
            | jq -e '.items[]? | select(.name=="ros")' >/dev/null 2>&1; then
         ready=1; break
       fi
@@ -1506,7 +1526,8 @@ xarm-up:
     reuse=""
     if [ -f "$identity" ]; then
       rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
-      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" >/dev/null 2>&1; then
         echo "▶ reusing enrolled xarm runner $rid (row still live)"
         reuse=1
       fi
@@ -1514,9 +1535,13 @@ xarm-up:
 
     if [ -z "$reuse" ]; then
       rm -rf "$runner_base/runner"   # drop any stale identity (e.g. post-reset)
+      # Mint AS demos — the xarm_fleet capacity resource lives there, so a mint
+      # against dev_noop's default workspace 400s ("no runner group … exists").
       echo "▶ minting registration token (pool=xarm_fleet)…"
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{"group":"xarm_fleet"}' | jq -r '.token')
+          -H 'content-type: application/json' \
+          -H "Cookie: mekhan_active_workspace={{demos_ws}}" \
+          -d '{"group":"xarm_fleet"}' | jq -r '.token')
       if [ -z "$rt" ] || [ "$rt" = "null" ]; then
         echo "✗ failed to mint registration token (is the stack up? 'just dev status')" >&2
         exit 1
@@ -1571,10 +1596,12 @@ isaac-runner-up bridge_url="ws://131.246.221.73:9090":
       (cd executor && cargo build -p aithericon-executor-service --features "{{executor_features}}")
     fi
 
+    # The `ros` cap type lives in the demos workspace — probe AS demos.
     echo "▶ waiting for mekhan + ros capability seed…"
     ready=""
     for _ in $(seq 1 60); do
-      if curl -fsS "{{service_url}}/api/v1/capability-types" 2>/dev/null \
+      if curl -fsS "{{service_url}}/api/v1/capability-types" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" 2>/dev/null \
            | jq -e '.items[]? | select(.name=="ros")' >/dev/null 2>&1; then
         ready=1; break
       fi
@@ -1625,7 +1652,8 @@ isaac-runner-up bridge_url="ws://131.246.221.73:9090":
     reuse=""
     if [ -f "$identity" ]; then
       rid=$(jq -r '.runner_id // empty' "$identity" 2>/dev/null || true)
-      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" >/dev/null 2>&1; then
+      if [ -n "$rid" ] && curl -fsS "{{service_url}}/api/v1/runners/$rid" \
+           -H "Cookie: mekhan_active_workspace={{demos_ws}}" >/dev/null 2>&1; then
         echo "▶ reusing enrolled isaac runner $rid (row still live)"
         reuse=1
       fi
@@ -1633,9 +1661,12 @@ isaac-runner-up bridge_url="ws://131.246.221.73:9090":
 
     if [ -z "$reuse" ]; then
       rm -rf "$runner_base/runner"
+      # Mint AS demos — the xarm_fleet capacity resource lives there.
       echo "▶ minting registration token (pool=xarm_fleet)…"
       rt=$(curl -fsS -X POST "{{service_url}}/api/v1/runners/registration-tokens" \
-          -H 'content-type: application/json' -d '{"group":"xarm_fleet"}' | jq -r '.token')
+          -H 'content-type: application/json' \
+          -H "Cookie: mekhan_active_workspace={{demos_ws}}" \
+          -d '{"group":"xarm_fleet"}' | jq -r '.token')
       [ -n "$rt" ] && [ "$rt" != "null" ] || { echo "✗ failed to mint registration token" >&2; exit 1; }
       name="dev-isaac-$(date +%s)"
       # NOTE: no `sim:isaac` cap — the ros capability type only declares the

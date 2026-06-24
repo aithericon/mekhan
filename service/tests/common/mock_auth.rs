@@ -139,6 +139,7 @@ impl MockAuthenticator {
 fn user(subject: &str) -> AuthUser {
     AuthUser {
         subject: subject.to_string(),
+        user_id: AuthUser::legacy_subject_uuid(subject),
         email: Some(format!("{subject}@test")),
         display_name: Some(subject.to_string()),
         roles: Vec::new(),

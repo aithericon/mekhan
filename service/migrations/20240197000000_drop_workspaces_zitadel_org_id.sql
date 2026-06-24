@@ -1,0 +1,13 @@
+-- Drop the legacy Zitadel org→workspace binding column.
+--
+-- `workspaces.zitadel_org_id` (added in 20240123000000) existed solely so the
+-- auth resolver could auto-join a principal into every workspace bound to one
+-- of the org ids carried in their JWT roles claim. That org→workspace
+-- auto-provisioning is gone: mekhan no longer derives tenancy from the upstream
+-- IdP org. Membership now comes only from explicit sources (an accepted invite,
+-- an admin grant, a self-created workspace, or the lazily-minted personal
+-- workspace), so nothing reads or writes this column anymore.
+--
+-- DROP COLUMN implicitly drops the column's UNIQUE constraint/index, so no
+-- separate ALTER ... DROP CONSTRAINT is needed. Forward-only; no down step.
+ALTER TABLE workspaces DROP COLUMN IF EXISTS zitadel_org_id;

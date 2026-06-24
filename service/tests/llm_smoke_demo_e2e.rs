@@ -27,8 +27,8 @@
 //! instance here, never on the user's first try.
 //!
 //! Requires:
-//!   - `just dev::up` (engine :3030, executor with `llm` feature, NATS :4333,
-//!     postgres :5439)
+//!   - `just dev::up` (engine :13030, executor with `llm` feature, NATS :14333,
+//!     postgres :15439)
 //!   - `just dev::up-ollama` (Ollama at :11434 with the model the demo
 //!     references — default `qwen3.5:9b`)
 //!

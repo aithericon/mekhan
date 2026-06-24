@@ -172,7 +172,7 @@ pub struct AssetTypeSummary {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
@@ -215,7 +215,7 @@ pub struct AssetTypeDetail {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
@@ -277,7 +277,7 @@ pub struct AssetSummary {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.
@@ -336,7 +336,7 @@ pub struct AssetDetail {
     pub version: i32,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Creator (`subject_as_uuid()`), resolvable via `user_profiles`.
+    /// Creator (`subject_as_uuid()`), resolvable via `users`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,
     /// Last mutator (`subject_as_uuid()`). NULL for pre-Phase-2 rows.

@@ -33,11 +33,13 @@ job "${job_id}" {
     # cold cache and pull-through-fetches every layer from Forgejo on demand.
     # That first pull can blow past the docker driver's 5m image_pull_timeout
     # ("context deadline exceeded") and only succeeds once zot has warmed its
-    # blob cache across a few restart attempts. These deadlines must therefore
-    # be wide enough to span several pull attempts before auto_revert fires —
-    # otherwise Nomad reverts the deploy while zot is still warming.
-    healthy_deadline  = "10m"
-    progress_deadline = "20m"
+    # blob cache across a few restart attempts. The alloc runs TWO tasks
+    # (service + engine) that pull SEQUENTIALLY on the same node, so the cold-
+    # pull cost is additive (~4.5m + ~6m observed) and overran the old 10m
+    # healthy_deadline by ~40s — failing an otherwise-fine deploy. Widened to
+    # 20m/30m so the serial cold pull of both images can't trip auto_revert.
+    healthy_deadline  = "20m"
+    progress_deadline = "30m"
     auto_revert       = true
     auto_promote      = true
   }

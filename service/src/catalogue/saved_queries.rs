@@ -31,7 +31,7 @@ pub struct SavedQuery {
     pub params: serde_json::Value,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-    /// Author (`subject_as_uuid()`), resolvable via `user_profiles`. NULL for
+    /// Author (`subject_as_uuid()`), resolvable via `users`. NULL for
     /// pre-Phase-2 rows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_by: Option<Uuid>,

@@ -6,7 +6,8 @@
 # evaluation or apt-installing HDF5/NetCDF/protoc on a fresh runner.
 #
 # Model: web-platform/deploy/docker/Dockerfile.ci-build, trimmed to mekhan's
-# actual needs (single aarch64-musl target, no playwright/sqlx-cli/x86 musl).
+# actual needs (native aarch64-musl + x86_64-musl-via-zigbuild for the CLI
+# release, no playwright/sqlx-cli).
 #
 # Build (locally, on the build pool, or via `just ci::build-ci-builder`):
 #   docker build -f deploy/docker/Dockerfile.ci-build \
@@ -108,6 +109,23 @@ RUN set -eux; \
     aarch64-linux-musl-gcc --version | head -1; \
     aarch64-linux-musl-ar  --version | head -1
 
+# ── x86_64-musl cross toolchain (cargo-zigbuild) ────────────────────────────
+# The CLI release stage (.woodpecker/35-release-cli.yml → just ci::build-cli)
+# ships the `mekhan` CLI for BOTH linux-musl arches. aarch64 builds natively
+# with the musl gcc above; x86_64 is cross-compiled from this ARM host via
+# cargo-zigbuild — the CLI pulls C/asm deps (aws-lc-sys, ring, zstd-sys) and the
+# ARM worker can't host an x86_64 gcc, so zig supplies the x86_64-linux-musl C
+# cross-toolchain. (Same tool dev.just::slurm-up uses for the executor.)
+ENV ZIG_VERSION=0.13.0
+RUN set -eux; \
+    arch="$(uname -m)"; \
+    curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-${arch}-${ZIG_VERSION}.tar.xz" \
+      | tar -xJ -C /opt; \
+    ln -sf "/opt/zig-linux-${arch}-${ZIG_VERSION}/zig" /usr/local/bin/zig; \
+    zig version
+RUN rustup target add x86_64-unknown-linux-musl \
+    && cargo install cargo-zigbuild --locked
+
 # ── just (command runner — pipeline shells out to `just ci::*` everywhere) ─
 RUN curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
         | bash -s -- --to /usr/local/bin
@@ -123,7 +141,7 @@ RUN ARCH=$(dpkg --print-architecture) \
     && unzip /tmp/vault.zip -d /usr/local/bin/ && rm /tmp/vault.zip \
     && curl -fsSL "https://releases.hashicorp.com/nomad/${NOMAD_VERSION}/nomad_${NOMAD_VERSION}_linux_${ARCH}.zip" -o /tmp/nomad.zip \
     && unzip -o /tmp/nomad.zip -d /usr/local/bin/ && rm /tmp/nomad.zip \
-    && apt-get update && apt-get install -y --no-install-recommends jq \
+    && apt-get update && apt-get install -y --no-install-recommends jq skopeo \
     && rm -rf /var/lib/apt/lists/*
 
 # ── Cross-compile env (matches .cargo/config.toml conventions) ──────────────

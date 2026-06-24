@@ -182,11 +182,38 @@ test-e2e-zitadel:
     echo "▶ bootstrap zitadel (idempotent)…"
     bash deploy/zitadel/bootstrap.sh
     echo "▶ running gated e2e…"
-    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:5439/mekhan" \
-    TEST_NATS_URL="nats://localhost:4333" \
-    TEST_S3_ENDPOINT="http://localhost:9099" \
+    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:15439/mekhan" \
+    TEST_NATS_URL="nats://localhost:14333" \
+    TEST_S3_ENDPOINT="http://localhost:19005" \
     MEKHAN_E2E_ZITADEL=1 \
       cargo test --test zitadel_e2e -- --test-threads=1 --nocapture
+
+# Engine INTEGRATION tests — the `core-engine` Petri-net engine's own
+# cross-net scenarios (resource pools, claim bridging, finalizer drain). These
+# live in the NESTED engine workspace (engine/Cargo.toml) and are gated behind
+# the `integration` feature on petri-test-harness. Unlike the mekhan
+# `test-integration` lane, they do NOT need the docker-compose stack: each test
+# binary auto-provisions its own NATS JetStream instance via testcontainers
+# (one shared container per binary, behind OnceCell), so `--test-threads=1` is
+# required — concurrent threads would race on container startup.
+#
+# Runs from `engine/` (cd engine) so cargo resolves the engine workspace, not
+# the umbrella. Inherits the same memory/sccache budget as the other Rust lanes
+# (ci-cargo-env.sh) so linking on the capped ARM node doesn't OOM `ld`.
+# SQLX_OFFLINE keeps it self-contained (no live DB needed to compile).
+#
+# Notes (manual lane — validate on the runner before relying on it as a gate):
+#   • Needs docker — testcontainers talks to /var/run/docker.sock (mounted by
+#     the Woodpecker step). No compose stack is brought up.
+test-engine-integration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    source just/scripts/ci-cargo-env.sh
+    echo "▶ engine integration tests (petri-test-harness --features integration)…"
+    cd engine
+    SQLX_OFFLINE=true cargo test -p petri-test-harness --features integration \
+      -- --test-threads=1 --no-fail-fast
 
 # Vitest unit tests
 test-frontend-unit:
@@ -281,6 +308,138 @@ build-frontend:
       exit 1
     fi
     echo "✓ Frontend built — $(du -sh build | cut -f1)"
+
+# ── CLI release (cross-compile the `mekhan` GitOps CLI + publish to Forgejo) ─
+#
+# `mekhan` is the GitOps CLI bin of mekhan-service (service/Cargo.toml,
+# src/bin/cli/main.rs — pull/apply/push/diff/run/openapi). The release stage
+# ships it as standalone static binaries for BOTH linux-musl arches so it can
+# be dropped onto any dev/CI box without a libc match.
+#
+#   aarch64 — native build using the musl gcc baked into the CI builder
+#             (same path as build-backend-service).
+#   x86_64  — cross-compiled FROM the ARM worker via cargo-zigbuild. A plain
+#             `cargo build --target x86_64-unknown-linux-musl` can't link the
+#             x86_64 C/asm objects of aws-lc-sys / ring / zstd-sys on an
+#             aarch64 host; zig supplies the x86_64-linux-musl C cross-toolchain.
+#             Same mechanism dev.just::slurm-up uses for the executor.
+#
+# Output: dist/cli/mekhan-cli-<target>{,.sha256}. CARGO_PROFILE_RELEASE_STRIP
+# strips via rustc (LLVM, target-aware) so we don't need a per-arch `strip`.
+build-cli:
+    #!/usr/bin/env bash
+    cd ..
+    source just/scripts/ci-cargo-env.sh
+    export CARGO_PROFILE_RELEASE_STRIP=symbols
+    target_dir="${CARGO_TARGET_DIR:-target}"
+    dist="dist/cli"
+    rm -rf "$dist"; mkdir -p "$dist"
+
+    echo "▶ aarch64-unknown-linux-musl (native musl gcc)"
+    SQLX_OFFLINE=true cargo build --release \
+      --target aarch64-unknown-linux-musl \
+      --manifest-path service/Cargo.toml --bin mekhan
+
+    echo "▶ x86_64-unknown-linux-musl (cargo-zigbuild)"
+    command -v cargo-zigbuild >/dev/null 2>&1 || {
+      echo "✗ cargo-zigbuild not on PATH — rebuild the CI builder image" >&2
+      echo "  (deploy/docker/Dockerfile.ci-build → just ci::build-ci-builder)" >&2
+      exit 1; }
+    SQLX_OFFLINE=true cargo zigbuild --release \
+      --target x86_64-unknown-linux-musl \
+      --manifest-path service/Cargo.toml --bin mekhan
+
+    for t in aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+      src="$target_dir/$t/release/mekhan"
+      [ -f "$src" ] || { echo "✗ missing $src" >&2; exit 1; }
+      out="mekhan-cli-$t"
+      cp "$src" "$dist/$out"
+      ( cd "$dist" && sha256sum "$out" > "$out.sha256" )
+      echo "  ✓ $dist/$out ($(du -h "$dist/$out" | cut -f1))"
+    done
+    echo "✓ staged $(ls "$dist" | grep -c . ) files under $dist/"
+
+# Publish the dist/cli artifacts as a ROLLING Forgejo release for the branch.
+# Every push to a branch refreshes one release tagged `cli-<branch>` (cli-dev,
+# cli-main) at the pushed SHA — the release + its tag are recreated so the tag
+# always points at the latest build and stale assets never linger.
+#
+# Args:
+#   ref_slug   — branch name (CI sets CI_COMMIT_BRANCH)
+#   commit_sha — git SHA, used as the release's target commit + recorded in body
+#
+# Env:
+#   FORGEJO_URL        Forgejo base URL (default https://forge.aithericon.eu)
+#   FORGEJO_REPO       owner/name (CI sets FORGEJO_REPO=$CI_REPO)
+#   FORGEJO_API_TOKEN  Forgejo PAT with `write:repository` scope — REQUIRED.
+#                      In CI: vault kv get -field=token secret/forgejo/api.
+#                      (The registry token is package-scoped → 403 on releases.)
+publish-cli-release ref_slug commit_sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    : "${FORGEJO_API_TOKEN:?set FORGEJO_API_TOKEN (Forgejo PAT, write:repository scope)}"
+    base="${FORGEJO_URL:-https://forge.aithericon.eu}"
+    repo="${FORGEJO_REPO:?set FORGEJO_REPO=owner/name (CI: \$CI_REPO)}"
+    api="$base/api/v1/repos/$repo"
+    tag="cli-{{ref_slug}}"
+    dist="dist/cli"
+    auth=(-H "Authorization: token $FORGEJO_API_TOKEN")
+    [ -d "$dist" ] && ls "$dist"/* >/dev/null 2>&1 || {
+      echo "✗ no artifacts in $dist — run \`just ci::build-cli\` first" >&2; exit 1; }
+
+    # curl wrapper: writes the response body to $body_file, echoes the HTTP
+    # status, and on a >=400 status prints the status + body to stderr and
+    # returns non-zero. Unlike `curl -sf`, the server's error message (Forgejo
+    # returns a JSON `{message: ...}`) is never swallowed, so failures are
+    # diagnosable from the CI log instead of a bare `exit 22`.
+    body_file="$(mktemp)"
+    trap 'rm -f "$body_file"' EXIT
+    fjo() {  # fjo <method> <url> [curl args…]
+      local method="$1" url="$2"; shift 2
+      local code
+      code=$(curl -s -o "$body_file" -w '%{http_code}' \
+                  "${auth[@]}" -X "$method" "$url" "$@")
+      if [ "$code" -ge 400 ]; then
+        echo "✗ $method $url → HTTP $code" >&2
+        echo "  response: $(cat "$body_file")" >&2
+        return 1
+      fi
+      echo "$code"
+    }
+
+    echo "▶ repo=$repo  api=$api  tag=$tag"
+
+    # Recreate the rolling release: drop any existing release + tag, then make a
+    # fresh one at this commit. Forgejo creates the tag from target_commitish.
+    # The GET is allowed to 404 (no release yet) — only hard-fail real errors.
+    code=$(curl -s -o "$body_file" -w '%{http_code}' "${auth[@]}" "$api/releases/tags/$tag")
+    if [ "$code" = 200 ]; then
+      rid=$(jq -r '.id // empty' "$body_file")
+      echo "▶ deleting existing release #$rid ($tag)"
+      fjo DELETE "$api/releases/$rid" >/dev/null || true
+    elif [ "$code" != 404 ]; then
+      echo "✗ lookup of release $tag → HTTP $code: $(cat "$body_file")" >&2
+      exit 1
+    fi
+    fjo DELETE "$api/tags/$tag" >/dev/null 2>&1 || true
+
+    echo "▶ creating release $tag @ {{commit_sha}}"
+    body=$'Rolling `mekhan` CLI build from `{{ref_slug}}` @ `{{commit_sha}}`.\n\nStatic linux-musl binaries (aarch64 + x86_64). Verify with the adjacent `.sha256`.'
+    payload=$(jq -n --arg t "$tag" --arg c "{{commit_sha}}" \
+                    --arg n "mekhan CLI ({{ref_slug}})" --arg b "$body" \
+              '{tag_name:$t, target_commitish:$c, name:$n, body:$b, draft:false, prerelease:true}')
+    fjo POST "$api/releases" -H 'Content-Type: application/json' -d "$payload" >/dev/null
+    rid=$(jq -r '.id' "$body_file")
+    [ -n "$rid" ] && [ "$rid" != null ] || { echo "✗ release create returned no id: $(cat "$body_file")" >&2; exit 1; }
+
+    for f in "$dist"/*; do
+      name=$(basename "$f")
+      echo "▶ uploading $name"
+      fjo POST "$api/releases/$rid/assets?name=$name" \
+        -F "attachment=@$f;type=application/octet-stream" >/dev/null
+    done
+    echo "✓ published $(ls "$dist" | grep -c .) assets → $base/$repo/releases/tag/$tag"
 
 # ── GitOps: publish git-authored workflow templates ─────────────────────────
 
@@ -416,6 +575,70 @@ publish-backend-engine registry_image commit_sha ref_slug:
       -t "{{registry_image}}/aithericon-engine:$ref_tag" \
       -f deploy/docker/Dockerfile.engine \
       .
+
+# Push the freshly-built image tags into the in-cluster zot registry so the Nomad
+# deploy never pays for zot's on-demand pull-through sync from the EXTERNAL forge.
+#
+# Why this exists: zot mirrors forge.aithericon.eu with `onDemand: true`. On a
+# fresh tag the node's first pull triggers a cross-internet sync (forge -> zot ->
+# S3) during which ZERO bytes flow to the docker daemon, so the docker driver's
+# `pull_activity_timeout` (default 2m) aborts with "context canceled" and the
+# deploy churns/auto-reverts. Pushing the tag straight into zot here makes it
+# already-local at deploy time -> instant pull, no sync, no activity timeout.
+#
+# zot has no auth/accessControl (writable, unauthenticated in-cluster), so the
+# dest needs no creds; it's plain HTTP on :5000, hence --dest-tls-verify=false.
+# We resolve a healthy zot node from the Consul catalog (no reliance on the CI
+# container having Consul DNS). Requires FORGEJO_REGISTRY_USER/PASSWORD (forge
+# src auth) and CONSUL_HTTP_ADDR/CONSUL_HTTP_TOKEN in the env (see 30-build.yml).
+push-images-to-registry registry_image commit_sha:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    sha="{{commit_sha}}"
+    src="{{registry_image}}"          # e.g. forge.aithericon.eu/milanender
+    : "${CONSUL_HTTP_ADDR:?CONSUL_HTTP_ADDR not set}"
+    : "${FORGEJO_REGISTRY_USER:?FORGEJO_REGISTRY_USER not set}"
+    : "${FORGEJO_REGISTRY_PASSWORD:?FORGEJO_REGISTRY_PASSWORD not set}"
+
+    # Resolve a passing zot instance (Address:Port) from Consul.
+    zot=$(curl -sf -H "X-Consul-Token: ${CONSUL_HTTP_TOKEN:-}" \
+            "${CONSUL_HTTP_ADDR}/v1/health/service/zot?passing=true" \
+          | jq -r '.[0] | (.Service.Address // .Node.Address) + ":" + (.Service.Port|tostring)')
+    if [ -z "${zot:-}" ] || [ "$zot" = "null" ]; then
+      echo "✗ no healthy zot instance found in Consul" >&2; exit 1
+    fi
+    echo "▶ pushing images into in-cluster registry ${zot} from ${src} (sha=${sha})"
+
+    # Copy the three images CONCURRENTLY (they're independent). Use --all (the
+    # FULL manifest list, incl. buildx's unknown/unknown attestation) so zot's
+    # stored digest is byte-identical to forge's. This matters: on the deploy
+    # pull zot STILL runs an onDemand sync CHECK against forge, and if its local
+    # digest differs from forge it RE-SYNCS (the slow cross-internet pull that
+    # trips the docker driver's pull_activity_timeout). A single-arch copy has a
+    # different digest than forge's manifest list, so it triggered a re-sync and
+    # the pull still hung — a faithful --all copy makes the check a fast no-op.
+    # --quiet keeps the interleaved parallel logs readable.
+    imgs=(mekhan-service aithericon-engine aithericon-executor)
+    pids=()
+    for img in "${imgs[@]}"; do
+      echo "  → copy ${img}:${sha}"
+      skopeo copy --quiet --all --retry-times 3 \
+        --src-creds "${FORGEJO_REGISTRY_USER}:${FORGEJO_REGISTRY_PASSWORD}" \
+        --dest-tls-verify=false \
+        "docker://${src}/${img}:${sha}" \
+        "docker://${zot}/milanender/${img}:${sha}" &
+      pids+=("$!")
+    done
+
+    fail=0
+    for i in "${!pids[@]}"; do
+      if ! wait "${pids[$i]}"; then
+        echo "✗ copy failed: ${imgs[$i]}:${sha}" >&2
+        fail=1
+      fi
+    done
+    [ "${fail}" -eq 0 ] || { echo "✗ one or more image copies failed" >&2; exit 1; }
+    echo "✓ images pushed to in-cluster registry for ${sha} — deploy pulls locally, no on-demand sync"
 
 # Build the fat CI builder image and push it to the registry.
 #

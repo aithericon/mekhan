@@ -17,9 +17,16 @@ use tower::ServiceExt;
 
 use common::mock_auth::MockAuthenticator;
 
-/// Helper: GET /api/v1/templates with an optional `mekhan_session` cookie value.
-async fn get_templates(app: &axum::Router, cookie: Option<&str>) -> StatusCode {
-    let mut req = Request::builder().method("GET").uri("/api/v1/templates");
+/// Helper: GET /api/v1/workspaces with an optional `mekhan_session` cookie value.
+///
+/// This is a pure auth-seam probe. `/api/v1/workspaces` is authenticated but
+/// workspace-*agnostic* — it lists the caller's memberships (plus browse-only
+/// system workspaces), so it returns 200 for ANY authenticated principal
+/// regardless of whether a tenant workspace resolved. Tenant-scoped endpoints
+/// like `/api/v1/templates` now `require_workspace()` and 403 a workspace-less
+/// principal, which would conflate the auth seam (200/401) with tenant gating.
+async fn auth_probe(app: &axum::Router, cookie: Option<&str>) -> StatusCode {
+    let mut req = Request::builder().method("GET").uri("/api/v1/workspaces");
     if let Some(value) = cookie {
         req = req.header("cookie", format!("mekhan_session={value}"));
     }
@@ -36,7 +43,7 @@ async fn valid_session_cookie_lets_request_through() {
     let authn = Arc::new(MockAuthenticator::cookie_required("alice"));
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
-    let status = get_templates(&app, Some("opaque-session-id")).await;
+    let status = auth_probe(&app, Some("opaque-session-id")).await;
     assert_eq!(status, StatusCode::OK);
 }
 
@@ -45,7 +52,7 @@ async fn missing_session_cookie_returns_401() {
     let authn = Arc::new(MockAuthenticator::cookie_required("alice"));
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
-    let status = get_templates(&app, None).await;
+    let status = auth_probe(&app, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -54,7 +61,7 @@ async fn empty_session_cookie_returns_401() {
     let authn = Arc::new(MockAuthenticator::cookie_required("alice"));
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
-    let status = get_templates(&app, Some("")).await;
+    let status = auth_probe(&app, Some("")).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
@@ -66,10 +73,10 @@ async fn expired_session_cookie_returns_401() {
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
     assert_eq!(
-        get_templates(&app, Some("expired")).await,
+        auth_probe(&app, Some("expired")).await,
         StatusCode::UNAUTHORIZED
     );
-    assert_eq!(get_templates(&app, Some("fresh")).await, StatusCode::OK);
+    assert_eq!(auth_probe(&app, Some("fresh")).await, StatusCode::OK);
 }
 
 #[tokio::test]
@@ -78,8 +85,8 @@ async fn dev_noop_authenticator_passes_without_a_cookie() {
     let authn = Arc::new(MockAuthenticator::always_allow("dev-user"));
     let (app, _db) = common::test_app_with_authenticator(authn).await;
 
-    assert_eq!(get_templates(&app, None).await, StatusCode::OK);
-    assert_eq!(get_templates(&app, Some("anything")).await, StatusCode::OK);
+    assert_eq!(auth_probe(&app, None).await, StatusCode::OK);
+    assert_eq!(auth_probe(&app, Some("anything")).await, StatusCode::OK);
 }
 
 /// The unauthenticated `/api/auth/session` probe is reachable without a

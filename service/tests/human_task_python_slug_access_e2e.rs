@@ -24,8 +24,8 @@
 //! decision branches, scope group, parallel join, and Python source
 //! drift are all caught too.
 //!
-//! Requires `just dev::up` (engine :3030, executor, rustfs S3 :9005,
-//! NATS :4333). Set `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:5439/mekhan`
+//! Requires `just dev::up` (engine :13030, executor, rustfs S3 :19005,
+//! NATS :14333). Set `TEST_POSTGRES_URL=postgres://mekhan:mekhan@localhost:15439/mekhan`
 //! and `TEST_S3_{ENDPOINT,BUCKET,ACCESS_KEY,SECRET_KEY}` per
 //! `reference_executor_e2e_s3_bucket`. Single-threaded
 //! (`--test-threads=1`) — shares the live engine + executor.

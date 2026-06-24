@@ -99,9 +99,13 @@ export async function revokeInvite(workspaceId: string, inviteId: string): Promi
 	}
 }
 
-// ── Public endpoints (token-authed) ───────────────────────────────────────────
+// ── Invitee endpoints ─────────────────────────────────────────────────────────
 
-/** GET /api/v1/invites/{token}/preview — PUBLIC. Throws on 404 (invalid). */
+/**
+ * GET /api/v1/invites/{token}/preview — PUBLIC (the accept page shows the
+ * workspace/role/email before login). Uses the bare client so a not-yet-signed
+ * in invitee isn't bounced. Throws on 404 (invalid).
+ */
 export async function previewInvite(token: string): Promise<InvitePreview> {
 	return unwrap(
 		await publicClient.GET('/api/v1/invites/{token}/preview', {
@@ -110,10 +114,15 @@ export async function previewInvite(token: string): Promise<InvitePreview> {
 	);
 }
 
-/** POST /api/v1/invites/{token}/accept — PUBLIC. */
+/**
+ * POST /api/v1/invites/{token}/accept — AUTHED: the logged-in session IS the
+ * joining identity. Uses the session-cookie client; a 401 here means no session
+ * and the middleware bounces to `/api/auth/login?return_to=<this accept URL>`,
+ * so the invitee returns to the accept page after signing in.
+ */
 export async function acceptInvite(token: string): Promise<AcceptInviteResponse> {
 	return unwrap(
-		await publicClient.POST('/api/v1/invites/{token}/accept', {
+		await client.POST('/api/v1/invites/{token}/accept', {
 			params: { path: { token } }
 		})
 	);

@@ -24,14 +24,14 @@
 when:
   - event: manual
 
-# Serialize after the integration lane. Both bring up a docker-compose stack on
-# the same host Docker (via the mounted socket); running them at once collides
-# on compose container/network/volume names + host ports. `depends_on` makes
-# e2e start only AFTER integration finishes (and tears its stack down), so the
-# two never overlap. Also avoids two concurrent Rust-compiling stacks pinning
-# the node. The workflow name is the filename stem of 22-test-integration.yml.
+# Serialize after the engine-integration lane (which itself chains after
+# 22-test-integration), giving a 22 → 23 → 24 chain. Every link touches the
+# same host Docker (compose stacks / testcontainers) and compiles Rust on the
+# capped node; chaining keeps exactly one running at a time so they never
+# collide on compose container/network/volume names + host ports or pin the
+# node. The workflow name is the filename stem of 23-test-engine-integration.yml.
 depends_on:
-  - 22-test-integration
+  - 23-test-engine-integration
 
 labels:
   role: test

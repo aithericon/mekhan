@@ -6,33 +6,48 @@ use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Stable namespace used to derive a UUID from an OIDC `sub` claim so the
-/// existing `workflow_instances.created_by UUID` column keeps working without
-/// a schema migration. A `v5(NAMESPACE, sub)` is deterministic per subject.
+/// Stable namespace used to derive a UUID from an OIDC `sub` claim. This is the
+/// LEGACY identity scheme: before the `users`/`user_identities` spine
+/// (migration `20240195`), a principal's mekhan `user_id` *was* this
+/// `v5(NAMESPACE, sub)` hash. It is still used as the deterministic mint seed
+/// for a brand-new user keyed by an as-yet-unseen subject, so every id already
+/// stamped on `workflow_instances.created_by` / `workspace_members.user_id` /
+/// grant rows for an already-seen subject keeps resolving to the same value.
 pub const SUBJECT_UUID_NAMESPACE: Uuid = Uuid::from_u128(0x6d65_6b68_616e_5f73_756a_6563_745f_7635);
 
 /// An authenticated principal. The domain core works in terms of this type,
 /// never in terms of JWTs or provider-specific claims.
 ///
 /// `Serialize` is hand-written (not derived) so the wire form always carries a
-/// `user_id` field = `subject_as_uuid()` WITHOUT it being a struct/constructor
-/// field. That lets the SPA seed its profile cache by the same UUID every
-/// `created_by`/`author_id`/grant row uses, without duplicating the v5 namespace
-/// constant in JS, and with zero risk of a `None` `user_id` leaking from some
-/// construction site (the failure mode a real `Option<Uuid>` field would invite).
-/// `Deserialize`/`ToSchema` stay derived; deserialize simply ignores the extra
-/// `user_id` key on the way back in (it is recomputed from `subject`).
+/// `user_id` field (the resolved mekhan identity). It is now a REAL struct field
+/// backed by the `users` spine (resolved by `DbPrincipalResolver`), not a
+/// derived v5 hash — `subject_as_uuid()` returns it. The SPA seeds its profile
+/// cache by the same UUID every `created_by`/`author_id`/grant row uses.
+/// `Deserialize`/`ToSchema` stay derived; the field carries `#[serde(default)]`
+/// so old session JSON (which had no real `user_id`, or carried the derived one)
+/// still deserializes — the resolver/authenticator overwrites it on the next
+/// request.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, utoipa::ToSchema)]
 pub struct AuthUser {
     /// OIDC `sub` claim. Stable per identity within an issuer.
     pub subject: String,
+    /// The resolved mekhan identity id (`users.id`). Populated by
+    /// `DbPrincipalResolver`/the dev roster/token resolvers BEFORE any handler
+    /// runs; this is the value `subject_as_uuid()` returns and the key every
+    /// membership / grant / authorship row uses. `#[serde(default)]` keeps old
+    /// session JSON deserializing (the value is overwritten on the next
+    /// request); a bare/test construction may leave it `Uuid::nil()`.
+    #[serde(default)]
+    pub user_id: Uuid,
     pub email: Option<String>,
     pub display_name: Option<String>,
     #[serde(default)]
     pub roles: Vec<String>,
-    /// Upstream identity-provider org id (e.g. Zitadel `urn:zitadel:iam:org:id`).
-    /// Metadata only — the authoritative tenant is `workspace_id`, looked up
-    /// from `workspaces.zitadel_org_id` by `DbPrincipalResolver`.
+    /// Legacy upstream identity-provider org id slot. No longer populated —
+    /// mekhan does not derive tenancy from the IdP org. Always `None`; the
+    /// authoritative tenant is `workspace_id`, resolved from explicit
+    /// `workspace_members` rows. Kept on the struct so old session JSON keeps
+    /// deserializing.
     pub org_id: Option<String>,
     /// Whether this principal is a platform administrator — granted by the
     /// `auth.platform_admins` allow-list (subject or email) or the dev-noop
@@ -41,12 +56,11 @@ pub struct AuthUser {
     #[serde(default)]
     pub is_platform_admin: bool,
     /// Mekhan workspace the principal is currently acting in. Populated by
-    /// `DbPrincipalResolver` from the user's `workspace_members` row (auto-
-    /// provisioned from `org_id` when a matching `workspaces.zitadel_org_id`
-    /// exists; otherwise the seeded default workspace if the user is a
-    /// member there). `None` only when no DB handle is available (unit
-    /// tests + legacy session rows; `#[serde(default)]` keeps deserialize
-    /// of old session JSON working).
+    /// `DbPrincipalResolver` from the user's `workspace_members` row (an
+    /// accepted invite, an admin grant, a workspace they created, or the
+    /// lazily-minted personal workspace). `None` only when no DB handle is
+    /// available (unit tests + legacy session rows; `#[serde(default)]` keeps
+    /// deserialize of old session JSON working).
     #[serde(default)]
     pub workspace_id: Option<Uuid>,
     /// The caller's role (`owner`|`admin`|`editor`|`viewer`) in their resolved
@@ -60,18 +74,29 @@ pub struct AuthUser {
     /// URL to the principal's profile photo, lifted from the OIDC `picture`
     /// claim by `StaticPrincipalResolver`. `None` for dev-noop and any IdP that
     /// doesn't assert a picture → the SPA renders initials. Real struct field
-    /// (so `ToSchema` + the `user_profiles` mirror pick it up); set at every
+    /// (so `ToSchema` + the `users` mirror pick it up); set at every
     /// construction site (mostly `None`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_url: Option<String>,
 }
 
 impl AuthUser {
-    /// Deterministic UUID derived from the OIDC subject. Used to populate
-    /// pre-existing `UUID NOT NULL` columns (workflow_instances.created_by)
-    /// without migrating their type.
+    /// The principal's resolved mekhan identity id (`users.id`). Kept under its
+    /// historical name + `-> Uuid` signature so the ~130 downstream call sites
+    /// (every `created_by` / membership / grant write) stay untouched; only its
+    /// source-of-value changed — it now returns the resolved `user_id` field
+    /// instead of recomputing the v5 hash of `subject`.
     pub fn subject_as_uuid(&self) -> Uuid {
-        Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, self.subject.as_bytes())
+        self.user_id
+    }
+
+    /// The LEGACY `v5(SUBJECT_UUID_NAMESPACE, subject)` value. Before the
+    /// `users` spine this *was* the identity id; it is now the deterministic
+    /// mint seed for a never-before-seen subject (resolver step 3) and the fixed
+    /// id for the seeded dev roster, so already-stamped rows for known subjects
+    /// keep resolving to the same `users.id`.
+    pub fn legacy_subject_uuid(subject: &str) -> Uuid {
+        Uuid::new_v5(&SUBJECT_UUID_NAMESPACE, subject.as_bytes())
     }
 
     /// The caller's active tenant workspace, or a 403 if none is resolved.
@@ -89,13 +114,14 @@ impl AuthUser {
     }
 }
 
-/// Hand-written so `user_id` (the derived `subject_as_uuid()`) is always
-/// emitted without being a struct field. Mirrors the field-presence rules the
-/// derive would produce (`workspace_role`/`avatar_url` skipped when `None`),
-/// and adds `user_id` unconditionally. Keep in sync with the field list above.
+/// Hand-written so `user_id` (the resolved `subject_as_uuid()`) is always
+/// emitted in a stable position, regardless of where it sits in the struct.
+/// Mirrors the field-presence rules the derive would produce
+/// (`workspace_role`/`avatar_url` skipped when `None`), and emits `user_id`
+/// unconditionally. Keep in sync with the field list above.
 impl Serialize for AuthUser {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Base 7 always-present fields (incl. is_platform_admin) + the derived
+        // Base 7 always-present fields (incl. is_platform_admin) + the resolved
         // user_id; +1 each for the two optionals when present (advisory len for
         // non-self-describing formats).
         let mut len = 8;
@@ -149,6 +175,7 @@ mod tests {
     fn bare(subject: &str) -> AuthUser {
         AuthUser {
             subject: subject.to_string(),
+            user_id: AuthUser::legacy_subject_uuid(subject),
             email: None,
             display_name: None,
             roles: Vec::new(),
