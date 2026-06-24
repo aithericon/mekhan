@@ -3532,6 +3532,48 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources/{id}/repair": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/resources/{id}/repair` — operator recovery for a POOL resource
+         *     (a `capacity`) whose backing engine net was lost or drifted.
+         * @description The recurring failure this fixes: an engine NATS reset (a `just dev reset`,
+         *     or a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled
+         *     against the pool keep heartbeating. mekhan's presence map still holds them as
+         *     `present`, so the heartbeat fast path only bumps `last_seen` — a
+         *     `presence_acquire` is injected ONLY on the absent→present edge — and the
+         *     freshly-empty pool net never regains capacity. The pool sits at `0` forever
+         *     and every run that binds it starves on its lease. The same dead-end is
+         *     reached when the resource was created while the engine was down.
+         *
+         *     Repair is two idempotent steps, both safe to run on a HEALTHY pool:
+         *     1. RE-DEPLOY the backing pool net from the resource's persisted config
+         *        (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is
+         *        rebuilt — seeded with its token capacity, or as the capacity-less presence
+         *        scaffold. This is the launch-time self-heal made operator-triggerable.
+         *     2. RE-ARM presence: every present runner / roster member admitted to this
+         *        pool is flipped to absent (WITHOUT an expire), so its next heartbeat
+         *        re-acquires its capacity tokens through the proven absent→present path.
+         *        The engine-count top-up there makes this idempotent — a pool that was not
+         *        actually lost re-arms to the same marking instead of double-admitting.
+         *
+         *     Auth mirrors `delete_resource`: platform admin for a platform-scoped pool,
+         *     `Editor` on the resource ACL for a tenant pool.
+         */
+        post: operations["repair_pool"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/resources/{id}/rotate": {
         parameters: {
             query?: never;
@@ -11936,6 +11978,31 @@ export interface components {
             reusable: boolean;
             /** Format: int32 */
             uses: number;
+        };
+        /**
+         * @description Outcome of `POST /api/v1/resources/{id}/repair` — operator recovery for a
+         *     pool whose backing net was lost or drifted. Reports the deterministic pool
+         *     net id that was (re)deployed and how many live presence sources were re-armed
+         *     to re-acquire their capacity on their next heartbeat.
+         */
+        RepairPoolResponse: {
+            /**
+             * @description Whether the resource resolves to a backing pool net at all (a non-pool
+             *     resource is a no-op repair). `false` means nothing was redeployed.
+             */
+            has_pool_net: boolean;
+            /**
+             * @description Number of present roster members (human pools) re-armed to re-acquire on
+             *     their next presence heartbeat.
+             */
+            members_rearmed: number;
+            /** @description The backing pool net id (`pool-<resource_id>`) that was re-ensured. */
+            pool_net_id: string;
+            /**
+             * @description Number of present runners (machine pools) re-armed to re-acquire their
+             *     capacity tokens on their next heartbeat.
+             */
+            runners_rearmed: number;
         };
         /**
          * @description Request body for `PUT /api/v1/assets/{id}/records`. Replaces (or appends to)
@@ -23038,6 +23105,47 @@ export interface operations {
                 };
             };
             /** @description Object not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    repair_pool: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Pool (capacity) resource id */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pool net re-ensured + presence re-armed */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RepairPoolResponse"];
+                };
+            };
+            /** @description Editor role (tenant) or platform admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Resource not found */
             404: {
                 headers: {
                     [name: string]: unknown;

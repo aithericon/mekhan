@@ -83,6 +83,7 @@ use utoipa::OpenApi;
             crate::models::resource::CreateResourceRequest,
             crate::models::resource::UpdateResourceRequest,
             crate::models::resource::RotateResourceRequest,
+            crate::models::resource::RepairPoolResponse,
             crate::models::resource::ResourceAuditEntry,
             // S3 (unified capacity model) — the trait-space axis vocabulary +
             // the named presets surfaced on `ResourceTypeInfo.capacity_presets`

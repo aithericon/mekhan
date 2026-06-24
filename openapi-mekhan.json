@@ -10689,6 +10689,60 @@
         }
       }
     },
+    "/api/v1/resources/{id}/repair": {
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/v1/resources/{id}/repair` — operator recovery for a POOL resource\n(a `capacity`) whose backing engine net was lost or drifted.",
+        "description": "The recurring failure this fixes: an engine NATS reset (a `just dev reset`,\nor a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled\nagainst the pool keep heartbeating. mekhan's presence map still holds them as\n`present`, so the heartbeat fast path only bumps `last_seen` — a\n`presence_acquire` is injected ONLY on the absent→present edge — and the\nfreshly-empty pool net never regains capacity. The pool sits at `0` forever\nand every run that binds it starves on its lease. The same dead-end is\nreached when the resource was created while the engine was down.\n\nRepair is two idempotent steps, both safe to run on a HEALTHY pool:\n1. RE-DEPLOY the backing pool net from the resource's persisted config\n   (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is\n   rebuilt — seeded with its token capacity, or as the capacity-less presence\n   scaffold. This is the launch-time self-heal made operator-triggerable.\n2. RE-ARM presence: every present runner / roster member admitted to this\n   pool is flipped to absent (WITHOUT an expire), so its next heartbeat\n   re-acquires its capacity tokens through the proven absent→present path.\n   The engine-count top-up there makes this idempotent — a pool that was not\n   actually lost re-arms to the same marking instead of double-admitting.\n\nAuth mirrors `delete_resource`: platform admin for a platform-scoped pool,\n`Editor` on the resource ACL for a tenant pool.",
+        "operationId": "repair_pool",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Pool (capacity) resource id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Pool net re-ensured + presence re-armed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepairPoolResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role (tenant) or platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Resource not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/resources/{id}/rotate": {
       "post": {
         "tags": [
@@ -30212,6 +30266,36 @@
           "uses": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "RepairPoolResponse": {
+        "type": "object",
+        "description": "Outcome of `POST /api/v1/resources/{id}/repair` — operator recovery for a\npool whose backing net was lost or drifted. Reports the deterministic pool\nnet id that was (re)deployed and how many live presence sources were re-armed\nto re-acquire their capacity on their next heartbeat.",
+        "required": [
+          "pool_net_id",
+          "has_pool_net",
+          "runners_rearmed",
+          "members_rearmed"
+        ],
+        "properties": {
+          "has_pool_net": {
+            "type": "boolean",
+            "description": "Whether the resource resolves to a backing pool net at all (a non-pool\nresource is a no-op repair). `false` means nothing was redeployed."
+          },
+          "members_rearmed": {
+            "type": "integer",
+            "description": "Number of present roster members (human pools) re-armed to re-acquire on\ntheir next presence heartbeat.",
+            "minimum": 0
+          },
+          "pool_net_id": {
+            "type": "string",
+            "description": "The backing pool net id (`pool-<resource_id>`) that was re-ensured."
+          },
+          "runners_rearmed": {
+            "type": "integer",
+            "description": "Number of present runners (machine pools) re-armed to re-acquire their\ncapacity tokens on their next heartbeat.",
+            "minimum": 0
           }
         }
       },
