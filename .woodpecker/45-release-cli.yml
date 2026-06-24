@@ -10,9 +10,11 @@
 # it always points at the latest build. (This is the rolling-artifacts model;
 # switch the recipe to a `v*` tag trigger if you later want immutable releases.)
 #
-# Independent of 30-build (no image needed), so it runs in parallel. Its own
-# CARGO_TARGET_DIR keeps it from contending on 30-build's target lock; sccache
-# still gives shared-crate cache hits across the two dirs.
+# Gated on 30-build only — runs in PARALLEL with the deploy stages (it needs no
+# deploy artifact; the gate just keeps it from overlapping 30-build's heavy
+# compile on the memory-capped worker). Its own CARGO_TARGET_DIR avoids
+# contending on 30-build's target lock; sccache still gives shared-crate cache
+# hits across the two dirs.
 #
 # Release auth: a dedicated Forgejo PAT with `write:repository` scope, stored at
 # vault `secret/forgejo/api` (field `token`). The container-registry token
@@ -25,6 +27,14 @@ when:
   - branch: [dev, main]
     event: push
   - event: manual
+
+# Depends ONLY on 30-build — independent of the deploy stages, so it runs in
+# PARALLEL with 40-deploy / 41-deploy-prod (gated on build so the two heavy Rust
+# builds never overlap on the memory-capped mekhan-arm worker: 30-build runs
+# first/alone, then this heavy build overlaps only the light deploy — fits the
+# ~7 GB node / 6 GiB-per-step budget with max_workflows=2). Numbered last
+# (45-) purely for list position; ordering is by depends_on, not filename.
+depends_on: [30-build]
 
 labels:
   role: build
