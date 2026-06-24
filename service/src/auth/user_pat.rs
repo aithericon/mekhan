@@ -64,10 +64,21 @@ pub(crate) fn is_platform_admin(
 /// On success returns an [`AuthUser`] indistinguishable from the owner's cookie
 /// session (same `user_id`, workspace, role, platform-admin flag). Any
 /// structural failure, missing/revoked row, expiry, or hash mismatch maps to
-/// [`AuthError::InvalidToken`] so the HTTP layer renders a uniform 401.
+/// [`AuthError::InvalidToken`] with a SINGLE opaque message, so the HTTP layer
+/// renders a uniform 401 whose body never distinguishes "no such id" from
+/// "wrong secret" from "expired" — the per-cause detail goes to a `debug!` log,
+/// not the client, so a `uat_` id's existence / lifecycle can't be probed off
+/// the response (ids are random UUIDv4 anyway).
 pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<AuthUser, AuthError> {
-    let (pat_id, secret) = parse_token(USER_PAT_TOKEN_PREFIX, bearer)
-        .ok_or_else(|| AuthError::InvalidToken("malformed PAT".to_string()))?;
+    // Single client-facing reason for every user-caused failure; the real cause
+    // is logged, never returned.
+    fn reject(detail: &str) -> AuthError {
+        tracing::debug!(reason = detail, "uat_ PAT rejected");
+        AuthError::InvalidToken("invalid token".to_string())
+    }
+
+    let (pat_id, secret) =
+        parse_token(USER_PAT_TOKEN_PREFIX, bearer).ok_or_else(|| reject("malformed PAT"))?;
 
     let row = sqlx::query_as::<_, PatAuthRow>(
         "SELECT user_id, token_hash, expires_at \
@@ -77,16 +88,16 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AuthError::Internal(e.to_string()))?
-    .ok_or_else(|| AuthError::InvalidToken("unknown or revoked token".to_string()))?;
+    .ok_or_else(|| reject("unknown or revoked token id"))?;
 
     if let Some(exp) = row.expires_at {
         if exp <= Utc::now() {
-            return Err(AuthError::InvalidToken("expired token".to_string()));
+            return Err(reject("expired token"));
         }
     }
 
     if !verify_secret(&secret, &row.token_hash) {
-        return Err(AuthError::InvalidToken("token mismatch".to_string()));
+        return Err(reject("secret mismatch"));
     }
 
     let user_id = row.user_id;
@@ -106,7 +117,7 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
     .fetch_optional(&state.db)
     .await
     .map_err(|e| AuthError::Internal(e.to_string()))?
-    .ok_or_else(|| AuthError::InvalidToken("token owner no longer exists".to_string()))?;
+    .ok_or_else(|| reject("token owner no longer exists"))?;
 
     let subject = owner.subject.unwrap_or_else(|| format!("user:{user_id}"));
     let is_platform_admin = is_platform_admin(

@@ -161,6 +161,27 @@ async fn revoking_a_random_token_id_is_404() {
 }
 
 #[tokio::test]
+async fn creating_a_token_with_a_blank_name_is_400() {
+    // The only validation branch on these endpoints: an empty/whitespace name
+    // is rejected before the DB is touched.
+    let app = token_app().await;
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/auth/tokens")
+                .header("content-type", "application/json")
+                .header("cookie", "mekhan_session=valid")
+                .body(Body::from(json!({ "name": "   " }).to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn minted_pat_authenticates_a_protected_endpoint() {
     // End-to-end: mint a `uat_` PAT over cookie auth, then present it as a
     // Bearer on a normal authenticated endpoint — exercising the middleware

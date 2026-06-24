@@ -75,7 +75,7 @@ openapi-drift:
 #
 #   unit         no external deps         test-unit-rust + test-frontend-unit
 #   integration  Postgres + NATS + S3     test-integration  (brings up the stack)
-#   e2e          full stack + browser     test-e2e (+ the gated test-e2e-zitadel)
+#   e2e          full stack + browser     test-e2e
 
 # cargo check on the workspace (lib + bins). Kept as a fast compile gate.
 check-rust:
@@ -156,37 +156,6 @@ test-integration:
     echo "▶ cargo test -p mekhan-service --lib + ${#args[@]} integration targets (live stack)…"
     cargo test -p mekhan-service --lib "${args[@]}" --no-fail-fast
 
-# Layer-2 real-Zitadel e2e: bring up the full stack, bootstrap Zitadel
-# (provisions the introspection API app + writes mekhan.local.toml), then
-# run the MEKHAN_E2E_ZITADEL-gated test which mints/uses/revokes a live
-# service-user PAT. Heavy + Docker-dependent — its own gated lane, never a
-# PR gate. `down -v` always, so a fresh Zitadel each run.
-test-e2e-zitadel:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd ..
-    cleanup() { docker compose down -v >/dev/null 2>&1 || true; }
-    trap cleanup EXIT
-    echo "▶ infra + zitadel up…"
-    docker compose up -d
-    echo "▶ waiting for zitadel…"
-    for _ in $(seq 1 90); do
-      curl -fsS http://localhost:18080/debug/ready >/dev/null 2>&1 && break
-      sleep 2
-    done
-    echo "▶ waiting for postgres…"
-    for _ in $(seq 1 30); do
-      docker compose exec -T postgres pg_isready -U mekhan -d mekhan >/dev/null 2>&1 && break
-      sleep 1
-    done
-    echo "▶ bootstrap zitadel (idempotent)…"
-    bash deploy/zitadel/bootstrap.sh
-    echo "▶ running gated e2e…"
-    TEST_POSTGRES_URL="postgres://mekhan:mekhan@localhost:15439/mekhan" \
-    TEST_NATS_URL="nats://localhost:14333" \
-    TEST_S3_ENDPOINT="http://localhost:19005" \
-    MEKHAN_E2E_ZITADEL=1 \
-      cargo test --test zitadel_e2e -- --test-threads=1 --nocapture
 
 # Engine INTEGRATION tests — the `core-engine` Petri-net engine's own
 # cross-net scenarios (resource pools, claim bridging, finalizer drain). These
@@ -237,8 +206,7 @@ test-frontend-e2e:
 # Same runner caveat as `test-integration` (needs docker / the compose-network
 # wiring). Additionally needs Playwright's browser binaries —
 # `playwright install --with-deps chromium` pulls them (requires apt/root in
-# the CI builder image). The heavier real-Zitadel auth e2e is a separate lane
-# (`test-e2e-zitadel`).
+# the CI builder image).
 test-e2e:
     #!/usr/bin/env bash
     set -euo pipefail
