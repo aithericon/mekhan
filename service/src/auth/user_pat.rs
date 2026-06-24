@@ -146,7 +146,6 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
         display_name: owner.display_name,
         // No runner/worker marker — this principal IS the human.
         roles: vec![],
-        org_id: None,
         is_platform_admin,
         workspace_id,
         workspace_role,

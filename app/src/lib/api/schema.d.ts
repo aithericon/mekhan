@@ -6107,14 +6107,6 @@ export interface components {
              *     `#[serde(default)]` keeps old session JSON deserializing to `false`.
              */
             is_platform_admin?: boolean;
-            /**
-             * @description Legacy upstream identity-provider org id slot. No longer populated —
-             *     mekhan does not derive tenancy from the IdP org. Always `None`; the
-             *     authoritative tenant is `workspace_id`, resolved from explicit
-             *     `workspace_members` rows. Kept on the struct so old session JSON keeps
-             *     deserializing.
-             */
-            org_id?: string | null;
             roles?: string[];
             /** @description OIDC `sub` claim. Stable per identity within an issuer. */
             subject: string;

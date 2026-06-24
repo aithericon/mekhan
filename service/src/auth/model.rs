@@ -43,12 +43,6 @@ pub struct AuthUser {
     pub display_name: Option<String>,
     #[serde(default)]
     pub roles: Vec<String>,
-    /// Legacy upstream identity-provider org id slot. No longer populated —
-    /// mekhan does not derive tenancy from the IdP org. Always `None`; the
-    /// authoritative tenant is `workspace_id`, resolved from explicit
-    /// `workspace_members` rows. Kept on the struct so old session JSON keeps
-    /// deserializing.
-    pub org_id: Option<String>,
     /// Whether this principal is a platform administrator — granted by the
     /// `auth.platform_admins` allow-list (subject or email) or the dev-noop
     /// seed. Gates platform-global governance affordances (the platform scope).
@@ -121,10 +115,10 @@ impl AuthUser {
 /// unconditionally. Keep in sync with the field list above.
 impl Serialize for AuthUser {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        // Base 7 always-present fields (incl. is_platform_admin) + the resolved
+        // Base 6 always-present fields (incl. is_platform_admin) + the resolved
         // user_id; +1 each for the two optionals when present (advisory len for
         // non-self-describing formats).
-        let mut len = 8;
+        let mut len = 7;
         if self.workspace_role.is_some() {
             len += 1;
         }
@@ -136,7 +130,6 @@ impl Serialize for AuthUser {
         s.serialize_field("email", &self.email)?;
         s.serialize_field("display_name", &self.display_name)?;
         s.serialize_field("roles", &self.roles)?;
-        s.serialize_field("org_id", &self.org_id)?;
         s.serialize_field("workspace_id", &self.workspace_id)?;
         // Always present — the whole reason this impl is hand-written.
         s.serialize_field("user_id", &self.subject_as_uuid())?;
@@ -179,7 +172,6 @@ mod tests {
             email: None,
             display_name: None,
             roles: Vec::new(),
-            org_id: None,
             is_platform_admin: false,
             workspace_id: None,
             workspace_role: None,

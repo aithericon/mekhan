@@ -2103,7 +2103,6 @@ mod tests {
             email: None,
             display_name: None,
             roles: vec![],
-            org_id: None,
             is_platform_admin: false,
             workspace_id: Some(ws),
             workspace_role: None,

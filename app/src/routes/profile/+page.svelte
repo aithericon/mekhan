@@ -88,14 +88,6 @@
 						</dt>
 						<dd class="text-sm text-foreground">{user.email ?? '—'}</dd>
 					</div>
-					<div class="space-y-1">
-						<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
-							Organization
-						</dt>
-						<dd class="text-sm text-foreground" data-testid="profile-org">
-							{user.orgId ?? '—'}
-						</dd>
-					</div>
 					<div class="space-y-1 sm:col-span-2">
 						<dt class="text-sm font-medium uppercase tracking-wide text-muted-foreground">
 							Subject (OIDC <code>sub</code>)

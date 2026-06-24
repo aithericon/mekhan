@@ -67,7 +67,6 @@ pub fn platform_root_user() -> AuthUser {
         email: None,
         display_name: Some("Platform Root".to_string()),
         roles: vec![PLATFORM_ROOT_ROLE.to_string()],
-        org_id: None,
         is_platform_admin: true,
         workspace_id: None,
         workspace_role: None,
