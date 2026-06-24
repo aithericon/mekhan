@@ -362,28 +362,55 @@ publish-cli-release ref_slug commit_sha:
     [ -d "$dist" ] && ls "$dist"/* >/dev/null 2>&1 || {
       echo "✗ no artifacts in $dist — run \`just ci::build-cli\` first" >&2; exit 1; }
 
+    # curl wrapper: writes the response body to $body_file, echoes the HTTP
+    # status, and on a >=400 status prints the status + body to stderr and
+    # returns non-zero. Unlike `curl -sf`, the server's error message (Forgejo
+    # returns a JSON `{message: ...}`) is never swallowed, so failures are
+    # diagnosable from the CI log instead of a bare `exit 22`.
+    body_file="$(mktemp)"
+    trap 'rm -f "$body_file"' EXIT
+    fjo() {  # fjo <method> <url> [curl args…]
+      local method="$1" url="$2"; shift 2
+      local code
+      code=$(curl -s -o "$body_file" -w '%{http_code}' \
+                  "${auth[@]}" -X "$method" "$url" "$@")
+      if [ "$code" -ge 400 ]; then
+        echo "✗ $method $url → HTTP $code" >&2
+        echo "  response: $(cat "$body_file")" >&2
+        return 1
+      fi
+      echo "$code"
+    }
+
+    echo "▶ repo=$repo  api=$api  tag=$tag"
+
     # Recreate the rolling release: drop any existing release + tag, then make a
     # fresh one at this commit. Forgejo creates the tag from target_commitish.
-    rid=$(curl -sf "${auth[@]}" "$api/releases/tags/$tag" 2>/dev/null | jq -r '.id // empty' || true)
-    if [ -n "$rid" ]; then
+    # The GET is allowed to 404 (no release yet) — only hard-fail real errors.
+    code=$(curl -s -o "$body_file" -w '%{http_code}' "${auth[@]}" "$api/releases/tags/$tag")
+    if [ "$code" = 200 ]; then
+      rid=$(jq -r '.id // empty' "$body_file")
       echo "▶ deleting existing release #$rid ($tag)"
-      curl -sf "${auth[@]}" -X DELETE "$api/releases/$rid" >/dev/null || true
+      fjo DELETE "$api/releases/$rid" >/dev/null || true
+    elif [ "$code" != 404 ]; then
+      echo "✗ lookup of release $tag → HTTP $code: $(cat "$body_file")" >&2
+      exit 1
     fi
-    curl -sf "${auth[@]}" -X DELETE "$api/tags/$tag" >/dev/null 2>&1 || true
+    fjo DELETE "$api/tags/$tag" >/dev/null 2>&1 || true
 
     echo "▶ creating release $tag @ {{commit_sha}}"
     body=$'Rolling `mekhan` CLI build from `{{ref_slug}}` @ `{{commit_sha}}`.\n\nStatic linux-musl binaries (aarch64 + x86_64). Verify with the adjacent `.sha256`.'
-    rel=$(curl -sf "${auth[@]}" -H 'Content-Type: application/json' -X POST "$api/releases" \
-      -d "$(jq -n --arg t "$tag" --arg c "{{commit_sha}}" \
-                  --arg n "mekhan CLI ({{ref_slug}})" --arg b "$body" \
-            '{tag_name:$t, target_commitish:$c, name:$n, body:$b, draft:false, prerelease:true}')")
-    rid=$(jq -r '.id' <<<"$rel")
-    [ -n "$rid" ] && [ "$rid" != null ] || { echo "✗ release create failed: $rel" >&2; exit 1; }
+    payload=$(jq -n --arg t "$tag" --arg c "{{commit_sha}}" \
+                    --arg n "mekhan CLI ({{ref_slug}})" --arg b "$body" \
+              '{tag_name:$t, target_commitish:$c, name:$n, body:$b, draft:false, prerelease:true}')
+    fjo POST "$api/releases" -H 'Content-Type: application/json' -d "$payload" >/dev/null
+    rid=$(jq -r '.id' "$body_file")
+    [ -n "$rid" ] && [ "$rid" != null ] || { echo "✗ release create returned no id: $(cat "$body_file")" >&2; exit 1; }
 
     for f in "$dist"/*; do
       name=$(basename "$f")
       echo "▶ uploading $name"
-      curl -sf "${auth[@]}" -X POST "$api/releases/$rid/assets?name=$name" \
+      fjo POST "$api/releases/$rid/assets?name=$name" \
         -F "attachment=@$f;type=application/octet-stream" >/dev/null
     done
     echo "✓ published $(ls "$dist" | grep -c .) assets → $base/$repo/releases/tag/$tag"
