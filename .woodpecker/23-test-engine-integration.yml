@@ -1,0 +1,49 @@
+# =============================================================================
+# Test · Engine Integration (manual only)
+# =============================================================================
+# Runs the core-engine Petri-net engine's own integration suite
+# (petri-test-harness --features integration): cross-net resource pools, claim
+# bridging, finalizer drain. These live in the NESTED engine workspace and are
+# DISTINCT from 22-test-integration, which exercises the mekhan services.
+#
+# Unlike lane 22, these tests need NO docker-compose stack — each test binary
+# auto-provisions its own NATS JetStream via testcontainers. All they require is
+# a Docker daemon, so the host /var/run/docker.sock is mounted (same as 22/24).
+# All logic is in just/ci.just::test-engine-integration.
+#
+# MANUAL ONLY — `event: manual` and nothing else. Never runs on push, no
+# cross-pipeline depends_on into build/deploy, so it cannot disturb them.
+#
+# CARGO_TARGET_DIR points at a SEPARATE engine cache dir (not the mekhan one
+# lanes 22/24/30 share) — the engine is its own cargo workspace, so co-mingling
+# target dirs only churns fingerprints. Still UNPROVEN on the runner; validate
+# with one manual run before relying on it.
+# =============================================================================
+
+when:
+  - event: manual
+
+# Serialize after the integration lane. Both touch the host Docker (lane 22 via
+# docker-compose, this lane via testcontainers); chaining them avoids two
+# concurrent Rust-compiling test stacks pinning the capped node and any clash
+# over Docker resources. The workflow name is the filename stem of
+# 22-test-integration.yml.
+depends_on:
+  - 22-test-integration
+
+labels:
+  role: test
+  host: worker-stateful-arm
+
+steps:
+  - name: test-engine-integration
+    image: forge.aithericon.eu/milanender/mekhan-ci-builder:latest
+    pull: true
+    environment:
+      CARGO_HOME: /woodpecker/cache/cargo
+      CARGO_TARGET_DIR: /woodpecker/cache/target/engine
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    commands:
+      - just ci::test-engine-integration
+    depends_on: []

@@ -188,6 +188,33 @@ test-e2e-zitadel:
     MEKHAN_E2E_ZITADEL=1 \
       cargo test --test zitadel_e2e -- --test-threads=1 --nocapture
 
+# Engine INTEGRATION tests — the `core-engine` Petri-net engine's own
+# cross-net scenarios (resource pools, claim bridging, finalizer drain). These
+# live in the NESTED engine workspace (engine/Cargo.toml) and are gated behind
+# the `integration` feature on petri-test-harness. Unlike the mekhan
+# `test-integration` lane, they do NOT need the docker-compose stack: each test
+# binary auto-provisions its own NATS JetStream instance via testcontainers
+# (one shared container per binary, behind OnceCell), so `--test-threads=1` is
+# required — concurrent threads would race on container startup.
+#
+# Runs from `engine/` (cd engine) so cargo resolves the engine workspace, not
+# the umbrella. Inherits the same memory/sccache budget as the other Rust lanes
+# (ci-cargo-env.sh) so linking on the capped ARM node doesn't OOM `ld`.
+# SQLX_OFFLINE keeps it self-contained (no live DB needed to compile).
+#
+# Notes (manual lane — validate on the runner before relying on it as a gate):
+#   • Needs docker — testcontainers talks to /var/run/docker.sock (mounted by
+#     the Woodpecker step). No compose stack is brought up.
+test-engine-integration:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ..
+    source just/scripts/ci-cargo-env.sh
+    echo "▶ engine integration tests (petri-test-harness --features integration)…"
+    cd engine
+    SQLX_OFFLINE=true cargo test -p petri-test-harness --features integration \
+      -- --test-threads=1 --no-fail-fast
+
 # Vitest unit tests
 test-frontend-unit:
     #!/usr/bin/env bash

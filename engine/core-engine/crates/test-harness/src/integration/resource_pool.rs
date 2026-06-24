@@ -29,7 +29,7 @@ use tokio::sync::Notify;
 
 use petri_application::PetriNetService;
 use petri_domain::{
-    Arc as PetriArc, Marking, PetriNet, Place, PlaceId, Port, TokenColor, Transition,
+    Arc as PetriArc, DomainEvent, Marking, PetriNet, Place, PlaceId, Port, TokenColor, Transition,
 };
 use petri_infrastructure::{MarkingProjection, MemoryEventStore, MemoryTopologyStore};
 use petri_nats::{CrossNetBridge, NatsConfig, NatsEventPublisher};
@@ -52,6 +52,15 @@ struct PoolTestContext {
     pool: Arc<Svc>,
     requesters: Vec<Arc<Svc>>,
     jetstream: jetstream::Context,
+    /// Join handle of the pool net's inbound cross-net bridge listener. Retained
+    /// so a test can `abort()` it to model the pool net being hibernated
+    /// (removed from the active set / no longer draining its bridge), then
+    /// re-establish a fresh listener to model waking the pool. The bridge
+    /// consumer is DURABLE (`durable_name`, `AckPolicy::Explicit`), so messages
+    /// published while the listener task is gone stay buffered/unacked on the
+    /// consumer and are delivered when a new listener re-binds — exactly the
+    /// real wake-on-release path. See `restart_pool_listener`.
+    pool_listener: parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl PoolTestContext {
@@ -89,14 +98,19 @@ impl PoolTestContext {
         let pool = build_service(&pool_id);
         let requesters: Vec<Arc<Svc>> = requester_ids.iter().map(|id| build_service(id)).collect();
 
-        // Start inbound bridge listeners for every net.
+        // Start inbound bridge listeners for every net. The pool's handle is
+        // retained (see `pool_listener`) so a test can hibernate/wake it.
+        let mut pool_listener: Option<tokio::task::JoinHandle<()>> = None;
         let mut all: Vec<(&String, &Arc<Svc>)> = vec![(&pool_id, &pool)];
         for (id, svc) in requester_ids.iter().zip(requesters.iter()) {
             all.push((id, svc));
         }
         for (net_id, svc) in &all {
             let bridge = Arc::new(CrossNetBridge::new((*net_id).clone(), jetstream.clone()));
-            bridge.start_inbound_listener((*svc).clone(), Arc::new(Notify::new()));
+            let handle = bridge.start_inbound_listener((*svc).clone(), Arc::new(Notify::new()));
+            if *net_id == &pool_id {
+                pool_listener = Some(handle);
+            }
         }
 
         // Wait for all bridge consumers to exist (DeliverPolicy::New drops
@@ -130,10 +144,43 @@ impl PoolTestContext {
             pool,
             requesters,
             jetstream,
+            pool_listener: parking_lot::Mutex::new(pool_listener),
         }
     }
 
+    /// Model the pool net hibernating: abort its inbound bridge listener task so
+    /// the pool stops draining its `claim_inbox`/`release_inbox`. The DURABLE
+    /// bridge consumer is left in place, so any token bridged to the pool while
+    /// it is "hibernated" stays buffered/unacked on the consumer rather than
+    /// being lost. This stands in for `NetRegistry::hibernate` removing the net
+    /// from the active set + cancelling its eval loop (which the test-harness
+    /// cannot drive directly: `petri-api`/`NetRegistry` is not a dependency of
+    /// `petri-test-harness`). The pool service + its event log stay intact, the
+    /// same way a hibernated net's durable state survives in production.
+    fn hibernate_pool(&self) {
+        if let Some(handle) = self.pool_listener.lock().take() {
+            handle.abort();
+        }
+    }
+
+    /// Model the pool net waking: re-establish a fresh inbound bridge listener
+    /// bound to the SAME durable consumer (`bridge-inbound-{pool_id}`). On
+    /// re-bind, JetStream redelivers the messages buffered while the pool was
+    /// hibernated — the release published by the cancelled holder is consumed
+    /// and applied, exactly the production wake-on-release path.
+    fn wake_pool(&self) {
+        let bridge = Arc::new(CrossNetBridge::new(
+            self.pool_id.clone(),
+            self.jetstream.clone(),
+        ));
+        let handle = bridge.start_inbound_listener(self.pool.clone(), Arc::new(Notify::new()));
+        *self.pool_listener.lock() = Some(handle);
+    }
+
     async fn teardown(&self) {
+        if let Some(handle) = self.pool_listener.lock().take() {
+            handle.abort();
+        }
         let stream = match self.jetstream.get_stream("PETRI_GLOBAL").await {
             Ok(s) => s,
             Err(_) => return,
@@ -1249,6 +1296,547 @@ async fn manual_cancel_without_finalizer_strands_pool_lease() {
         ctx.pool.get_marking().await.token_count(&pp.pool),
         CAP - 1,
         "the pool's free capacity stays depleted — the next job can never be granted"
+    );
+
+    ctx.teardown().await;
+}
+
+/// The REAL cancel entrypoint, end to end. The two tests above drive the *inner*
+/// operation (`drain_finalizers`) directly; this one drives the engine's actual
+/// `terminate` SEQUENCE — the production path a UI cancel takes — and proves
+/// that sequence (not just a hand-call of the drain) frees the held pool lease.
+///
+/// `NetRegistry::terminate` (petri-api, `net_registry.rs`) does, in order:
+///   1. cancel in-flight executor jobs,
+///   2. `instance.service.drain_finalizers().await`   ← frees held leases,
+///   3. `instance.service.append_event(NetCancelled)`  ← journals the cancel,
+///   4. hibernate + delete snapshot.
+///
+/// RESIDUAL GAP (documented, unavoidable here): `terminate` lives on
+/// `NetRegistry<E,T,S>` in the `petri-api` crate, which is NOT a dependency of
+/// `petri-test-harness` (adding it would pull the whole Axum/registry stack into
+/// the harness and is out of scope for this file). So we cannot call the literal
+/// `registry.terminate(...)`. Instead `terminate_holder` below replays its
+/// load-bearing core — steps 2 and 3 — against the holder service exactly as the
+/// registry would. Steps 1 (executor cancel) and 4 (hibernate/snapshot) are
+/// orthogonal to freeing the pool lease (the lease is freed by the step-2 drain
+/// emitting a release across the bridge), so omitting them does not weaken what
+/// this test proves: that running terminate's sequence — drain THEN NetCancelled
+/// — returns the unit to the pool. Driving the literal registry `terminate`
+/// against a deployed engine is deferred to live dogfood.
+async fn terminate_holder(holder: &Svc, net_id: &str) -> Vec<petri_domain::PersistedEvent> {
+    // Step 2: forced finalizer drain (the strand that releases held leases).
+    let finalizer_events = holder.drain_finalizers().await;
+    // Step 3: journal the cancel, exactly as `terminate` does after the drain.
+    holder
+        .append_event(DomainEvent::NetCancelled {
+            net_id: net_id.to_string(),
+            reason: Some("cancel".to_string()),
+            cancelled_by: Some("test".to_string()),
+        })
+        .await
+        .expect("append NetCancelled");
+    finalizer_events
+}
+
+/// THE FIX via the REAL terminate sequence: a holder whose body never completes
+/// is cancelled while holding by running terminate's drain→NetCancelled path
+/// (`terminate_holder`). The drained finalizer's release crosses the bridge and
+/// the pool's `t_release` returns the unit. `in_use` goes back to 0 and capacity
+/// is restored — closing the seam the two tests above leave (they prove
+/// drain→bridge→pool, but never that the terminate ENTRYPOINT actually invokes
+/// the drain + journals the cancel).
+#[tokio::test]
+async fn terminate_while_holding_frees_pool_lease_end_to_end() {
+    const CAP: usize = 1;
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_registered_pool_net(CAP);
+    ctx.pool.initialize(pool_net).await.unwrap();
+    ctx.pool
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
+        .await
+        .unwrap();
+
+    let (req_net, rp) = build_finalizer_requester_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+
+    // The instance acquires + registers its hold; the body is now "running".
+    settle(&ctx, 4).await;
+    assert_eq!(pool_in_use(&ctx, &pp).await, 1, "lease held while running");
+    assert_eq!(
+        ctx.requesters[0]
+            .get_marking()
+            .await
+            .token_count(&rp.holding),
+        1,
+        "the requester observably holds the unit"
+    );
+
+    // Drive the REAL terminate sequence (drain finalizers → NetCancelled). The
+    // runner stays online, so no lease_expired is injected — only the drain run
+    // by terminate can free the lease.
+    let fired = terminate_holder(&ctx.requesters[0], &ctx.requester_ids[0]).await;
+    assert!(
+        !fired.is_empty(),
+        "terminate must drain the release finalizer on cancel"
+    );
+    // The cancel was journaled as part of the terminate sequence.
+    assert!(
+        ctx.requesters[0]
+            .get_events()
+            .await
+            .iter()
+            .any(|e| matches!(&e.event, DomainEvent::NetCancelled { .. })),
+        "terminate must journal NetCancelled after the drain"
+    );
+
+    // The released unit must cross the bridge and the pool must reclaim it.
+    settle(&ctx, 4).await;
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        0,
+        "terminate must free the pool lease (in_use back to 0), not strand it"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        CAP,
+        "capacity must be restored to the pool so the next job can be granted"
+    );
+
+    ctx.teardown().await;
+}
+
+/// HIBERNATED POOL wakes on the cancel-release. Reproduces the residual concern
+/// from the live incident: the holder is cancelled (its finalizer drains a
+/// release) WHILE THE POOL NET IS HIBERNATED — removed from the active set, not
+/// draining its bridge. The release must not be lost: it buffers on the pool's
+/// durable bridge consumer, and when the pool WAKES, JetStream redelivers it,
+/// the pool applies it, `t_release` fires, and the lease is freed.
+///
+/// `hibernate_pool` aborts the pool's inbound bridge listener (the durable
+/// consumer survives); `wake_pool` re-binds a fresh listener to the same durable
+/// consumer. This is the harness-reachable stand-in for
+/// `NetRegistry::hibernate` → `get_or_create` (wake/rehydrate): the engine's
+/// registry is not a harness dependency (see `terminate_while_holding...`), so
+/// we approximate hibernation at the bridge-consumer layer, which is precisely
+/// the layer the buffered release must survive across.
+#[tokio::test]
+async fn hibernated_pool_wakes_and_frees_lease_on_cancel_release() {
+    const CAP: usize = 1;
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_registered_pool_net(CAP);
+    ctx.pool.initialize(pool_net).await.unwrap();
+    ctx.pool
+        .create_token(
+            pp.pool.clone(),
+            TokenColor::Data(serde_json::json!({ "gpu_id": "gpu-0" })),
+        )
+        .await
+        .unwrap();
+
+    let (req_net, rp) = build_finalizer_requester_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+
+    // Acquire + register the hold while the pool is awake.
+    settle(&ctx, 4).await;
+    assert_eq!(pool_in_use(&ctx, &pp).await, 1, "lease held while running");
+
+    // The pool HIBERNATES (stops draining its bridge). Its durable consumer
+    // survives, so anything bridged to it from here is buffered, not lost.
+    ctx.hibernate_pool();
+
+    // Cancel the holder via the terminate sequence. The drained finalizer's
+    // release is published to the pool's bridge subject — but the pool is
+    // hibernated, so it lands in the durable consumer's backlog, unconsumed.
+    let fired = terminate_holder(&ctx.requesters[0], &ctx.requester_ids[0]).await;
+    assert!(!fired.is_empty(), "cancel must drain the release finalizer");
+    // Let the requester actually publish the release across the bridge.
+    for _ in 0..4 {
+        ctx.requesters[0].evaluate_until_quiescent(20).await.unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+    }
+
+    // While hibernated, the pool cannot have processed the release: the lease is
+    // still held (this is the stuck-pool shape if it never woke).
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        1,
+        "while hibernated the pool can't apply the release — lease still held"
+    );
+
+    // The pool WAKES: re-bind to the durable consumer. JetStream redelivers the
+    // buffered release; the pool applies it and `t_release` frees the unit.
+    ctx.wake_pool();
+    settle(&ctx, 6).await;
+
+    assert_eq!(
+        pool_in_use(&ctx, &pp).await,
+        0,
+        "waking the pool must apply the buffered release and free the lease"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        CAP,
+        "capacity restored after the woken pool processes the release"
+    );
+
+    ctx.teardown().await;
+}
+
+// ===========================================================================
+// Presence / runner-pool variant: cancel frees the lease while the runner is
+// ONLINE. Models the mekhan presence-pool topology (a runner's live presence is
+// the capacity) rather than a seeded token pool: `presence_acquire` admits a
+// unit carrying `{ unit_id, runner_id }`; a holder claims → registers → holds;
+// a `presence_expired { runner_id }` signal reaps a HELD unit by routing a
+// failure to the holder. The load-bearing case the test name pins is the
+// COMPLEMENT of reap: the runner stays ONLINE (no presence_expired is ever
+// injected, so `t_reap_held` must NOT be what saves us), the holder is
+// cancelled, and the finalizer-drained release returns the presence unit to the
+// pool — the exact runner-pool analogue of the seeded-pool fix above.
+//
+// FEASIBILITY (per the presence brief): a self-contained COMPILING + PASSING
+// presence-style test is feasible by injecting `presence_acquire` over the
+// bridge in place of mekhan's heartbeat (the live mekhan injector/sweep is NOT
+// available to the harness). What is NOT modelled here — heartbeat parsing,
+// per-runner TTL sweep, concurrency C>1, runner DB lookup — is exactly what the
+// brief lists as live-only; this test covers the load-bearing topology
+// (presence admission, hold, and cancel-release-frees) at C=1.
+// ===========================================================================
+
+/// Place ids on the presence-pool net the test observes. The bridge inboxes
+/// (`claim_inbox`/`register_inbox`/`release_inbox`) and the `fail_outbox`/`done`
+/// places are wired by name inside the builder and never need their ids out
+/// here, so they are intentionally not surfaced.
+struct PresencePoolPlaces {
+    pool: PlaceId,
+    in_use: PlaceId,
+    presence_acquire: PlaceId,
+    presence_expired: PlaceId,
+}
+
+/// Presence-pool net mirroring the mekhan presence branch (`pool_net.rs`
+/// `CapacitySource::Presence`, Auto admission): ZERO seeded capacity;
+/// `t_presence_acquire` admits a unit from a bridged `presence_acquire`;
+/// `t_grant` hands a claim the unit; `t_register` parks the hold in `in_use`;
+/// `t_release` returns the unit (resetting reply routing, the production rule);
+/// `t_reap_held` routes a `presence_expired { runner_id }` failure to the held
+/// unit's "fail" channel. `runner_id` threads through for reap correlation.
+fn build_presence_pool_net() -> (PetriNet, PresencePoolPlaces) {
+    let mut net = PetriNet::new();
+
+    let pool = Place::internal("pool");
+    let in_use = Place::internal("in_use");
+    let done = Place::internal("done");
+    let presence_acquire = Place::bridge_in("presence_acquire");
+    let claim_inbox = Place::bridge_in("claim_inbox");
+    let register_inbox = Place::bridge_in("register_inbox");
+    let release_inbox = Place::bridge_in("release_inbox");
+    let presence_expired = Place::signal("presence_expired");
+    let grant_outbox = Place::bridge_reply_channel("grant_outbox", "grant");
+    let fail_outbox = Place::bridge_reply_channel("fail_outbox", "fail");
+
+    let pool_id = pool.id.clone();
+    let in_use_id = in_use.id.clone();
+    let done_id = done.id.clone();
+    let acquire_id = presence_acquire.id.clone();
+    let claim_id = claim_inbox.id.clone();
+    let register_id = register_inbox.id.clone();
+    let release_id = release_inbox.id.clone();
+    let expired_id = presence_expired.id.clone();
+    let grant_id = grant_outbox.id.clone();
+    let fail_id = fail_outbox.id.clone();
+    for p in [
+        pool,
+        in_use,
+        done,
+        presence_acquire,
+        claim_inbox,
+        register_inbox,
+        release_inbox,
+        presence_expired,
+        grant_outbox,
+        fail_outbox,
+    ] {
+        net.add_place(p);
+    }
+
+    // t_presence_acquire: presence_acquire → pool. Mints a free unit carrying
+    // the runner identity (production admits one such unit per heartbeat slot).
+    let t_acquire = Transition::new(
+        "t_presence_acquire",
+        r#"#{ unit: #{ unit_id: adm.unit_id, runner_id: adm.runner_id } }"#,
+    )
+    .with_input_port(Port::new("adm"))
+    .with_output_port(Port::new("unit"));
+    let ta = t_acquire.id.clone();
+    net.add_transition(t_acquire);
+    net.add_arc(PetriArc::input(acquire_id.clone(), ta.clone(), "adm"));
+    net.add_arc(PetriArc::output(ta.clone(), "unit", pool_id.clone()));
+
+    // t_grant: claim + pool → grant reply ONLY (carries unit_id + runner_id).
+    let t_grant = Transition::new(
+        "t_grant",
+        r#"#{ grant: #{ grant_id: claim.grant_id, unit_id: unit.unit_id, runner_id: unit.runner_id } }"#,
+    )
+    .with_input_port(Port::new("claim"))
+    .with_input_port(Port::new("unit"))
+    .with_output_port(Port::new("grant"));
+    let tg = t_grant.id.clone();
+    net.add_transition(t_grant);
+    net.add_arc(PetriArc::input(claim_id.clone(), tg.clone(), "claim"));
+    net.add_arc(PetriArc::input(pool_id.clone(), tg.clone(), "unit"));
+    net.add_arc(PetriArc::output(tg.clone(), "grant", grant_id));
+
+    // t_register: register_inbox → in_use (CLEAN hold carrying runner_id).
+    let t_register = Transition::new(
+        "t_register",
+        r#"#{ hold: #{ grant_id: reg.grant_id, unit_id: reg.unit_id, runner_id: reg.runner_id } }"#,
+    )
+    .with_input_port(Port::new("reg"))
+    .with_output_port(Port::new("hold"));
+    let tr = t_register.id.clone();
+    net.add_transition(t_register);
+    net.add_arc(PetriArc::input(register_id.clone(), tr.clone(), "reg"));
+    net.add_arc(PetriArc::output(tr.clone(), "hold", in_use_id.clone()));
+
+    // t_release: release + in_use (correlate grant_id) → pool + done. Returns
+    // the presence unit (runner_id preserved so it can be reaped/reclaimed).
+    let t_release = Transition::new(
+        "t_release",
+        r#"#{ unit: #{ unit_id: held.unit_id, runner_id: held.runner_id }, done: #{ grant_id: held.grant_id, outcome: "released" } }"#,
+    )
+    .with_input_port(Port::new("req"))
+    .with_input_port(Port::new("held"))
+    .with_guard("req.grant_id == held.grant_id")
+    .with_output_port(Port::new("unit"))
+    .with_output_port(Port::new("done"));
+    let trel = t_release.id.clone();
+    net.add_transition(t_release);
+    net.add_arc(PetriArc::input(release_id.clone(), trel.clone(), "req"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trel.clone(), "held"));
+    net.add_arc(PetriArc::output(trel.clone(), "unit", pool_id.clone()));
+    net.add_arc(PetriArc::output(trel.clone(), "done", done_id.clone()));
+
+    // t_reap_held: presence_expired + in_use (correlate runner_id) → fail reply
+    // + done. Production's held-unit reap: routes a failure to the holder over
+    // the hold's "fail" channel. Present so the topology is faithful; this test
+    // deliberately never injects presence_expired (runner stays ONLINE).
+    let t_reap_held = Transition::new(
+        "t_reap_held",
+        r#"#{ fail: #{ runner_id: held.runner_id, unit_id: held.unit_id }, done: #{ grant_id: held.grant_id, outcome: "reaped" } }"#,
+    )
+    .with_input_port(Port::new("exp"))
+    .with_input_port(Port::new("held"))
+    .with_guard("exp.runner_id == held.runner_id")
+    .with_output_port(Port::new("fail"))
+    .with_output_port(Port::new("done"));
+    let trh = t_reap_held.id.clone();
+    net.add_transition(t_reap_held);
+    net.add_arc(PetriArc::input(expired_id.clone(), trh.clone(), "exp"));
+    net.add_arc(PetriArc::input(in_use_id.clone(), trh.clone(), "held"));
+    net.add_arc(PetriArc::output(trh.clone(), "fail", fail_id.clone()));
+    net.add_arc(PetriArc::output(trh.clone(), "done", done_id.clone()));
+
+    (
+        net,
+        PresencePoolPlaces {
+            pool: pool_id,
+            in_use: in_use_id,
+            presence_acquire: acquire_id,
+            presence_expired: expired_id,
+        },
+    )
+}
+
+/// Presence holder: claims → receives the presence grant (holds + echoes the
+/// register) → carries a `t_finally` FINALIZER that releases on cancel (the same
+/// leased-scope-with-no-normal-exit shape as `build_finalizer_requester_net`,
+/// but echoing the presence unit_id + runner_id to register).
+fn build_presence_holder_net(pool_net_id: &str) -> (PetriNet, RegReqPlaces) {
+    let mut net = PetriNet::new();
+
+    let start = Place::internal("start");
+    let holding = Place::internal("holding");
+    let done = Place::internal("done");
+    let grant_inbox = Place::internal("grant_inbox");
+    let finish_trigger = Place::signal("finish_trigger");
+    let mut channels = HashMap::new();
+    channels.insert("grant".to_string(), "grant_inbox".to_string());
+    let claim_out =
+        Place::bridge_out_reply_channels("claim_out", pool_net_id, "claim_inbox", channels);
+    let register_out = Place::bridge_out("register_out", pool_net_id, "register_inbox");
+    let release_out = Place::bridge_out("release_out", pool_net_id, "release_inbox");
+
+    let start_id = start.id.clone();
+    let holding_id = holding.id.clone();
+    let done_id = done.id.clone();
+    let grant_inbox_id = grant_inbox.id.clone();
+    let finish_id = finish_trigger.id.clone();
+    let claim_out_id = claim_out.id.clone();
+    let register_out_id = register_out.id.clone();
+    let release_out_id = release_out.id.clone();
+    for p in [
+        start,
+        holding,
+        done,
+        grant_inbox,
+        finish_trigger,
+        claim_out,
+        register_out,
+        release_out,
+    ] {
+        net.add_place(p);
+    }
+
+    let t_claim = Transition::new("t_claim", r#"#{ claim_out: start }"#)
+        .with_input_port(Port::new("start"))
+        .with_output_port(Port::new("claim_out"));
+    let tc = t_claim.id.clone();
+    net.add_transition(t_claim);
+    net.add_arc(PetriArc::input(start_id.clone(), tc.clone(), "start"));
+    net.add_arc(PetriArc::output(tc.clone(), "claim_out", claim_out_id));
+
+    let t_receive = Transition::new(
+        "t_receive",
+        r#"#{ holding: grant, register: #{ grant_id: grant.grant_id, unit_id: grant.unit_id, runner_id: grant.runner_id } }"#,
+    )
+    .with_input_port(Port::new("grant"))
+    .with_output_port(Port::new("holding"))
+    .with_output_port(Port::new("register"));
+    let trc = t_receive.id.clone();
+    net.add_transition(t_receive);
+    net.add_arc(PetriArc::input(
+        grant_inbox_id.clone(),
+        trc.clone(),
+        "grant",
+    ));
+    net.add_arc(PetriArc::output(trc.clone(), "holding", holding_id.clone()));
+    net.add_arc(PetriArc::output(trc.clone(), "register", register_out_id));
+
+    // t_finally: holding → release_out. FINALIZER — fires ONLY on the forced
+    // drain (cancel), never during normal evaluation. Mirrors the lease-bridge.
+    let t_finally =
+        Transition::new("t_finally", r#"#{ release: #{ grant_id: holding.grant_id } }"#)
+            .with_input_port(Port::new("holding"))
+            .with_output_port(Port::new("release"))
+            .with_finalizer(true);
+    let tfin = t_finally.id.clone();
+    net.add_transition(t_finally);
+    net.add_arc(PetriArc::input(holding_id.clone(), tfin.clone(), "holding"));
+    net.add_arc(PetriArc::output(tfin.clone(), "release", release_out_id));
+
+    (
+        net,
+        RegReqPlaces {
+            start: start_id,
+            holding: holding_id,
+            done: done_id,
+            finish_trigger: finish_id,
+        },
+    )
+}
+
+/// Runner-pool analogue of the seeded-pool fix: a runner is ONLINE (its presence
+/// admitted a unit), a holder leases it, and the holder is cancelled mid-job.
+/// No `presence_expired` is ever injected (the runner never goes away), so the
+/// pool's `t_reap_held` cannot be what frees the unit — only the holder's
+/// finalizer-drained release can. This proves cancel returns the live runner's
+/// presence unit to the pool so the next claim can be granted.
+#[tokio::test]
+async fn presence_runner_pool_frees_lease_on_cancel_while_online() {
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_presence_pool_net();
+    ctx.pool.initialize(pool_net).await.unwrap();
+
+    // Initialize the holder net up front (no start token yet) so `settle` — which
+    // evaluates every requester — has a topology to drive. The holder stays inert
+    // until its start token is seeded below.
+    let (req_net, rp) = build_presence_holder_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+
+    // Admit one presence unit over the bridge — the harness stand-in for a
+    // mekhan heartbeat `presence_acquire` injection for an ONLINE runner.
+    ctx.pool
+        .create_token(
+            pp.presence_acquire.clone(),
+            TokenColor::Data(serde_json::json!({
+                "unit_id": "runner-a#0",
+                "runner_id": "runner-a"
+            })),
+        )
+        .await
+        .unwrap();
+    settle(&ctx, 2).await;
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        1,
+        "the online runner's presence admitted one free unit"
+    );
+
+    // The holder now claims and leases the presence unit.
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+
+    settle(&ctx, 4).await;
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.in_use),
+        1,
+        "the runner's presence unit is held while running"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        0,
+        "no free units while the only one is held"
+    );
+
+    // Cancel the holder via the terminate sequence. The runner is STILL ONLINE,
+    // so no presence_expired is injected — `t_reap_held` cannot fire. Only the
+    // drained finalizer's release can return the presence unit.
+    let fired = terminate_holder(&ctx.requesters[0], &ctx.requester_ids[0]).await;
+    assert!(!fired.is_empty(), "cancel must drain the release finalizer");
+    settle(&ctx, 6).await;
+
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.in_use),
+        0,
+        "cancel must free the runner-pool lease while the runner stays online"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        1,
+        "the presence unit returns to the pool so the next claim can be granted"
+    );
+    // The fail channel must NOT have fired — this was a clean release, not a reap.
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.presence_expired),
+        0,
+        "no presence_expired was injected: the unit returned by release, not reap"
     );
 
     ctx.teardown().await;
