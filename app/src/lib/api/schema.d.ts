@@ -7607,14 +7607,11 @@ export interface components {
         };
         /** @description Request body for `POST /api/v1/auth/tokens`. */
         CreateTokenRequest: {
-            /** @description Optional longer note — stored as the machine-user `description`. */
+            /** @description Optional longer note — stored as `user_pats.description`. */
             description?: string | null;
-            /** @description Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry. */
+            /** @description Optional RFC 3339 expiry for the token. Omit for no expiry. */
             expires_at?: string | null;
-            /**
-             * @description Human-friendly label — stored as the backing Zitadel machine-user
-             *     `name`, shown in the token list.
-             */
+            /** @description Human-friendly label — stored as `user_pats.name`, shown in the list. */
             name: string;
         };
         /** @description Request body for `POST /api/v1/workers/registration-tokens`. */
@@ -7678,7 +7675,10 @@ export interface components {
             expires_at?: string | null;
             id: string;
             name: string;
-            /** @description The Personal Access Token. Present only here, only once. */
+            /**
+             * @description The Personal Access Token (`uat_{id}.{secret}`). Present only here, only
+             *     once — mekhan stores only the SHA-256 of the secret half.
+             */
             secret: string;
         };
         /**
@@ -13888,13 +13888,13 @@ export interface components {
         };
         /** @description One token row in `GET /api/v1/auth/tokens`. Never carries the secret. */
         TokenSummary: {
-            /** @description RFC 3339 creation timestamp, when Zitadel reports it. */
+            /** @description RFC 3339 creation timestamp. */
             created_at?: string | null;
             description?: string | null;
-            /** @description RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it). */
+            /** @description RFC 3339 token expiry — omitted when the token never expires. */
             expires_at?: string | null;
             /**
-             * @description Opaque token id (the backing Zitadel machine-user id). Pass back to
+             * @description Opaque token id (the `user_pats.id`). Pass back to
              *     `DELETE /api/v1/auth/tokens/{id}` to revoke.
              */
             id: string;
@@ -16594,15 +16594,6 @@ export interface operations {
                     "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
-            /** @description Token management disabled */
-            503: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
         };
     };
     create_token: {
@@ -16627,26 +16618,17 @@ export interface operations {
                     "application/json": components["schemas"]["CreatedToken"];
                 };
             };
+            /** @description Invalid request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
             /** @description No session */
             401: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Identity provider error */
-            502: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Token management disabled */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16686,15 +16668,6 @@ export interface operations {
             };
             /** @description Unknown token, or not the caller's */
             404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ErrorResponse"];
-                };
-            };
-            /** @description Token management disabled */
-            503: {
                 headers: {
                     [name: string]: unknown;
                 };

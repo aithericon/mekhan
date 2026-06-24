@@ -1734,16 +1734,6 @@
                 }
               }
             }
-          },
-          "503": {
-            "description": "Token management disabled",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
           }
         }
       },
@@ -1774,28 +1764,18 @@
               }
             }
           },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
           "401": {
             "description": "No session",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "502": {
-            "description": "Identity provider error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Token management disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -1841,16 +1821,6 @@
           },
           "404": {
             "description": "Unknown token, or not the caller's",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Token management disabled",
             "content": {
               "application/json": {
                 "schema": {
@@ -20696,18 +20666,18 @@
               "string",
               "null"
             ],
-            "description": "Optional longer note — stored as the machine-user `description`."
+            "description": "Optional longer note — stored as `user_pats.description`."
           },
           "expires_at": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Optional RFC 3339 expiry for the underlying PAT. Omit for no expiry."
+            "description": "Optional RFC 3339 expiry for the token. Omit for no expiry."
           },
           "name": {
             "type": "string",
-            "description": "Human-friendly label — stored as the backing Zitadel machine-user\n`name`, shown in the token list."
+            "description": "Human-friendly label — stored as `user_pats.name`, shown in the list."
           }
         }
       },
@@ -20843,7 +20813,7 @@
           },
           "secret": {
             "type": "string",
-            "description": "The Personal Access Token. Present only here, only once."
+            "description": "The Personal Access Token (`uat_{id}.{secret}`). Present only here, only\nonce — mekhan stores only the SHA-256 of the secret half."
           }
         }
       },
@@ -33632,7 +33602,7 @@
               "string",
               "null"
             ],
-            "description": "RFC 3339 creation timestamp, when Zitadel reports it."
+            "description": "RFC 3339 creation timestamp."
           },
           "description": {
             "type": [
@@ -33645,11 +33615,11 @@
               "string",
               "null"
             ],
-            "description": "RFC 3339 PAT expiry — best-effort (omitted if Zitadel doesn't report it)."
+            "description": "RFC 3339 token expiry — omitted when the token never expires."
           },
           "id": {
             "type": "string",
-            "description": "Opaque token id (the backing Zitadel machine-user id). Pass back to\n`DELETE /api/v1/auth/tokens/{id}` to revoke."
+            "description": "Opaque token id (the `user_pats.id`). Pass back to\n`DELETE /api/v1/auth/tokens/{id}` to revoke."
           },
           "name": {
             "type": "string"

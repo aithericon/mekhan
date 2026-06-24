@@ -27,6 +27,10 @@ use uuid::Uuid;
 pub const RUNNER_TOKEN_PREFIX: &str = "rnr_";
 /// Prefix of the registration token.
 pub const REG_TOKEN_PREFIX: &str = "rt_";
+/// Prefix of a mekhan-native user Personal Access Token (PAT). Shares the
+/// `<prefix>{id}.{secret}` shape + mint/parse/verify helpers below; verified by
+/// [`crate::auth::user_pat`] against the `user_pats` table.
+pub const USER_PAT_TOKEN_PREFIX: &str = "uat_";
 
 // ── DB rows ────────────────────────────────────────────────────────────────
 

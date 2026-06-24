@@ -109,8 +109,8 @@ resource "vault_policy" "mekhan_resources_rw" {
     capabilities = ["read", "list", "delete"]
   }
 
-  # Service-only runtime secrets (DB URL, Zitadel introspection secret + broker
-  # PAT, SMTP creds) rendered into the runtime.env template at alloc start. Only
+  # Service-only runtime secrets (DB URL, SMTP creds, headless-provisioning
+  # tokens) rendered into the runtime.env template at alloc start. Only
   # the mekhan-service role gets this — the executor never reads them.
   path "secret/data/${local.svc_secrets_path}/runtime" {
     capabilities = ["read"]
@@ -205,11 +205,9 @@ resource "vault_kv_secret_v2" "mekhan_runtime" {
   name  = "${local.svc_secrets_path}/runtime"
 
   data_json = jsonencode({
-    database_url                = local.database_url
-    introspection_client_secret = zitadel_application_api.introspect.client_secret
-    broker_pat                  = zitadel_personal_access_token.token_broker.token
-    smtp_username               = var.email_smtp_username
-    smtp_password               = var.email_smtp_password
+    database_url  = local.database_url
+    smtp_username = var.email_smtp_username
+    smtp_password = var.email_smtp_password
     # Headless provisioning credentials (see bootstrap.tf).
     platform_root_token        = local.platform_root_token
     bootstrap_worker_reg_token = local.bootstrap_worker_reg_token

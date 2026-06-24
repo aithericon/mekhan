@@ -7,7 +7,7 @@ use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::DbPrincipalResolver;
 use mekhan_service::auth::zitadel::{ZitadelConfig, ZitadelTokenVerifier};
-use mekhan_service::auth::{IntrospectionVerifier, PrincipalResolver, TokenVerifier, ZitadelMgmt};
+use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::catalogue::subscriptions::SubscriptionManager;
 use mekhan_service::config::{AppConfig, AuthMode};
@@ -371,16 +371,15 @@ async fn main() -> anyhow::Result<()> {
     // `auth.platform_admins` sets `is_platform_admin`. The resolver never
     // auto-joins the shared `default` tenant (a homeless principal gets a
     // personal workspace instead).
-    let principal_resolver: Arc<dyn PrincipalResolver> = Arc::new(DbPrincipalResolver::with_options(
-        db.clone(),
-        config.auth.auto_join_system_workspaces,
-        config.auth.platform_admins.clone(),
-    ));
+    let principal_resolver: Arc<dyn PrincipalResolver> =
+        Arc::new(DbPrincipalResolver::with_options(
+            db.clone(),
+            config.auth.auto_join_system_workspaces,
+            config.auth.platform_admins.clone(),
+        ));
 
     let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
     let (authenticator, oidc) = build_authenticator(&config, session_store.clone()).await?;
-    let introspection = build_introspection(&config).await?;
-    let zitadel_mgmt = build_zitadel_mgmt(&config)?;
 
     // Background sweep of expired sessions + stale login flows.
     {
@@ -488,8 +487,6 @@ async fn main() -> anyhow::Result<()> {
         oidc,
         token_verifier,
         principal_resolver,
-        introspection,
-        zitadel_mgmt,
         triggers: trigger_dispatcher,
         result_waiters,
         resource_store,
@@ -532,7 +529,9 @@ async fn main() -> anyhow::Result<()> {
     // the LLM pool. The inference data plane is already cluster-wide, so its
     // control-plane membership lives at the platform tier, not per workspace.
     // Idempotent + best-effort.
-    if let Err(e) = mekhan_service::model_serving_group::ensure_platform_model_serving_group(&state).await {
+    if let Err(e) =
+        mekhan_service::model_serving_group::ensure_platform_model_serving_group(&state).await
+    {
         tracing::warn!(error = ?e, "platform model-serving-group seed failed");
     }
 
@@ -682,58 +681,6 @@ async fn build_authenticator(
             Ok((Arc::new(NoopAuthenticator::default()), None))
         }
     }
-}
-
-/// Build the optional RFC 7662 introspection verifier for machine PATs.
-/// Active only in `bff` mode when an introspection API credential is fully
-/// configured; otherwise `None` and the Bearer path stays disabled (cookie
-/// auth only — `dev_noop` already lets every request through).
-async fn build_introspection(
-    config: &AppConfig,
-) -> anyhow::Result<Option<Arc<IntrospectionVerifier>>> {
-    if config.auth.mode != AuthMode::Bff {
-        return Ok(None);
-    }
-    let (Some(issuer), Some(client_id), Some(client_secret)) = (
-        config.auth.issuer_url.as_deref(),
-        config.auth.introspection_client_id.clone(),
-        config.auth.introspection_client_secret.clone(),
-    ) else {
-        tracing::info!(
-            "auth: introspection disabled (no auth.introspection_client_id/secret) \
-             — machine PAT auth unavailable"
-        );
-        return Ok(None);
-    };
-    let verifier = IntrospectionVerifier::new(issuer, client_id, client_secret)
-        .await
-        .map_err(|e| anyhow::anyhow!("introspection init: {e}"))?;
-    Ok(Some(Arc::new(verifier)))
-}
-
-/// Build the optional Zitadel Management broker for the embedded
-/// `/api/v1/auth/tokens` feature. Active only in `bff` mode when `auth.broker_pat`
-/// is configured (provisioned by `deploy/zitadel/bootstrap.sh`); otherwise
-/// `None` and the token endpoints 503 / the UI hides the section. Mirrors
-/// [`build_introspection`]; synchronous — the client validates its PAT lazily.
-fn build_zitadel_mgmt(config: &AppConfig) -> anyhow::Result<Option<Arc<ZitadelMgmt>>> {
-    if config.auth.mode != AuthMode::Bff {
-        return Ok(None);
-    }
-    let (Some(issuer), Some(broker_pat)) = (
-        config.auth.issuer_url.as_deref(),
-        config.auth.broker_pat.clone(),
-    ) else {
-        tracing::info!(
-            "auth: token broker disabled (no auth.broker_pat) \
-             — embedded /api/v1/auth/tokens unavailable"
-        );
-        return Ok(None);
-    };
-    let mgmt = ZitadelMgmt::new(issuer, broker_pat)
-        .map_err(|e| anyhow::anyhow!("zitadel mgmt init: {e}"))?;
-    tracing::info!("auth: Zitadel token broker ready (embedded PAT management)");
-    Ok(Some(Arc::new(mgmt)))
 }
 
 /// Refuse to boot a dev-mode credential bypass in production.

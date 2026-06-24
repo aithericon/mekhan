@@ -63,8 +63,6 @@ resource "nomad_job" "mekhan_service" {
 
     auth_post_login_redirect = "https://${var.hostname}/"
 
-    auth_introspection_client_id = zitadel_application_api.introspect.client_id
-
     # Comma-joined for the single MEKHAN__AUTH__PLATFORM_ADMINS env var (the
     # config loader splits it back into a list). Empty string ⇒ the jobspec omits
     # the var entirely.

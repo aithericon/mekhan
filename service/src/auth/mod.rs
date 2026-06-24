@@ -23,14 +23,13 @@ pub mod bff;
 pub mod dev;
 pub mod extractor;
 pub mod grants;
-pub mod introspection;
 pub mod membership;
-pub mod mgmt;
 pub mod model;
 pub mod platform_root;
 pub mod port;
 pub mod resolver;
 pub mod runner_token;
+pub mod user_pat;
 pub mod worker_token;
 pub mod zitadel;
 
@@ -40,12 +39,10 @@ pub use grants::{
     filter_and_annotate_visible, grant_context, require_object_role, AclAnnotated, GrantContext,
     ObjectKind, ObjectRef,
 };
-pub use introspection::IntrospectionVerifier;
 pub use membership::{
     can_read_template, instance_ref_by_net_id, instance_workspace, map_to_api_error, member_role,
     require_member, require_role, require_workspace_read, resolve_fork_target, template_workspace,
     MembershipError, Role,
 };
-pub use mgmt::ZitadelMgmt;
 pub use model::{AuthError, AuthUser, VerifiedClaims};
 pub use port::{PrincipalResolver, TokenVerifier};

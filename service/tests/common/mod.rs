@@ -17,15 +17,12 @@ pub mod model_runner_fixture;
 pub mod nats_spy;
 pub mod test_infra;
 pub mod workspace_fixtures;
-pub mod zitadel_live;
-pub mod zitadel_mock;
 pub use test_infra::{nats_url, postgres_url, wait_for_nats, wait_for_postgres, TestDb, TestNats};
 
 use mekhan_service::auth::authenticator::{Authenticator, NoopAuthenticator};
 use mekhan_service::auth::bff::session::{PgSessionStore, SessionStore};
 use mekhan_service::auth::dev::NoopTokenVerifier;
 use mekhan_service::auth::resolver::StaticPrincipalResolver;
-use mekhan_service::auth::{IntrospectionVerifier, ZitadelMgmt};
 use mekhan_service::auth::{PrincipalResolver, TokenVerifier};
 use mekhan_service::catalogue::repository::PgCatalogueRepository;
 use mekhan_service::causality::live::LiveBroadcasts;
@@ -287,126 +284,6 @@ pub async fn test_app_with_authenticator(
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
-        triggers,
-        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: default_resource_store(),
-        secret_store: default_secret_store(),
-        resource_resolver: std::sync::Arc::new(
-            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
-        ),
-        runner_nats_signer: std::sync::Arc::new(
-            mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
-        ),
-        runner_presence: mekhan_service::presence::RunnerPresence::new(),
-        human_presence: mekhan_service::presence::HumanPresence::new(),
-        fleet: mekhan_service::fleet::FleetLiveness::new(),
-        asset_resolver: std::sync::Arc::new(
-            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
-        ),
-        email: mekhan_service::notify::email::log_mailer(),
-    };
-
-    let router = build_router(state);
-    (router, db)
-}
-
-/// Build the full Axum Router with a caller-supplied [`IntrospectionVerifier`]
-/// wired into `AppState.introspection` (the machine-PAT Bearer path). The
-/// cookie `Authenticator` is a mock that requires a cookie, so a request with
-/// no valid Bearer falls through and 401s — letting tests prove both the
-/// introspection success path and the fall-through.
-pub async fn test_app_with_introspection(
-    introspection: Arc<IntrospectionVerifier>,
-) -> (Router, PgPool) {
-    let db = create_test_db().await;
-    let config = test_config();
-    let petri = PetriClient::new(&config.petri_lab_url);
-    let nats = connect_harness_nats(&config.nats_url)
-        .await
-        .expect("failed to connect to NATS — run test infra");
-    let yjs_persistence = YjsPersistence::new(db.clone());
-    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
-    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
-    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
-
-    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
-    let state = AppState {
-        db: db.clone(),
-        petri,
-        nats,
-        config: config.clone(),
-        yjs: yjs_manager,
-        s3: artifact_store,
-        artifact_s3: None,
-        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
-        live: LiveBroadcasts::new(),
-        authenticator: Arc::new(mock_auth::MockAuthenticator::cookie_required("cookie-user")),
-        session_store,
-        oidc: None,
-        token_verifier: Arc::new(NoopTokenVerifier::default()),
-        principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: Some(introspection),
-        zitadel_mgmt: None,
-        triggers,
-        result_waiters: mekhan_service::triggers::ResultWaiters::new(),
-        resource_store: default_resource_store(),
-        secret_store: default_secret_store(),
-        resource_resolver: std::sync::Arc::new(
-            mekhan_service::petri::resource_resolver::ResourceResolver::new(db.clone()),
-        ),
-        runner_nats_signer: std::sync::Arc::new(
-            mekhan_service::runners_nats::RunnerNatsSigner::generate_ephemeral(),
-        ),
-        runner_presence: mekhan_service::presence::RunnerPresence::new(),
-        human_presence: mekhan_service::presence::HumanPresence::new(),
-        fleet: mekhan_service::fleet::FleetLiveness::new(),
-        asset_resolver: std::sync::Arc::new(
-            mekhan_service::petri::asset_resolver::AssetResolver::new(db.clone()),
-        ),
-        email: mekhan_service::notify::email::log_mailer(),
-    };
-
-    let router = build_router(state);
-    (router, db)
-}
-
-/// Build the full Axum Router with a caller-supplied [`ZitadelMgmt`] wired
-/// into `AppState.zitadel_mgmt` (the embedded `/api/v1/auth/tokens` broker). The
-/// cookie `Authenticator` is a mock that *requires* a cookie, so a request
-/// with no cookie (e.g. a Bearer PAT) 401s — letting tests prove the
-/// cookie-only privilege boundary as well as the happy path.
-pub async fn test_app_with_mgmt(mgmt: Arc<ZitadelMgmt>) -> (Router, PgPool) {
-    let db = create_test_db().await;
-    let config = test_config();
-    let petri = PetriClient::new(&config.petri_lab_url);
-    let nats = connect_harness_nats(&config.nats_url)
-        .await
-        .expect("failed to connect to NATS — run test infra");
-    let yjs_persistence = YjsPersistence::new(db.clone());
-    let yjs_manager = Arc::new(YjsManager::new(yjs_persistence));
-    let artifact_store = Arc::new(ArtifactStore::new(&config.s3));
-    let session_store: Arc<dyn SessionStore> = Arc::new(PgSessionStore::new(db.clone()));
-
-    let triggers = test_triggers(db.clone(), petri.clone(), nats.clone());
-    let state = AppState {
-        db: db.clone(),
-        petri,
-        nats,
-        config: config.clone(),
-        yjs: yjs_manager,
-        s3: artifact_store,
-        artifact_s3: None,
-        catalogue_repo: Arc::new(PgCatalogueRepository::new(db.clone())),
-        live: LiveBroadcasts::new(),
-        authenticator: Arc::new(mock_auth::MockAuthenticator::cookie_required("cookie-user")),
-        session_store,
-        oidc: None,
-        token_verifier: Arc::new(NoopTokenVerifier::default()),
-        principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: Some(mgmt),
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
@@ -465,8 +342,6 @@ pub async fn test_app() -> (Router, PgPool) {
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
@@ -525,8 +400,6 @@ pub async fn test_app_with_nats(nats_url: &str) -> (Router, PgPool) {
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
@@ -587,8 +460,6 @@ pub async fn test_app_with_petri_url(nats_url: &str, petri_url: &str) -> (Router
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
         triggers,
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
@@ -659,8 +530,6 @@ pub async fn test_app_waiters(
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
         triggers,
         result_waiters: result_waiters.clone(),
         resource_store: default_resource_store(),
@@ -731,8 +600,6 @@ pub async fn test_app_with_petri_url_and_triggers(
         oidc: None,
         token_verifier: Arc::new(NoopTokenVerifier::default()),
         principal_resolver: Arc::new(StaticPrincipalResolver),
-        introspection: None,
-        zitadel_mgmt: None,
         triggers: triggers.clone(),
         result_waiters: mekhan_service::triggers::ResultWaiters::new(),
         resource_store: default_resource_store(),
