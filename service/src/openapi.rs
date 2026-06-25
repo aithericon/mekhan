@@ -85,6 +85,13 @@ use utoipa::OpenApi;
             crate::models::resource::RotateResourceRequest,
             crate::models::resource::RepairPoolResponse,
             crate::models::resource::ResourceAuditEntry,
+            // JetStream introspection (platform-admin debug surface).
+            crate::handlers::jetstream_admin::JsStreamSummary,
+            crate::handlers::jetstream_admin::JsConsumerSummary,
+            crate::handlers::jetstream_admin::JsStreamDetail,
+            crate::handlers::jetstream_admin::JsMessage,
+            crate::handlers::jetstream_admin::JsHeader,
+            crate::handlers::jetstream_admin::JsMessagesResponse,
             // S3 (unified capacity model) — the trait-space axis vocabulary +
             // the named presets surfaced on `ResourceTypeInfo.capacity_presets`
             // for the `capacity` type. Reached only through nested `Option<Vec<_>>`,

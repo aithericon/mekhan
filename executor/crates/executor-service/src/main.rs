@@ -1808,7 +1808,10 @@ fn parse_requirements_file(path: &str) -> std::io::Result<Vec<String>> {
 /// Build the shared Python venv cache from config, or return None when disabled.
 #[cfg(feature = "python")]
 fn build_venv_cache(config: &ExecutorConfig, base_dir: &Path) -> Option<Arc<VenvCache>> {
-    let py_cfg = config.python.as_ref()?;
+    // A missing `[python]` section defaults to an enabled cache — deployments
+    // are fast without any config. `PythonCacheConfig::default()` carries
+    // `enabled = true`; an explicit `enabled = false` is the opt-out.
+    let py_cfg = config.python.clone().unwrap_or_default();
     if !py_cfg.enabled {
         return None;
     }

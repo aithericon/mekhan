@@ -63,6 +63,39 @@ pub struct ApplyTemplateRequest {
     pub source_ref: Option<SourceRef>,
 }
 
+/// Request body for `POST /api/v1/templates/apply` — the coordinate-keyed
+/// GitOps path (create-if-absent / upsert).
+///
+/// Unlike `POST /api/v1/templates/{id}/apply` (which requires a pre-existing
+/// chain id), this endpoint keys the upsert on a stable `vendor/slug`
+/// `coordinate` carried in the git artifact, so CI can create-or-version
+/// idempotently from the file alone. On a first apply for an
+/// `(workspace, coordinate)` pair it seeds a fresh born-published v1 chain
+/// (`origin = 'gitops'`, `template_kind = 'workflow'`); a re-apply bumps it.
+///
+/// Like the `{id}` path the `graph` REPLACES the chain head wholesale (no
+/// CRDT merge). Binary node assets are NOT supported on this path in the
+/// first cut — only text node files (the `files` map) travel in the body and
+/// are uploaded server-side under the freshly-minted version key.
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct ApplyByCoordinateRequest {
+    /// Stable `vendor/slug` coordinate, e.g. `online-clinic/document-pipeline-v1`.
+    /// Validated to exactly one slash, lowercase `[a-z0-9-]` segments.
+    pub coordinate: String,
+    /// Display name for the chain. Defaults to the coordinate's slug segment
+    /// when absent (used only on the create/adopt branch; a bump keeps the
+    /// existing chain name).
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub graph: WorkflowGraph,
+    #[serde(default)]
+    pub files: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
+    #[serde(default)]
+    pub source_ref: Option<SourceRef>,
+}
+
 /// Trigger spec embedded in a `POST /api/templates/apply-air` request.
 /// The endpoint synthesizes a `WorkflowGraph` stub containing only this
 /// Trigger node so that `register_triggers` (which walks `template.graph`)

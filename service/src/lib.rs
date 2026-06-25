@@ -243,6 +243,12 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // gets routed to `GET/PUT/DELETE /api/templates/{id}` (with
         // `id = "apply-air"`) and POST returns 405 (#126.4.1 cert finding).
         .routes(routes!(handlers::templates::apply_air_template))
+        // `apply_by_coordinate` (POST /api/v1/templates/apply) — like
+        // `apply-air`, the literal `/apply` segment MUST be registered BEFORE
+        // the `{id}` route group, or matchit routes POST /apply to the `{id}`
+        // wildcard (id = "apply"). Same hazard, same fix as the apply-air note
+        // above.
+        .routes(routes!(handlers::templates::apply_by_coordinate))
         .routes(routes!(
             handlers::templates::list_templates,
             handlers::templates::create_template
@@ -526,6 +532,10 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::resources::move_resource))
         .routes(routes!(handlers::resources::repair_pool))
         .routes(routes!(handlers::resources::list_resource_audit))
+        // JetStream introspection — platform-admin read-only debug surface.
+        .routes(routes!(handlers::jetstream_admin::list_streams))
+        .routes(routes!(handlers::jetstream_admin::get_stream))
+        .routes(routes!(handlers::jetstream_admin::peek_messages))
         // Runners (Phase 1, Lab Runner Fleet) — workspace-scoped runner fleet
         // + GitLab-style enrollment. `enroll` is mounted on the PUBLIC router
         // (authed by the `rt_` token in the body); everything here is behind

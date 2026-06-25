@@ -107,6 +107,171 @@
         }
       }
     },
+    "/api/v1/admin/jetstream/streams": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "List every JetStream stream with its headline counts.",
+        "operationId": "list_streams",
+        "responses": {
+          "200": {
+            "description": "All JetStream streams",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JsStreamSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jetstream/streams/{name}": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "One stream's detail plus every consumer bound to it.",
+        "operationId": "get_stream",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "JetStream stream name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream detail + consumers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsStreamDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jetstream/streams/{name}/messages": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "Non-destructively peek raw messages from a stream, newest first.",
+        "operationId": "peek_messages",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "JetStream stream name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_seq",
+            "in": "query",
+            "description": "Return messages with sequence ≤ this value (default: the stream tail).\nUse the previous page's `next_before_seq` to paginate backwards.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max messages to return (default 50, capped at 200).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of raw messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsMessagesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/nets": {
       "get": {
         "tags": [
@@ -10695,7 +10860,7 @@
           "resources"
         ],
         "summary": "`POST /api/v1/resources/{id}/repair` — operator recovery for a POOL resource\n(a `capacity`) whose backing engine net was lost or drifted.",
-        "description": "The recurring failure this fixes: an engine NATS reset (a `just dev reset`,\nor a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled\nagainst the pool keep heartbeating. mekhan's presence map still holds them as\n`present`, so the heartbeat fast path only bumps `last_seen` — a\n`presence_acquire` is injected ONLY on the absent→present edge — and the\nfreshly-empty pool net never regains capacity. The pool sits at `0` forever\nand every run that binds it starves on its lease. The same dead-end is\nreached when the resource was created while the engine was down.\n\nRepair is two idempotent steps, both safe to run on a HEALTHY pool:\n1. RE-DEPLOY the backing pool net from the resource's persisted config\n   (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is\n   rebuilt — seeded with its token capacity, or as the capacity-less presence\n   scaffold. This is the launch-time self-heal made operator-triggerable.\n2. RE-ARM presence: every present runner / roster member admitted to this\n   pool is flipped to absent (WITHOUT an expire), so its next heartbeat\n   re-acquires its capacity tokens through the proven absent→present path.\n   The engine-count top-up there makes this idempotent — a pool that was not\n   actually lost re-arms to the same marking instead of double-admitting.\n\nAuth mirrors `delete_resource`: platform admin for a platform-scoped pool,\n`Editor` on the resource ACL for a tenant pool.",
+        "description": "The recurring failure this fixes: an engine NATS reset (a `just dev reset`,\nor a prod volume wipe) deletes the `pool-<id>` net, but the runners enrolled\nagainst the pool keep heartbeating. mekhan's presence map still holds them as\n`present`, so the heartbeat fast path only bumps `last_seen` — a\n`presence_acquire` is injected ONLY on the absent→present edge — and the\nfreshly-empty pool net never regains capacity. The pool sits at `0` forever\nand every run that binds it starves on its lease. The same dead-end is\nreached when the resource was created while the engine was down.\n\nRepair is three idempotent steps, all safe to run on a HEALTHY pool:\n1. RE-DEPLOY the backing pool net from the resource's persisted config\n   (`ensure_pool_net_for_resource`): a running net is a no-op; a lost net is\n   rebuilt — seeded with its token capacity, or as the capacity-less presence\n   scaffold. This is the launch-time self-heal made operator-triggerable.\n2. RECLAIM stale held leases: every `in_use` token whose HOLDER instance is\n   terminal (completed/failed/cancelled) or gone is released back to the pool\n   via the net's own `t_release` (`reclaim_dead_holder_leases`). This is the\n   \"cancel didn't release the lease\" leak — the same release I injected by\n   hand during the prod incident. LIVE leases (holder still running) are\n   deliberately NOT reclaimed: yanking one would let the engine re-grant a\n   slot a runner is actively using.\n3. RE-ARM presence: every present runner / roster member admitted to this\n   pool is flipped to absent (WITHOUT an expire), so its next heartbeat\n   re-acquires its capacity tokens through the proven absent→present path.\n   The engine-count top-up there makes this idempotent — a pool that was not\n   actually lost re-arms to the same marking instead of double-admitting.\n\nAuth mirrors `delete_resource`: platform admin for a platform-scoped pool,\n`Editor` on the resource ACL for a tenant pool.",
         "operationId": "repair_pool",
         "parameters": [
           {
@@ -12343,6 +12508,78 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/templates/apply": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "POST /api/v1/templates/apply",
+        "description": "Coordinate-keyed GitOps entry point: create-if-absent / upsert from a fully\ndeclarative git artifact. Unlike `POST /api/v1/templates/{id}/apply`, no\npre-existing chain id is required — the upsert is keyed on a stable\n`vendor/slug` `coordinate`, scoped per workspace. CI can therefore\ncreate-or-version idempotently from the `mekhan.lock.json` alone.\n\nResolution order for `(workspace, coordinate)`:\n1. An existing `origin = 'gitops'` chain with this coordinate → Bump.\n2. Else adopt-by-name: exactly one `origin IS NULL` chain whose name equals\n   the coordinate slug → stamp `origin = 'gitops'` + coordinate and Bump.\n   (>1 match → 409 disambiguation.)\n3. Else create a fresh born-published v1 chain (`origin = 'gitops'`,\n   `template_kind = 'workflow'`).\n\nBorn-published like the `{id}` path; `template_kind = 'workflow'` keeps the\nchain out of the palette/catalogue. Binary node assets are unsupported on\nthis path (text node files only).",
+        "operationId": "apply_by_coordinate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyByCoordinateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: created v1, adopted+bumped, or bumped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid coordinate / graph / binary asset present",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No active workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous adopt-by-name (>1 candidate chain)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
                 }
               }
             }
@@ -17141,6 +17378,61 @@
           },
           "trigger": {
             "$ref": "#/components/schemas/PreAirTriggerSpec"
+          }
+        }
+      },
+      "ApplyByCoordinateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/templates/apply` — the coordinate-keyed\nGitOps path (create-if-absent / upsert).\n\nUnlike `POST /api/v1/templates/{id}/apply` (which requires a pre-existing\nchain id), this endpoint keys the upsert on a stable `vendor/slug`\n`coordinate` carried in the git artifact, so CI can create-or-version\nidempotently from the file alone. On a first apply for an\n`(workspace, coordinate)` pair it seeds a fresh born-published v1 chain\n(`origin = 'gitops'`, `template_kind = 'workflow'`); a re-apply bumps it.\n\nLike the `{id}` path the `graph` REPLACES the chain head wholesale (no\nCRDT merge). Binary node assets are NOT supported on this path in the\nfirst cut — only text node files (the `files` map) travel in the body and\nare uploaded server-side under the freshly-minted version key.",
+        "required": [
+          "coordinate",
+          "graph"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Stable `vendor/slug` coordinate, e.g. `online-clinic/document-pipeline-v1`.\nValidated to exactly one slash, lowercase `[a-z0-9-]` segments."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name for the chain. Defaults to the coordinate's slug segment\nwhen absent (used only on the create/adopt branch; a bump keeps the\nexisting chain name)."
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRef"
+              }
+            ]
           }
         }
       },
@@ -25077,6 +25369,264 @@
           "any"
         ]
       },
+      "JsConsumerSummary": {
+        "type": "object",
+        "description": "One consumer bound to a stream — the lag/pending view that explains a\nstuck net (high `num_pending` / `num_ack_pending` = nobody draining).",
+        "required": [
+          "name",
+          "durable",
+          "filter_subjects",
+          "num_ack_pending",
+          "num_redelivered",
+          "num_waiting",
+          "num_pending",
+          "delivered_stream_seq",
+          "ack_floor_stream_seq"
+        ],
+        "properties": {
+          "ack_floor_stream_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest stream sequence acked (the floor below which everything is done).",
+            "minimum": 0
+          },
+          "delivered_stream_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest stream sequence delivered to a client.",
+            "minimum": 0
+          },
+          "durable": {
+            "type": "boolean"
+          },
+          "filter_subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "num_ack_pending": {
+            "type": "integer",
+            "description": "Messages delivered but not yet acked.",
+            "minimum": 0
+          },
+          "num_pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages not yet delivered to any client.",
+            "minimum": 0
+          },
+          "num_redelivered": {
+            "type": "integer",
+            "description": "Messages redelivered after an ack timeout.",
+            "minimum": 0
+          },
+          "num_waiting": {
+            "type": "integer",
+            "description": "Pull requests currently parked, waiting for messages.",
+            "minimum": 0
+          }
+        }
+      },
+      "JsHeader": {
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "JsMessage": {
+        "type": "object",
+        "description": "One peeked message. `payload_json` is populated when the body parses as JSON\n(the common case — engine/executor envelopes are JSON); `payload_text` is the\nlossy-UTF8 fallback, truncated to [`MAX_PAYLOAD_PREVIEW`] with `truncated` set.",
+        "required": [
+          "seq",
+          "subject",
+          "time",
+          "size",
+          "headers",
+          "payload_text",
+          "truncated"
+        ],
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsHeader"
+            }
+          },
+          "payload_json": {},
+          "payload_text": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "description": "Total payload size in bytes (before any preview truncation).",
+            "minimum": 0
+          },
+          "subject": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "JsMessagesResponse": {
+        "type": "object",
+        "description": "A page of peeked messages, newest first.",
+        "required": [
+          "stream",
+          "messages",
+          "first_seq",
+          "last_seq"
+        ],
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lowest sequence still present in the stream.",
+            "minimum": 0
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest sequence in the stream.",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsMessage"
+            }
+          },
+          "next_before_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass `before_seq = next_before_seq` to fetch the previous (older) page;\n`null` once the oldest message has been returned.",
+            "minimum": 0
+          },
+          "stream": {
+            "type": "string"
+          }
+        }
+      },
+      "JsStreamDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JsStreamSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "consumers"
+            ],
+            "properties": {
+              "consumers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JsConsumerSummary"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Stream detail = the summary plus the consumers bound to it."
+      },
+      "JsStreamSummary": {
+        "type": "object",
+        "description": "One stream's headline metrics — the table row on the JetStream debug page.",
+        "required": [
+          "name",
+          "subjects",
+          "messages",
+          "bytes",
+          "first_seq",
+          "last_seq",
+          "consumer_count",
+          "subjects_count",
+          "deleted_count",
+          "first_ts",
+          "last_ts"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "consumer_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages deleted/purged out of the [first_seq, last_seq] window.",
+            "minimum": 0
+          },
+          "first_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_ts": {
+            "type": "string",
+            "description": "RFC3339 timestamp of the oldest message still present."
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_ts": {
+            "type": "string",
+            "description": "RFC3339 timestamp of the newest message."
+          },
+          "messages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subjects the stream captures (from its config)."
+          },
+          "subjects_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct subjects currently present in the stream.",
+            "minimum": 0
+          }
+        }
+      },
       "KreuzbergConfig": {
         "type": "object",
         "description": "Configuration for the Kreuzberg document extraction backend.",
@@ -30276,12 +30826,18 @@
           "pool_net_id",
           "has_pool_net",
           "runners_rearmed",
-          "members_rearmed"
+          "members_rearmed",
+          "leases_reclaimed"
         ],
         "properties": {
           "has_pool_net": {
             "type": "boolean",
             "description": "Whether the resource resolves to a backing pool net at all (a non-pool\nresource is a no-op repair). `false` means nothing was redeployed."
+          },
+          "leases_reclaimed": {
+            "type": "integer",
+            "description": "Number of stale held leases reclaimed — `in_use` tokens whose holder\ninstance was terminal (completed/failed/cancelled) or gone, released back\nto the pool via the net's own `t_release`. Live leases (holder still\nrunning) are never reclaimed.",
+            "minimum": 0
           },
           "members_rearmed": {
             "type": "integer",

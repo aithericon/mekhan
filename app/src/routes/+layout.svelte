@@ -39,10 +39,21 @@
 	// by the Control Plane (Fleet): clusters are reached via Scheduler cards →
 	// /clusters/[id], capability types from inside the control plane. The
 	// /clusters/[id] + /admin/capability-types routes still exist.
-	const internalItems: NavMenuItem[] = [
+	const internalItems = $derived<NavMenuItem[]>([
 		{ href: '/nets', label: 'Engine', testid: 'nav-nets', desc: 'Raw petri nets' },
-		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' }
-	];
+		{ href: '/processes', label: 'Processes', testid: 'nav-processes', desc: 'Raw engine processes' },
+		// Platform-admin-only: NATS JetStream debug surface (PETRI_DLQ, drops, lag).
+		...(auth.isPlatformAdmin
+			? [
+					{
+						href: '/admin/jetstream',
+						label: 'JetStream',
+						testid: 'nav-jetstream',
+						desc: 'NATS JetStream streams, consumers & DLQ peek'
+					}
+				]
+			: [])
+	]);
 
 	onMount(async () => {
 		// BFF: the backend owns the OIDC callback (302s straight to the SPA),

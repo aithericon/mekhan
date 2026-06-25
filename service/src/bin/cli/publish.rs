@@ -10,7 +10,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     let (meta, _graph, _files) = fs_ops::import_from_dir(&dir)?;
 
     let server_url = &meta.server_url;
-    let base_id = &meta.base_template_id;
+    let base_id = meta.require_base_template_id()?;
 
     // Publish promotes a draft into a published row; drafts always live at
     // the chain head, so resolve there. If the head is already published the

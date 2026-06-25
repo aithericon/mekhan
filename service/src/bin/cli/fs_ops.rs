@@ -23,17 +23,64 @@ pub const META_FILENAME: &str = "mekhan.lock.json";
 /// and refreshed (`lastPull` timestamp only) by `apply`. Committed to VCS so
 /// the checkout's identity travels with the source.
 ///
-/// `baseTemplateId` is the chain root — stable across `mekhan apply` version
-/// bumps. CLI commands that need a specific row (the latest published
-/// version) call `GET /api/v1/templates/{id}/latest` to resolve it on demand.
+/// A lock carries exactly ONE creation key:
+///
+/// - `coordinate` (`vendor/slug`) — the declarative GitOps key. When present,
+///   `mekhan apply` POSTs to `/api/v1/templates/apply` (create-if-absent /
+///   upsert); the chain is resolved per-workspace by coordinate, so the lock
+///   never needs a server-minted UUID.
+/// - `baseTemplateId` — the legacy chain-root UUID. Stable across `mekhan
+///   apply` version bumps; `apply` hits `/api/v1/templates/{id}/apply`. Written
+///   by `init`/`pull`. CLI commands that need a specific row (the latest
+///   published version) call `GET /api/v1/templates/{id}/latest` on demand.
+///
+/// Both are `#[serde(default)]` Options so every existing UUID-only lock still
+/// deserializes; the [`CreationKey`] write boundary guarantees a lock is never
+/// emitted with neither key.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MekhanJson {
-    pub base_template_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_template_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coordinate: Option<String>,
     pub server_url: String,
     pub last_pull: String,
     #[serde(default = "default_format")]
     pub format: String,
+}
+
+/// XOR creation key written into a fresh `mekhan.lock.json`. Making this an
+/// enum at the write boundary makes it impossible to emit a lock with neither
+/// key (an un-applyable lock).
+pub enum CreationKey {
+    /// Declarative GitOps coordinate (`vendor/slug`). No current CLI command
+    /// *writes* a coordinate lock — they are hand-authored by GitOps users —
+    /// but the variant is part of the write-boundary XOR so `export_to_dir`
+    /// can never emit a lock with neither key.
+    #[allow(dead_code)]
+    Coordinate(String),
+    /// Legacy server-minted chain-root UUID.
+    BaseTemplateId(String),
+}
+
+impl MekhanJson {
+    /// The chain-root UUID, or a clear error for a coordinate-only lock.
+    ///
+    /// Most CLI subcommands (`push`/`pull`/`run`/`status`/`publish`/`test`)
+    /// resolve a concrete server row through this UUID. The coordinate-keyed
+    /// flow is supported only by `mekhan apply` for now; using a
+    /// coordinate-only lock with a UUID-resolving command is a clear,
+    /// actionable error rather than a silent default.
+    pub fn require_base_template_id(&self) -> Result<&str> {
+        self.base_template_id.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "mekhan.lock.json is coordinate-keyed (no baseTemplateId); this command \
+                 needs a server-resolved template id. Use `mekhan apply` for coordinate \
+                 locks, or `mekhan pull` to materialize a UUID-keyed lock."
+            )
+        })
+    }
 }
 
 fn default_format() -> String {
@@ -55,16 +102,21 @@ pub fn export_to_dir(
     dir: &Path,
     graph: &WorkflowGraph,
     files: &HashMap<String, HashMap<String, String>>,
-    base_template_id: &str,
+    key: CreationKey,
     server_url: &str,
     format: WorkflowFormat,
 ) -> Result<()> {
     // Create the directory
     std::fs::create_dir_all(dir).context("failed to create output directory")?;
 
-    // Write the lock file
+    // Write the lock file — exactly one creation key is set.
+    let (base_template_id, coordinate) = match key {
+        CreationKey::Coordinate(c) => (None, Some(c)),
+        CreationKey::BaseTemplateId(id) => (Some(id), None),
+    };
     let meta = MekhanJson {
-        base_template_id: base_template_id.to_string(),
+        base_template_id,
+        coordinate,
         server_url: server_url.to_string(),
         last_pull: chrono::Utc::now().to_rfc3339(),
         format: format.to_string(),
@@ -251,6 +303,98 @@ fn read_node_files(dir: &Path) -> Result<HashMap<String, HashMap<String, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_base_template_id_lock_deserializes() {
+        let raw = r#"{
+            "baseTemplateId": "11111111-1111-1111-1111-111111111111",
+            "serverUrl": "http://localhost:13100",
+            "lastPull": "2026-06-24T00:00:00Z"
+        }"#;
+        let meta: MekhanJson = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            meta.base_template_id.as_deref(),
+            Some("11111111-1111-1111-1111-111111111111")
+        );
+        assert!(meta.coordinate.is_none());
+        assert_eq!(meta.format, "json");
+        assert!(meta.require_base_template_id().is_ok());
+    }
+
+    #[test]
+    fn coordinate_only_lock_deserializes() {
+        let raw = r#"{
+            "coordinate": "online-clinic/document-pipeline-v1",
+            "serverUrl": "http://localhost:13100",
+            "lastPull": "2026-06-24T00:00:00Z"
+        }"#;
+        let meta: MekhanJson = serde_json::from_str(raw).unwrap();
+        assert_eq!(
+            meta.coordinate.as_deref(),
+            Some("online-clinic/document-pipeline-v1")
+        );
+        assert!(meta.base_template_id.is_none());
+        // A coordinate-only lock has no UUID — the UUID-resolving commands must
+        // error clearly rather than default.
+        assert!(meta.require_base_template_id().is_err());
+    }
+
+    #[test]
+    fn both_keys_lock_deserializes() {
+        let raw = r#"{
+            "baseTemplateId": "11111111-1111-1111-1111-111111111111",
+            "coordinate": "acme/widget",
+            "serverUrl": "http://localhost:13100",
+            "lastPull": "2026-06-24T00:00:00Z"
+        }"#;
+        let meta: MekhanJson = serde_json::from_str(raw).unwrap();
+        assert!(meta.base_template_id.is_some());
+        assert_eq!(meta.coordinate.as_deref(), Some("acme/widget"));
+    }
+
+    #[test]
+    fn export_with_coordinate_key_writes_coordinate_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wf");
+        let graph = WorkflowGraph::default_graph();
+        let files = HashMap::new();
+        export_to_dir(
+            &dir,
+            &graph,
+            &files,
+            CreationKey::Coordinate("acme/widget".to_string()),
+            "http://localhost:13100",
+            WorkflowFormat::Json,
+        )
+        .unwrap();
+        let meta = read_meta(&dir).unwrap();
+        assert_eq!(meta.coordinate.as_deref(), Some("acme/widget"));
+        assert!(meta.base_template_id.is_none());
+        // The serialized lock must NOT carry a null baseTemplateId field.
+        let raw = std::fs::read_to_string(meta_path(&dir)).unwrap();
+        assert!(!raw.contains("baseTemplateId"), "got: {raw}");
+        assert!(raw.contains("coordinate"));
+    }
+
+    #[test]
+    fn export_with_base_id_key_writes_base_id_only() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("wf");
+        let graph = WorkflowGraph::default_graph();
+        let files = HashMap::new();
+        export_to_dir(
+            &dir,
+            &graph,
+            &files,
+            CreationKey::BaseTemplateId("11111111-1111-1111-1111-111111111111".to_string()),
+            "http://localhost:13100",
+            WorkflowFormat::Json,
+        )
+        .unwrap();
+        let raw = std::fs::read_to_string(meta_path(&dir)).unwrap();
+        assert!(raw.contains("baseTemplateId"), "got: {raw}");
+        assert!(!raw.contains("coordinate"), "got: {raw}");
+    }
 
     #[test]
     fn test_is_binary_asset() {

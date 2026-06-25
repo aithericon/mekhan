@@ -279,6 +279,11 @@ pub struct RepairPoolResponse {
     /// Number of present roster members (human pools) re-armed to re-acquire on
     /// their next presence heartbeat.
     pub members_rearmed: usize,
+    /// Number of stale held leases reclaimed — `in_use` tokens whose holder
+    /// instance was terminal (completed/failed/cancelled) or gone, released back
+    /// to the pool via the net's own `t_release`. Live leases (holder still
+    /// running) are never reclaimed.
+    pub leases_reclaimed: usize,
 }
 
 /// One row from `resource_audit`. Returned by `GET /api/v1/resources/{id}/audit`.
