@@ -47,6 +47,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/jetstream/streams": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List every JetStream stream with its headline counts. */
+        get: operations["list_streams"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/jetstream/streams/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** One stream's detail plus every consumer bound to it. */
+        get: operations["get_stream"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/jetstream/streams/{name}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Non-destructively peek raw messages from a stream, newest first. */
+        get: operations["peek_messages"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/nets": {
         parameters: {
             query?: never;
@@ -9479,6 +9530,111 @@ export interface components {
          * @enum {string}
          */
         JoinMode: "all" | "any";
+        /**
+         * @description One consumer bound to a stream — the lag/pending view that explains a
+         *     stuck net (high `num_pending` / `num_ack_pending` = nobody draining).
+         */
+        JsConsumerSummary: {
+            /**
+             * Format: int64
+             * @description Highest stream sequence acked (the floor below which everything is done).
+             */
+            ack_floor_stream_seq: number;
+            /**
+             * Format: int64
+             * @description Highest stream sequence delivered to a client.
+             */
+            delivered_stream_seq: number;
+            durable: boolean;
+            filter_subjects: string[];
+            name: string;
+            /** @description Messages delivered but not yet acked. */
+            num_ack_pending: number;
+            /**
+             * Format: int64
+             * @description Messages not yet delivered to any client.
+             */
+            num_pending: number;
+            /** @description Messages redelivered after an ack timeout. */
+            num_redelivered: number;
+            /** @description Pull requests currently parked, waiting for messages. */
+            num_waiting: number;
+        };
+        JsHeader: {
+            name: string;
+            value: string;
+        };
+        /**
+         * @description One peeked message. `payload_json` is populated when the body parses as JSON
+         *     (the common case — engine/executor envelopes are JSON); `payload_text` is the
+         *     lossy-UTF8 fallback, truncated to [`MAX_PAYLOAD_PREVIEW`] with `truncated` set.
+         */
+        JsMessage: {
+            headers: components["schemas"]["JsHeader"][];
+            payload_json?: unknown;
+            payload_text: string;
+            /** Format: int64 */
+            seq: number;
+            /** @description Total payload size in bytes (before any preview truncation). */
+            size: number;
+            subject: string;
+            time: string;
+            truncated: boolean;
+        };
+        /** @description A page of peeked messages, newest first. */
+        JsMessagesResponse: {
+            /**
+             * Format: int64
+             * @description Lowest sequence still present in the stream.
+             */
+            first_seq: number;
+            /**
+             * Format: int64
+             * @description Highest sequence in the stream.
+             */
+            last_seq: number;
+            messages: components["schemas"]["JsMessage"][];
+            /**
+             * Format: int64
+             * @description Pass `before_seq = next_before_seq` to fetch the previous (older) page;
+             *     `null` once the oldest message has been returned.
+             */
+            next_before_seq?: number | null;
+            stream: string;
+        };
+        /** @description Stream detail = the summary plus the consumers bound to it. */
+        JsStreamDetail: components["schemas"]["JsStreamSummary"] & {
+            consumers: components["schemas"]["JsConsumerSummary"][];
+        };
+        /** @description One stream's headline metrics — the table row on the JetStream debug page. */
+        JsStreamSummary: {
+            /** Format: int64 */
+            bytes: number;
+            consumer_count: number;
+            /**
+             * Format: int64
+             * @description Messages deleted/purged out of the [first_seq, last_seq] window.
+             */
+            deleted_count: number;
+            /** Format: int64 */
+            first_seq: number;
+            /** @description RFC3339 timestamp of the oldest message still present. */
+            first_ts: string;
+            /** Format: int64 */
+            last_seq: number;
+            /** @description RFC3339 timestamp of the newest message. */
+            last_ts: string;
+            /** Format: int64 */
+            messages: number;
+            name: string;
+            /** @description Subjects the stream captures (from its config). */
+            subjects: string[];
+            /**
+             * Format: int64
+             * @description Distinct subjects currently present in the stream.
+             */
+            subjects_count: number;
+        };
         /** @description Configuration for the Kreuzberg document extraction backend. */
         KreuzbergConfig: {
             /**
@@ -15397,6 +15553,125 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_streams: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description All JetStream streams */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsStreamSummary"][];
+                };
+            };
+            /** @description Platform admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    get_stream: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description JetStream stream name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Stream detail + consumers */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsStreamDetail"];
+                };
+            };
+            /** @description Platform admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such stream */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    peek_messages: {
+        parameters: {
+            query?: {
+                /**
+                 * @description Return messages with sequence ≤ this value (default: the stream tail).
+                 *     Use the previous page's `next_before_seq` to paginate backwards.
+                 */
+                before_seq?: number | null;
+                /** @description Max messages to return (default 50, capped at 200). */
+                limit?: number | null;
+            };
+            header?: never;
+            path: {
+                /** @description JetStream stream name */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of raw messages */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["JsMessagesResponse"];
+                };
+            };
+            /** @description Platform admin required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No such stream */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

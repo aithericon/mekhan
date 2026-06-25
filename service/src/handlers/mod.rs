@@ -20,6 +20,7 @@ pub mod inference_metering;
 pub mod inference_telemetry;
 pub mod instances;
 pub mod invites;
+pub mod jetstream_admin;
 pub mod job_templates;
 pub mod library_packs;
 pub mod me;

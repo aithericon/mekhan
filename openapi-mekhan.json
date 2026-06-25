@@ -107,6 +107,171 @@
         }
       }
     },
+    "/api/v1/admin/jetstream/streams": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "List every JetStream stream with its headline counts.",
+        "operationId": "list_streams",
+        "responses": {
+          "200": {
+            "description": "All JetStream streams",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JsStreamSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jetstream/streams/{name}": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "One stream's detail plus every consumer bound to it.",
+        "operationId": "get_stream",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "JetStream stream name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Stream detail + consumers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsStreamDetail"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/admin/jetstream/streams/{name}/messages": {
+      "get": {
+        "tags": [
+          "jetstream-admin"
+        ],
+        "summary": "Non-destructively peek raw messages from a stream, newest first.",
+        "operationId": "peek_messages",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "description": "JetStream stream name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "before_seq",
+            "in": "query",
+            "description": "Return messages with sequence ≤ this value (default: the stream tail).\nUse the previous page's `next_before_seq` to paginate backwards.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Max messages to return (default 50, capped at 200).",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of raw messages",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsMessagesResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Platform admin required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No such stream",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/admin/nets": {
       "get": {
         "tags": [
@@ -25076,6 +25241,264 @@
           "all",
           "any"
         ]
+      },
+      "JsConsumerSummary": {
+        "type": "object",
+        "description": "One consumer bound to a stream — the lag/pending view that explains a\nstuck net (high `num_pending` / `num_ack_pending` = nobody draining).",
+        "required": [
+          "name",
+          "durable",
+          "filter_subjects",
+          "num_ack_pending",
+          "num_redelivered",
+          "num_waiting",
+          "num_pending",
+          "delivered_stream_seq",
+          "ack_floor_stream_seq"
+        ],
+        "properties": {
+          "ack_floor_stream_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest stream sequence acked (the floor below which everything is done).",
+            "minimum": 0
+          },
+          "delivered_stream_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest stream sequence delivered to a client.",
+            "minimum": 0
+          },
+          "durable": {
+            "type": "boolean"
+          },
+          "filter_subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "num_ack_pending": {
+            "type": "integer",
+            "description": "Messages delivered but not yet acked.",
+            "minimum": 0
+          },
+          "num_pending": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages not yet delivered to any client.",
+            "minimum": 0
+          },
+          "num_redelivered": {
+            "type": "integer",
+            "description": "Messages redelivered after an ack timeout.",
+            "minimum": 0
+          },
+          "num_waiting": {
+            "type": "integer",
+            "description": "Pull requests currently parked, waiting for messages.",
+            "minimum": 0
+          }
+        }
+      },
+      "JsHeader": {
+        "type": "object",
+        "required": [
+          "name",
+          "value"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "JsMessage": {
+        "type": "object",
+        "description": "One peeked message. `payload_json` is populated when the body parses as JSON\n(the common case — engine/executor envelopes are JSON); `payload_text` is the\nlossy-UTF8 fallback, truncated to [`MAX_PAYLOAD_PREVIEW`] with `truncated` set.",
+        "required": [
+          "seq",
+          "subject",
+          "time",
+          "size",
+          "headers",
+          "payload_text",
+          "truncated"
+        ],
+        "properties": {
+          "headers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsHeader"
+            }
+          },
+          "payload_json": {},
+          "payload_text": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "size": {
+            "type": "integer",
+            "description": "Total payload size in bytes (before any preview truncation).",
+            "minimum": 0
+          },
+          "subject": {
+            "type": "string"
+          },
+          "time": {
+            "type": "string"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "JsMessagesResponse": {
+        "type": "object",
+        "description": "A page of peeked messages, newest first.",
+        "required": [
+          "stream",
+          "messages",
+          "first_seq",
+          "last_seq"
+        ],
+        "properties": {
+          "first_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Lowest sequence still present in the stream.",
+            "minimum": 0
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Highest sequence in the stream.",
+            "minimum": 0
+          },
+          "messages": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/JsMessage"
+            }
+          },
+          "next_before_seq": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Pass `before_seq = next_before_seq` to fetch the previous (older) page;\n`null` once the oldest message has been returned.",
+            "minimum": 0
+          },
+          "stream": {
+            "type": "string"
+          }
+        }
+      },
+      "JsStreamDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JsStreamSummary"
+          },
+          {
+            "type": "object",
+            "required": [
+              "consumers"
+            ],
+            "properties": {
+              "consumers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/JsConsumerSummary"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Stream detail = the summary plus the consumers bound to it."
+      },
+      "JsStreamSummary": {
+        "type": "object",
+        "description": "One stream's headline metrics — the table row on the JetStream debug page.",
+        "required": [
+          "name",
+          "subjects",
+          "messages",
+          "bytes",
+          "first_seq",
+          "last_seq",
+          "consumer_count",
+          "subjects_count",
+          "deleted_count",
+          "first_ts",
+          "last_ts"
+        ],
+        "properties": {
+          "bytes": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "consumer_count": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "deleted_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Messages deleted/purged out of the [first_seq, last_seq] window.",
+            "minimum": 0
+          },
+          "first_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "first_ts": {
+            "type": "string",
+            "description": "RFC3339 timestamp of the oldest message still present."
+          },
+          "last_seq": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "last_ts": {
+            "type": "string",
+            "description": "RFC3339 timestamp of the newest message."
+          },
+          "messages": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "name": {
+            "type": "string"
+          },
+          "subjects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subjects the stream captures (from its config)."
+          },
+          "subjects_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Distinct subjects currently present in the stream.",
+            "minimum": 0
+          }
+        }
       },
       "KreuzbergConfig": {
         "type": "object",
