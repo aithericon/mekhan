@@ -566,13 +566,20 @@ pub struct WorkerIdentity {
 
 /// Configuration for the shared Python venv cache.
 ///
+/// Enabled by default — an absent `[python]` section still gets a cache (see
+/// `build_venv_cache`), so deployments are fast out of the box without any
+/// config. Opt out with `EXECUTOR_PYTHON__ENABLED=false` / `enabled = false`.
+///
 /// Environment variables: `EXECUTOR_PYTHON__ENABLED`, `EXECUTOR_PYTHON__CACHE_DIR`,
 /// `EXECUTOR_PYTHON__PREFER_UV`. Config file: `[python]` section in `executor.toml`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PythonCacheConfig {
-    /// Whether the venv cache is active. Default: false (preserves existing
-    /// per-execution venv-build behavior until opted in).
-    #[serde(default)]
+    /// Whether the venv cache is active. Default: true — a cache hit is a
+    /// symlink and the key `(python_version, requirements, sdk_marker)`
+    /// invalidates correctly, so sharing is safe and turns a ~20s+ per-job
+    /// venv+SDK build into a sub-second symlink. Set `enabled = false` to opt
+    /// back into per-execution isolated builds.
+    #[serde(default = "default_enabled")]
     pub enabled: bool,
 
     /// Directory holding cached venvs. Defaults to `{base_dir}/python-venvs/`.
@@ -589,11 +596,15 @@ pub struct PythonCacheConfig {
 impl Default for PythonCacheConfig {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: default_enabled(),
             cache_dir: None,
             prefer_uv: default_prefer_uv(),
         }
     }
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 fn default_prefer_uv() -> bool {
