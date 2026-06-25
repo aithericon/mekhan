@@ -52,7 +52,7 @@ rust_log  = "info"
 # fails with "worker group 'default' does not resolve …").
 # Same identity as the bootstrap admin below, so ONE account is both platform
 # admin AND owner of the shared workspace (the super-admin).
-platform_admins = ["admin@aithericon.eu", "ender@aithericon.eu"]
+platform_admins = ["admin@aithericon.eu", "ender@aithericon.com"]
 
 # Dedicated Zitadel org for prod (the isolation boundary for users/apps).
 zitadel_org_name = "Mekhan"
