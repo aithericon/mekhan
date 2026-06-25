@@ -34,7 +34,8 @@ pub async fn run(
             .with_context(|| {
                 format!("could not resolve '{template_arg}' as a UUID or template directory")
             })?;
-        (meta.server_url, meta.base_template_id)
+        let base_id = meta.require_base_template_id()?.to_string();
+        (meta.server_url, base_id)
     };
     let latest = crate::http::resolve_latest(&server_url, &chain_id).await?;
     let template_id = latest.id;

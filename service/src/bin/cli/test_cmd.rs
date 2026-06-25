@@ -176,5 +176,5 @@ fn resolve_template_id(arg: &str) -> Result<String> {
     let dir = Path::new(arg);
     let (meta, _graph, _files) = fs_ops::import_from_dir(dir)
         .with_context(|| format!("could not resolve '{arg}' as a UUID or template directory"))?;
-    Ok(meta.base_template_id)
+    Ok(meta.require_base_template_id()?.to_string())
 }

@@ -22,10 +22,10 @@ use crate::handlers::template_tests::{run_test, RunContext};
 use crate::lifecycle::cleanup_net;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::template::{
-    ApplyAirTemplateRequest, ApplyTemplateRequest, CompileRequest, CreateTemplateRequest,
-    DiscardDraftResponse, ExecutionBackendType, Port, Position, Presentation, TemplateListExtras,
-    UpdateTemplateRequest, WorkflowGraph, WorkflowNode, WorkflowNodeData, WorkflowTemplate,
-    WorkflowTemplateSummary,
+    ApplyAirTemplateRequest, ApplyByCoordinateRequest, ApplyTemplateRequest, CompileRequest,
+    CreateTemplateRequest, DiscardDraftResponse, ExecutionBackendType, Port, Position,
+    Presentation, TemplateListExtras, UpdateTemplateRequest, WorkflowGraph, WorkflowNode,
+    WorkflowNodeData, WorkflowTemplate, WorkflowTemplateSummary,
 };
 use crate::models::template_test::{FailingTestInfo, PublishGateBlockedResponse, TemplateTest};
 use crate::process::publish::{
@@ -1585,6 +1585,22 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let base_id = src.chain_root_id();
+    // Carry-forward of the library/gitops triple (origin, coordinate,
+    // template_kind) is scoped to `origin = 'gitops'` ONLY. A gitops chain
+    // MUST keep its coordinate on every bump so the next coordinate-keyed
+    // apply re-resolves the SAME chain rather than duplicating it. For every
+    // other chain — including PROMOTED library_node chains (origin
+    // workspace|system|community) — the new latest row binds
+    // NULL/NULL/'workflow' exactly as before this column triple was threaded
+    // here, preserving the historical UUID-path bump behavior verbatim.
+    let is_gitops = src.origin.as_deref() == Some("gitops");
+    let fwd_origin = is_gitops.then(|| "gitops".to_string());
+    let fwd_coordinate = if is_gitops { src.coordinate.clone() } else { None };
+    let fwd_template_kind = if is_gitops {
+        src.template_kind.clone()
+    } else {
+        "workflow".to_string()
+    };
     sqlx::query_as::<_, WorkflowTemplate>(
         r#"
         INSERT INTO workflow_templates
@@ -1592,8 +1608,8 @@ where
              is_latest, published, published_at, graph, air_json,
              interface_json, source_ref, author_id,
              workspace_id, visibility, owner_template_id, updated_by, metrics,
-             requirements_json)
-        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+             requirements_json, origin, coordinate, template_kind)
+        VALUES ($1, $2, $3, $4, $5, $6, TRUE, TRUE, NOW(), $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         RETURNING *
         "#,
     )
@@ -1614,6 +1630,9 @@ where
     .bind(updated_by)
     .bind(metrics)
     .bind(requirements_json)
+    .bind(fwd_origin)
+    .bind(fwd_coordinate)
+    .bind(fwd_template_kind)
     .fetch_one(exec)
     .await
     .map_err(|e| {
@@ -1760,6 +1779,201 @@ pub(crate) fn apply_mode(latest: &WorkflowTemplate) -> Result<ApplyMode, String>
     }
 }
 
+/// How the shared apply pipeline persists its single transaction. The compile
+/// and S3 upload steps are mode-independent; only the final row mutation
+/// differs. Carries exactly the row context each branch needs — the compile
+/// inputs themselves are always passed as plain scalars (so no
+/// `&WorkflowTemplate` is needed before the compile has passed).
+enum PersistMode<'a> {
+    /// Seed-publish an existing `mekhan init` draft row in place as its v1
+    /// (the UUID `{id}` path's seed branch). `finalize_publish_row` on
+    /// `target_id`.
+    Seed,
+    /// Bump the published head: `mark_not_latest(src)` then
+    /// `insert_published_version(src, ...)`. Borrows the source row for the
+    /// carry-forward of name/visibility/owner and (gitops-only) coordinate.
+    Bump { src: &'a WorkflowTemplate },
+    /// Create-seed a brand-new gitops chain: INSERT a born-published v1 row
+    /// keyed by `coordinate` (`origin = 'gitops'`, `template_kind =
+    /// 'workflow'`). Used only by the coordinate path on a coordinate miss.
+    CreateSeed {
+        coordinate: &'a str,
+        visibility: &'a str,
+    },
+}
+
+/// Shared compile → upload → persist pipeline behind BOTH apply front doors
+/// (`POST /api/v1/templates/{id}/apply` and `POST /api/v1/templates/apply`).
+/// Takes SCALARS for the compile inputs so neither caller needs a row before
+/// the compile has passed; the persist step's row context rides in `mode`.
+///
+/// Invariant (load-bearing): compile runs FIRST (pure, no side effects), THEN
+/// the S3 file/config uploads under `(target_id, target_version)`, THEN the
+/// single transaction. A bad graph therefore strands nothing — no draft row,
+/// no S3 object, no flipped `is_latest`.
+#[allow(clippy::too_many_arguments)]
+async fn apply_compile_and_persist(
+    state: &AppState,
+    principal_id: Uuid,
+    workspace_id: Uuid,
+    name: &str,
+    description: &str,
+    target_id: Uuid,
+    target_version: i32,
+    family_id: Uuid,
+    graph: &WorkflowGraph,
+    files: &mut HashMap<String, HashMap<String, String>>,
+    source_ref_json: Option<&serde_json::Value>,
+    mode: PersistMode<'_>,
+) -> Result<WorkflowTemplate, ApiError> {
+    let publisher = PublishService::new(state);
+
+    // 1. Compile AIR FIRST — pure, before any write.
+    let CompiledArtifacts {
+        air_json,
+        graph_json,
+        interface_json,
+        requirements_json,
+        node_configs,
+        metrics,
+    } = publisher
+        .compile_artifacts(
+            graph,
+            name,
+            description,
+            target_id,
+            target_version,
+            ArtifactKeySpace::Version,
+            Some(family_id),
+            files,
+            principal_id,
+            workspace_id,
+        )
+        .await?;
+
+    // 2. Upload node files + static configs to S3 under the *target* version
+    //    key, before the DB row. A failure here leaves only inert orphan
+    //    objects (nothing points at them). Fatal for apply.
+    if let Err(e) = publisher
+        .upload_files(target_id, target_version, files)
+        .await
+    {
+        return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
+    }
+    if let Err(e) = publisher
+        .upload_node_configs(target_id, target_version, &node_configs)
+        .await
+    {
+        return Err(ApiError::internal(format!(
+            "S3 node-config upload failed: {e}"
+        )));
+    }
+
+    // 3. Single transaction: the only persisted, queryable transition. The row
+    //    is born in its final published+latest form.
+    let mut tx = state.db.begin().await?;
+
+    let applied = match mode {
+        PersistMode::Seed => {
+            finalize_publish_row(
+                &mut *tx,
+                target_id,
+                &air_json,
+                &graph_json,
+                &interface_json,
+                &metrics,
+                source_ref_json,
+                requirements_json.as_ref(),
+                principal_id,
+            )
+            .await?
+        }
+        PersistMode::Bump { src } => {
+            mark_not_latest(&mut *tx, src.id).await?;
+            insert_published_version(
+                &mut *tx,
+                src,
+                target_id,
+                target_version,
+                &air_json,
+                &graph_json,
+                &interface_json,
+                &metrics,
+                source_ref_json,
+                requirements_json.as_ref(),
+                principal_id,
+            )
+            .await?
+        }
+        PersistMode::CreateSeed {
+            coordinate,
+            visibility,
+        } => {
+            // Fresh born-published v1 chain root keyed by coordinate.
+            // `base_template_id = id` matches `create_template`'s convention.
+            // `origin = 'gitops'` + `coordinate` make the chain re-resolvable
+            // by the next coordinate apply; `template_kind = 'workflow'` keeps
+            // it out of the palette/catalogue (those filter
+            // `template_kind = 'library_node'`).
+            sqlx::query_as::<_, WorkflowTemplate>(
+                r#"
+                INSERT INTO workflow_templates
+                    (id, name, description, base_template_id, version,
+                     is_latest, published, published_at, published_by,
+                     graph, air_json, interface_json, source_ref, author_id,
+                     workspace_id, visibility, updated_by, metrics,
+                     requirements_json, origin, coordinate, template_kind)
+                VALUES ($1, $2, $3, $1, 1, TRUE, TRUE, NOW(), $4, $5, $6, $7, $8, $4,
+                        $9, $10, $4, $11, $12, 'gitops', $13, 'workflow')
+                RETURNING *
+                "#,
+            )
+            .bind(target_id)
+            .bind(name)
+            .bind(description)
+            .bind(principal_id)
+            .bind(&graph_json)
+            .bind(&air_json)
+            .bind(&interface_json)
+            .bind(source_ref_json)
+            .bind(workspace_id)
+            .bind(visibility)
+            .bind(&metrics)
+            .bind(requirements_json.as_ref())
+            .bind(coordinate)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| {
+                // A concurrent first-apply for the same (workspace, coordinate)
+                // may have already created the chain; the partial unique index
+                // `uq_workflow_templates_gitops_coordinate` rejects this INSERT.
+                // Surface it with a recognizable code so the coordinate handler
+                // can re-resolve and converge via Bump instead of failing.
+                if matches!(&e, sqlx::Error::Database(db) if db.is_unique_violation()) {
+                    return ApiError {
+                        status: StatusCode::CONFLICT,
+                        body: Some(
+                            ErrorResponse::new("gitops coordinate already exists")
+                                .with_code(GITOPS_COORDINATE_CONFLICT_CODE),
+                        ),
+                    };
+                }
+                tracing::error!("failed to create-seed gitops template: {e}");
+                ApiError::internal(e.to_string())
+            })?
+        }
+    };
+
+    tx.commit().await?;
+
+    Ok(applied)
+}
+
+/// Machine-readable code stamped on the 409 raised when the gitops-coordinate
+/// unique index rejects a create-seed INSERT (a lost first-apply race). The
+/// coordinate handler matches on this to retry as a Bump.
+const GITOPS_COORDINATE_CONFLICT_CODE: &str = "gitops-coordinate-conflict";
+
 /// POST /api/v1/templates/{id}/apply
 ///
 /// GitOps entry point: atomically publish a new version of the chain straight
@@ -1807,37 +2021,12 @@ pub async fn apply_template(
         ApplyMode::Bump => latest.version + 1,
     };
 
-    // 2. Compile AIR FIRST — before any write. Pure; a failure leaves zero
-    //    side effects (no draft, no S3, no Y.Doc). Same shared step as
-    //    `publish_template`.
+    // 2-4. Compile AIR FIRST (pure), upload to S3 under the target version
+    //    key, then the single transaction — all behind the shared scalar-input
+    //    helper. A failure in compile/upload leaves zero side effects. The
+    //    persist branch mirrors today's exact Seed/Bump semantics.
     let graph = req.graph;
     let mut files_map = req.files;
-    let publisher = PublishService::new(&state);
-
-    let CompiledArtifacts {
-        air_json,
-        graph_json,
-        interface_json,
-        requirements_json,
-        node_configs,
-        metrics,
-    } = publisher
-        .compile_artifacts(
-            &graph,
-            &latest.name,
-            &latest.description,
-            target_id,
-            target_version,
-            ArtifactKeySpace::Version,
-            Some(latest.chain_root_id()),
-            &mut files_map,
-            user.subject_as_uuid(),
-            // Apply (no-version-bump) hits the same workspace as the latest
-            // template row; reuse it directly to keep the resource lookup
-            // tenant-correct.
-            latest.workspace_id,
-        )
-        .await?;
     let source_ref_json = req
         .source_ref
         .as_ref()
@@ -1845,68 +2034,29 @@ pub async fn apply_template(
         .transpose()
         .map_err(|e| ApiError::internal(format!("serialize source_ref: {e}")))?;
 
-    // 3. Upload node files to S3 under the *target* version key, before the
-    //    DB row. A failure here leaves only inert orphan objects (nothing
-    //    points at them) — no dangling row. Fatal for apply (unlike publish's
-    //    logged-warning legacy behavior).
-    if let Err(e) = publisher
-        .upload_files(target_id, target_version, &files_map)
-        .await
-    {
-        return Err(ApiError::internal(format!("S3 file upload failed: {e}")));
-    }
-    // Per-node static configs offloaded by the compiler. Fatal for apply —
-    // the executor `FetchConfigHook` would fail at run-time if a node's
-    // blob is missing, leaving a hard-to-trace runtime breakage.
-    if let Err(e) = publisher
-        .upload_node_configs(target_id, target_version, &node_configs)
-        .await
-    {
-        return Err(ApiError::internal(format!(
-            "S3 node-config upload failed: {e}"
-        )));
-    }
-
-    // 4. Single transaction: the only persisted, queryable transition. The
-    //    row is born in its final published+latest form — there is no
-    //    intermediate latest-but-unpublished state to strand on failure.
-    let mut tx = state.db.begin().await?;
-
-    let applied = match mode {
-        ApplyMode::Seed => {
-            finalize_publish_row(
-                &mut *tx,
-                latest.id,
-                &air_json,
-                &graph_json,
-                &interface_json,
-                &metrics,
-                source_ref_json.as_ref(),
-                requirements_json.as_ref(),
-                user.subject_as_uuid(),
-            )
-            .await?
-        }
-        ApplyMode::Bump => {
-            mark_not_latest(&mut *tx, latest.id).await?;
-            insert_published_version(
-                &mut *tx,
-                &latest,
-                target_id,
-                target_version,
-                &air_json,
-                &graph_json,
-                &interface_json,
-                &metrics,
-                source_ref_json.as_ref(),
-                requirements_json.as_ref(),
-                user.subject_as_uuid(),
-            )
-            .await?
-        }
+    let persist_mode = match mode {
+        ApplyMode::Seed => PersistMode::Seed,
+        ApplyMode::Bump => PersistMode::Bump { src: &latest },
     };
 
-    tx.commit().await?;
+    let applied = apply_compile_and_persist(
+        &state,
+        user.subject_as_uuid(),
+        // Apply (no-version-bump) hits the same workspace as the latest
+        // template row; reuse it directly to keep the resource lookup
+        // tenant-correct.
+        latest.workspace_id,
+        &latest.name,
+        &latest.description,
+        target_id,
+        target_version,
+        latest.chain_root_id(),
+        &graph,
+        &mut files_map,
+        source_ref_json.as_ref(),
+        persist_mode,
+    )
+    .await?;
 
     tracing::info!(
         template_id = %applied.id,
@@ -1941,10 +2091,324 @@ pub async fn apply_template(
     if mode == ApplyMode::Bump {
         state.triggers.forget_template(latest.id);
     }
-    let registered = publisher.register_triggers(&applied).await;
+    let registered = PublishService::new(&state)
+        .register_triggers(&applied)
+        .await;
     if registered > 0 {
         tracing::info!(template_id = %applied.id, registered, "registered triggers on apply");
     }
+
+    Ok(Json(applied))
+}
+
+/// Filename extensions that mark a binary node asset. Binary assets are
+/// uploaded out-of-band via the files REST route (keyed
+/// `templates/{id}/blobs/...`) and are NOT supported on the coordinate apply
+/// path in the first cut, because that key must be stable + known pre-apply
+/// (neither holds when the chain id is freshly minted). Kept in sync with the
+/// CLI's `fs_ops::BINARY_EXTENSIONS`.
+const COORDINATE_PATH_BINARY_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff", "pdf", "zip", "tar", "gz",
+    "whl",
+];
+
+/// Reject (400) if any node file on the coordinate path looks like a binary
+/// asset by extension. Text node files travel in the request body and are
+/// uploaded server-side under the freshly-minted v1 key; binary blobs are a
+/// documented follow-up.
+fn reject_binary_files_on_coordinate_path(
+    files: &HashMap<String, HashMap<String, String>>,
+) -> Result<(), ApiError> {
+    for (node_id, node_files) in files {
+        for filename in node_files.keys() {
+            let ext = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+            if COORDINATE_PATH_BINARY_EXTENSIONS.contains(&ext.as_str()) {
+                return Err(ApiError::bad_request(format!(
+                    "binary node asset '{node_id}/{filename}' is not supported on the \
+                     coordinate apply path (text node files only); upload binary assets \
+                     via the UUID apply path or omit them"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Post-commit side effects shared by the coordinate apply path: re-seed the
+/// Y.Doc from the freshly-published graph (the applied row always carries a
+/// brand-new id, so this is a clean init like `new_version`) and re-register
+/// triggers. Non-fatal: the executor runs from AIR/S3 + the `graph` column,
+/// not the Y.Doc.
+async fn finish_apply_post_commit(
+    state: &AppState,
+    applied: &WorkflowTemplate,
+    graph: &WorkflowGraph,
+    files: &HashMap<String, HashMap<String, String>>,
+    forget_template_id: Option<Uuid>,
+) {
+    if let Err(e) = state
+        .yjs
+        .persistence
+        .init_doc_from_graph_with_files(applied.id, graph, files)
+        .await
+    {
+        tracing::error!(
+            "failed to init Y.Doc for applied version {}: {e}",
+            applied.id
+        );
+    }
+    if let Some(prev) = forget_template_id {
+        state.triggers.forget_template(prev);
+    }
+    let registered = PublishService::new(state)
+        .register_triggers(applied)
+        .await;
+    if registered > 0 {
+        tracing::info!(template_id = %applied.id, registered, "registered triggers on apply");
+    }
+}
+
+/// POST /api/v1/templates/apply
+///
+/// Coordinate-keyed GitOps entry point: create-if-absent / upsert from a fully
+/// declarative git artifact. Unlike `POST /api/v1/templates/{id}/apply`, no
+/// pre-existing chain id is required — the upsert is keyed on a stable
+/// `vendor/slug` `coordinate`, scoped per workspace. CI can therefore
+/// create-or-version idempotently from the `mekhan.lock.json` alone.
+///
+/// Resolution order for `(workspace, coordinate)`:
+/// 1. An existing `origin = 'gitops'` chain with this coordinate → Bump.
+/// 2. Else adopt-by-name: exactly one `origin IS NULL` chain whose name equals
+///    the coordinate slug → stamp `origin = 'gitops'` + coordinate and Bump.
+///    (>1 match → 409 disambiguation.)
+/// 3. Else create a fresh born-published v1 chain (`origin = 'gitops'`,
+///    `template_kind = 'workflow'`).
+///
+/// Born-published like the `{id}` path; `template_kind = 'workflow'` keeps the
+/// chain out of the palette/catalogue. Binary node assets are unsupported on
+/// this path (text node files only).
+#[utoipa::path(
+    post,
+    path = "/api/v1/templates/apply",
+    request_body = ApplyByCoordinateRequest,
+    responses(
+        (status = 200, description = "Applied: created v1, adopted+bumped, or bumped", body = WorkflowTemplate),
+        (status = 400, description = "Invalid coordinate / graph / binary asset present", body = ErrorResponse),
+        (status = 403, description = "No active workspace", body = ErrorResponse),
+        (status = 409, description = "Ambiguous adopt-by-name (>1 candidate chain)", body = ErrorResponse),
+        (status = 500, description = "Server error", body = ErrorResponse),
+    ),
+    tag = "templates",
+)]
+pub async fn apply_by_coordinate(
+    State(state): State<AppState>,
+    Extension(user): Extension<AuthUser>,
+    Json(req): Json<ApplyByCoordinateRequest>,
+) -> Result<Json<WorkflowTemplate>, ApiError> {
+    let workspace_id = user.require_workspace()?;
+    crate::handlers::governance::validate_coordinate(&req.coordinate)?;
+    reject_binary_files_on_coordinate_path(&req.files)?;
+
+    let principal_id = user.subject_as_uuid();
+    // Slug segment of `vendor/slug` — the create/adopt default name.
+    let slug = req
+        .coordinate
+        .split('/')
+        .nth(1)
+        .unwrap_or(&req.coordinate)
+        .to_string();
+    let chain_name = req.name.clone().unwrap_or_else(|| slug.clone());
+    let description = req.description.clone().unwrap_or_default();
+    let visibility = "workspace";
+
+    let graph = req.graph;
+    let mut files_map = req.files;
+    let source_ref_json = req
+        .source_ref
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|e| ApiError::internal(format!("serialize source_ref: {e}")))?;
+
+    // Bounded retry: a concurrent/retried first-apply may lose the create
+    // INSERT to the unique index. We catch the violation and converge by
+    // re-resolving and bumping, rather than 409-ing the loser (which would
+    // break declarative idempotency).
+    const MAX_ATTEMPTS: u32 = 2;
+    let mut attempt = 0;
+    let applied = loop {
+        attempt += 1;
+
+        // (1) Existing gitops chain for this coordinate → Bump.
+        let existing_gitops: Option<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
+            "SELECT * FROM workflow_templates \
+                WHERE origin = 'gitops' AND coordinate = $1 \
+                  AND workspace_id = $2 AND is_latest = TRUE",
+        )
+        .bind(&req.coordinate)
+        .bind(workspace_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        if let Some(latest) = existing_gitops {
+            let target_id = Uuid::new_v4();
+            let target_version = latest.version + 1;
+            let applied = apply_compile_and_persist(
+                &state,
+                principal_id,
+                workspace_id,
+                &latest.name,
+                &latest.description,
+                target_id,
+                target_version,
+                latest.chain_root_id(),
+                &graph,
+                &mut files_map,
+                source_ref_json.as_ref(),
+                PersistMode::Bump { src: &latest },
+            )
+            .await?;
+            finish_apply_post_commit(
+                &state,
+                &applied,
+                &graph,
+                &files_map,
+                Some(latest.id),
+            )
+            .await;
+            break applied;
+        }
+
+        // (2) Adopt-by-name: an existing pre-seeded / UI chain (origin NULL)
+        //     whose name matches the coordinate slug. Exactly one → adopt it
+        //     (stamp origin='gitops'+coordinate) and Bump; >1 → 409.
+        let adopt_candidates: Vec<WorkflowTemplate> = sqlx::query_as::<_, WorkflowTemplate>(
+            "SELECT * FROM workflow_templates \
+                WHERE name = $1 AND workspace_id = $2 \
+                  AND origin IS NULL AND is_latest = TRUE",
+        )
+        .bind(&chain_name)
+        .bind(workspace_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+
+        match adopt_candidates.len() {
+            0 => {} // fall through to create
+            1 => {
+                // Stamp the coordinate onto the existing latest row inside the
+                // same statement, then Bump from the (now-gitops) source so the
+                // new latest carries the coordinate forward. Stamping a clone of
+                // the source lets `insert_published_version`'s gitops-scoped
+                // carry-forward fire.
+                let mut adopted = adopt_candidates.into_iter().next().unwrap();
+                sqlx::query(
+                    "UPDATE workflow_templates \
+                        SET origin = 'gitops', coordinate = $2 WHERE id = $1",
+                )
+                .bind(adopted.id)
+                .bind(&req.coordinate)
+                .execute(&state.db)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?;
+                adopted.origin = Some("gitops".to_string());
+                adopted.coordinate = Some(req.coordinate.clone());
+
+                let target_id = Uuid::new_v4();
+                let target_version = adopted.version + 1;
+                let applied = apply_compile_and_persist(
+                    &state,
+                    principal_id,
+                    workspace_id,
+                    &adopted.name,
+                    &adopted.description,
+                    target_id,
+                    target_version,
+                    adopted.chain_root_id(),
+                    &graph,
+                    &mut files_map,
+                    source_ref_json.as_ref(),
+                    PersistMode::Bump { src: &adopted },
+                )
+                .await?;
+                finish_apply_post_commit(
+                    &state,
+                    &applied,
+                    &graph,
+                    &files_map,
+                    Some(adopted.id),
+                )
+                .await;
+                break applied;
+            }
+            _ => {
+                return Err(ApiError::conflict(format!(
+                    "adopt-by-name is ambiguous: {} chains named '{chain_name}' \
+                     in this workspace have no origin; disambiguate by promoting \
+                     or renaming all but the intended one before applying \
+                     coordinate '{}'",
+                    adopt_candidates.len(),
+                    req.coordinate,
+                )));
+            }
+        }
+
+        // (3) Create-seed: fresh gitops chain at v1.
+        let target_id = Uuid::new_v4();
+        let create_result = apply_compile_and_persist(
+            &state,
+            principal_id,
+            workspace_id,
+            &chain_name,
+            &description,
+            target_id,
+            1,
+            target_id,
+            &graph,
+            &mut files_map,
+            source_ref_json.as_ref(),
+            PersistMode::CreateSeed {
+                coordinate: &req.coordinate,
+                visibility,
+            },
+        )
+        .await;
+
+        match create_result {
+            Ok(applied) => {
+                finish_apply_post_commit(&state, &applied, &graph, &files_map, None).await;
+                break applied;
+            }
+            Err(e) => {
+                // Lost the create race against a concurrent first-apply: the
+                // gitops coordinate index rejected the INSERT (23505). Re-resolve
+                // and converge via Bump on the next iteration rather than 409.
+                let lost_race = e
+                    .body
+                    .as_ref()
+                    .and_then(|b| b.code.as_deref())
+                    == Some(GITOPS_COORDINATE_CONFLICT_CODE);
+                if lost_race && attempt < MAX_ATTEMPTS {
+                    tracing::warn!(
+                        coordinate = %req.coordinate,
+                        attempt,
+                        "coordinate create lost a race; retrying as bump"
+                    );
+                    continue;
+                }
+                return Err(e);
+            }
+        }
+    };
+
+    tracing::info!(
+        template_id = %applied.id,
+        version = applied.version,
+        coordinate = %req.coordinate,
+        actor = %user.subject,
+        "applied template from git by coordinate"
+    );
 
     Ok(Json(applied))
 }
@@ -2776,5 +3240,43 @@ mod discard_mode_tests {
         t.is_latest = false;
         let err = discard_mode(&t).unwrap_err();
         assert!(err.contains("chain head"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod coordinate_apply_tests {
+    use super::reject_binary_files_on_coordinate_path;
+    use std::collections::HashMap;
+
+    fn files(node: &str, names: &[&str]) -> HashMap<String, HashMap<String, String>> {
+        let mut inner = HashMap::new();
+        for n in names {
+            inner.insert(n.to_string(), "content".to_string());
+        }
+        let mut outer = HashMap::new();
+        outer.insert(node.to_string(), inner);
+        outer
+    }
+
+    #[test]
+    fn text_only_bundle_accepted() {
+        let f = files("step1", &["main.py", "requirements.txt", "config.json"]);
+        assert!(reject_binary_files_on_coordinate_path(&f).is_ok());
+    }
+
+    #[test]
+    fn empty_bundle_accepted() {
+        let f: HashMap<String, HashMap<String, String>> = HashMap::new();
+        assert!(reject_binary_files_on_coordinate_path(&f).is_ok());
+    }
+
+    #[test]
+    fn binary_asset_rejected() {
+        for bad in ["logo.png", "report.pdf", "pkg.whl", "scan.TIFF"] {
+            let f = files("review", &[bad]);
+            let err = reject_binary_files_on_coordinate_path(&f)
+                .expect_err("binary asset must be rejected");
+            assert_eq!(err.status, axum::http::StatusCode::BAD_REQUEST);
+        }
     }
 }

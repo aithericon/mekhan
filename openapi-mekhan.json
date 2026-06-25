@@ -12525,6 +12525,78 @@
         }
       }
     },
+    "/api/v1/templates/apply": {
+      "post": {
+        "tags": [
+          "templates"
+        ],
+        "summary": "POST /api/v1/templates/apply",
+        "description": "Coordinate-keyed GitOps entry point: create-if-absent / upsert from a fully\ndeclarative git artifact. Unlike `POST /api/v1/templates/{id}/apply`, no\npre-existing chain id is required — the upsert is keyed on a stable\n`vendor/slug` `coordinate`, scoped per workspace. CI can therefore\ncreate-or-version idempotently from the `mekhan.lock.json` alone.\n\nResolution order for `(workspace, coordinate)`:\n1. An existing `origin = 'gitops'` chain with this coordinate → Bump.\n2. Else adopt-by-name: exactly one `origin IS NULL` chain whose name equals\n   the coordinate slug → stamp `origin = 'gitops'` + coordinate and Bump.\n   (>1 match → 409 disambiguation.)\n3. Else create a fresh born-published v1 chain (`origin = 'gitops'`,\n   `template_kind = 'workflow'`).\n\nBorn-published like the `{id}` path; `template_kind = 'workflow'` keeps the\nchain out of the palette/catalogue. Binary node assets are unsupported on\nthis path (text node files only).",
+        "operationId": "apply_by_coordinate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyByCoordinateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Applied: created v1, adopted+bumped, or bumped",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowTemplate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid coordinate / graph / binary asset present",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "No active workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ambiguous adopt-by-name (>1 candidate chain)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/templates/apply-air": {
       "post": {
         "tags": [
@@ -17306,6 +17378,61 @@
           },
           "trigger": {
             "$ref": "#/components/schemas/PreAirTriggerSpec"
+          }
+        }
+      },
+      "ApplyByCoordinateRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/templates/apply` — the coordinate-keyed\nGitOps path (create-if-absent / upsert).\n\nUnlike `POST /api/v1/templates/{id}/apply` (which requires a pre-existing\nchain id), this endpoint keys the upsert on a stable `vendor/slug`\n`coordinate` carried in the git artifact, so CI can create-or-version\nidempotently from the file alone. On a first apply for an\n`(workspace, coordinate)` pair it seeds a fresh born-published v1 chain\n(`origin = 'gitops'`, `template_kind = 'workflow'`); a re-apply bumps it.\n\nLike the `{id}` path the `graph` REPLACES the chain head wholesale (no\nCRDT merge). Binary node assets are NOT supported on this path in the\nfirst cut — only text node files (the `files` map) travel in the body and\nare uploaded server-side under the freshly-minted version key.",
+        "required": [
+          "coordinate",
+          "graph"
+        ],
+        "properties": {
+          "coordinate": {
+            "type": "string",
+            "description": "Stable `vendor/slug` coordinate, e.g. `online-clinic/document-pipeline-v1`.\nValidated to exactly one slash, lowercase `[a-z0-9-]` segments."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "files": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              },
+              "propertyNames": {
+                "type": "string"
+              }
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraph"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Display name for the chain. Defaults to the coordinate's slug segment\nwhen absent (used only on the create/adopt branch; a bump keeps the\nexisting chain name)."
+          },
+          "source_ref": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/SourceRef"
+              }
+            ]
           }
         }
       },

@@ -81,7 +81,14 @@ pub async fn run(
 
     // Lock stores the BASE id so subsequent `apply` bumps don't strand the
     // checkout on a now-stale version id.
-    fs_ops::export_to_dir(&dir, &bundle.graph, &bundle.files, &base_id, server, format)?;
+    fs_ops::export_to_dir(
+        &dir,
+        &bundle.graph,
+        &bundle.files,
+        fs_ops::CreationKey::BaseTemplateId(base_id.clone()),
+        server,
+        format,
+    )?;
 
     // Pull template tests into `tests/<name>.yaml` alongside the workflow.
     // Best-effort: a tests-API failure shouldn't fail the whole pull, since

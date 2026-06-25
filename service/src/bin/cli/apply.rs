@@ -19,6 +19,22 @@ struct ApplyBody<'a> {
     source_ref: Option<Value>,
 }
 
+/// Body for the coordinate-keyed `POST /api/v1/templates/apply` path. Mirrors
+/// the server `ApplyByCoordinateRequest` DTO (camelCase on the wire).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ApplyByCoordinateBody<'a> {
+    coordinate: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    description: Option<&'a str>,
+    graph: &'a WorkflowGraph,
+    files: &'a HashMap<String, HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_ref: Option<Value>,
+}
+
 /// GitOps entry point. Imports the local template, computes git provenance,
 /// uploads binary assets, then POSTs a single atomic `apply` that
 /// versions + publishes the chain from the git artifact. Deliberately never
@@ -29,14 +45,75 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     let assets = fs_ops::read_node_assets(&dir)?;
 
     let server_url = meta.server_url.trim_end_matches('/').to_string();
-    // `apply_template` resolves its path id through `base_template_id`
-    // before touching any state, so the lock's stable chain root is the
-    // right thing to hit — no `resolve_latest` round trip needed.
-    // Clone so the lastPull rewrite below can take `meta` by value.
-    let base_id = meta.base_template_id.clone();
-    let base_id = base_id.as_str();
-
     let source_ref = git_source_ref(&dir);
+
+    // Path selection is purely on `coordinate` presence: a coordinate-bearing
+    // lock is fully declarative and drives the create-if-absent upsert; a
+    // legacy UUID-only lock keeps hitting `{id}/apply` verbatim.
+    let chain_root_id = if let Some(coordinate) = meta.coordinate.clone() {
+        apply_by_coordinate(
+            &dir,
+            &server_url,
+            &coordinate,
+            &graph,
+            &text_files,
+            &assets,
+            source_ref,
+            meta,
+        )
+        .await?
+    } else if let Some(base_id) = meta.base_template_id.clone() {
+        apply_by_base_id(
+            &dir,
+            &server_url,
+            &base_id,
+            &graph,
+            &text_files,
+            &assets,
+            source_ref,
+            meta,
+        )
+        .await?
+    } else {
+        anyhow::bail!(
+            "mekhan.lock.json has neither coordinate nor baseTemplateId — nothing to apply against."
+        );
+    };
+
+    // Sync tests after the apply succeeds. Tests are stored against the
+    // template family, so the just-published version inherits them. Note:
+    // unlike a UI publish, apply doesn't run the test gate against this
+    // freshly-published row — gitops authors who want CI-style coverage
+    // should run `mekhan test <dir>` after apply.
+    let local_tests = tests_fs::read_tests(&dir)?;
+    if !local_tests.is_empty() || dir.join("tests").exists() {
+        let (created, updated, deleted) =
+            tests_fs::sync_to_server(&server_url, &chain_root_id, &local_tests).await?;
+        if created + updated + deleted > 0 {
+            println!(
+                "  tests: {} created, {} updated, {} deleted",
+                created, updated, deleted
+            );
+        }
+    }
+
+    Ok(())
+}
+
+/// Legacy UUID-lock apply path: POST `/api/v1/templates/{id}/apply`. Behavior
+/// is unchanged from before the coordinate path was introduced — including the
+/// out-of-band binary-asset upload. Returns the chain-root id to key test sync.
+#[allow(clippy::too_many_arguments)]
+async fn apply_by_base_id(
+    dir: &Path,
+    server_url: &str,
+    base_id: &str,
+    graph: &WorkflowGraph,
+    text_files: &HashMap<String, HashMap<String, String>>,
+    assets: &HashMap<String, HashMap<String, Vec<u8>>>,
+    source_ref: Option<Value>,
+    meta: fs_ops::MekhanJson,
+) -> Result<String> {
     match &source_ref {
         Some(s) => println!(
             "Applying template chain {} from {}@{}{}",
@@ -62,13 +139,13 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
     if !assets.is_empty() {
         let total: usize = assets.values().map(|f| f.len()).sum();
         println!("Uploading {} asset file(s)...", total);
-        push::upload_assets(&server_url, base_id, &assets).await?;
+        push::upload_assets(server_url, base_id, assets).await?;
     }
 
     let url = format!("{}/api/v1/templates/{}/apply", server_url, base_id);
     let body = ApplyBody {
-        graph: &graph,
-        files: &text_files,
+        graph,
+        files: text_files,
         source_ref,
     };
     let client = reqwest::Client::new();
@@ -89,7 +166,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
             let version = resp_body["version"].as_i64().unwrap_or(0);
             let mut refreshed = meta;
             refreshed.last_pull = chrono::Utc::now().to_rfc3339();
-            fs_ops::write_meta(&dir, &refreshed)
+            fs_ops::write_meta(dir, &refreshed)
                 .context("failed to refresh mekhan.lock.json after apply")?;
             println!(
                 "Applied chain {} → version {} ({})",
@@ -114,24 +191,123 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
         }
     }
 
-    // Sync tests after the apply succeeds. Tests are stored against the
-    // template family, so the just-published version inherits them. Note:
-    // unlike a UI publish, apply doesn't run the test gate against this
-    // freshly-published row — gitops authors who want CI-style coverage
-    // should run `mekhan test <dir>` after apply.
-    let local_tests = tests_fs::read_tests(&dir)?;
-    if !local_tests.is_empty() || dir.join("tests").exists() {
-        let (created, updated, deleted) =
-            tests_fs::sync_to_server(&server_url, base_id, &local_tests).await?;
-        if created + updated + deleted > 0 {
-            println!(
-                "  tests: {} created, {} updated, {} deleted",
-                created, updated, deleted
-            );
-        }
+    Ok(base_id.to_string())
+}
+
+/// Coordinate-keyed apply path: POST `/api/v1/templates/apply` (create-if-
+/// absent / upsert). Fully declarative — the lock needs no server-minted UUID.
+/// Binary node assets are unsupported on this path (the chain id is minted
+/// server-side and not stable pre-apply); bail early if the bundle has any.
+/// Refreshes `lastPull` only — no UUID write-back, since the coordinate stays
+/// the lock's stable key. Returns the resolved chain-root id (from the response
+/// `baseTemplateId` or `id`) to key test sync.
+#[allow(clippy::too_many_arguments)]
+async fn apply_by_coordinate(
+    dir: &Path,
+    server_url: &str,
+    coordinate: &str,
+    graph: &WorkflowGraph,
+    text_files: &HashMap<String, HashMap<String, String>>,
+    assets: &HashMap<String, HashMap<String, Vec<u8>>>,
+    source_ref: Option<Value>,
+    meta: fs_ops::MekhanJson,
+) -> Result<String> {
+    if !assets.is_empty() {
+        let total: usize = assets.values().map(|f| f.len()).sum();
+        anyhow::bail!(
+            "this bundle contains {total} binary node asset file(s), which are not \
+             supported on the coordinate apply path (text node files only). Remove them, \
+             or use a baseTemplateId-keyed lock for binary-bearing workflows."
+        );
     }
 
-    Ok(())
+    match &source_ref {
+        Some(s) => println!(
+            "Applying coordinate {} from {}@{}{}",
+            coordinate,
+            s["remote"].as_str().unwrap_or("?"),
+            s["sha"].as_str().unwrap_or("?"),
+            if s["dirty"].as_bool().unwrap_or(false) {
+                " (dirty)"
+            } else {
+                ""
+            }
+        ),
+        None => println!(
+            "Applying coordinate {} (no git provenance — not a git work tree)",
+            coordinate
+        ),
+    }
+
+    // Default the chain name to the directory name (used only on create/adopt;
+    // a bump keeps the existing chain name).
+    let dir_name = dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty());
+
+    let url = format!("{}/api/v1/templates/apply", server_url);
+    let body = ApplyByCoordinateBody {
+        coordinate,
+        name: dir_name,
+        description: None,
+        graph,
+        files: text_files,
+        source_ref,
+    };
+    let client = reqwest::Client::new();
+    let resp = crate::http::auth(client.post(&url).json(&body))
+        .send()
+        .await
+        .context("failed to connect to server")?;
+
+    let status = resp.status();
+    let resp_body: Value = resp.json().await.unwrap_or_default();
+
+    let chain_root_id = match status.as_u16() {
+        200 => {
+            let version = resp_body["version"].as_i64().unwrap_or(0);
+            let new_version_id = resp_body["id"].as_str().unwrap_or("?");
+            // The coordinate is the lock's stable key; nothing to write back.
+            // Refresh `lastPull` only.
+            let mut refreshed = meta;
+            refreshed.last_pull = chrono::Utc::now().to_rfc3339();
+            fs_ops::write_meta(dir, &refreshed)
+                .context("failed to refresh mekhan.lock.json after apply")?;
+            println!(
+                "Applied coordinate {} → version {} ({})",
+                coordinate, version, new_version_id,
+            );
+            // Tests are keyed by the chain root: COALESCE(baseTemplateId, id).
+            resp_body["baseTemplateId"]
+                .as_str()
+                .or_else(|| resp_body["id"].as_str())
+                .unwrap_or_default()
+                .to_string()
+        }
+        409 => {
+            let msg = resp_body["error"].as_str().unwrap_or("conflict");
+            anyhow::bail!("Apply rejected: {}", msg);
+        }
+        403 => {
+            let msg = resp_body["error"].as_str().unwrap_or("forbidden");
+            anyhow::bail!("Apply failed: {} (no active workspace?)", msg);
+        }
+        400 => {
+            let msg = resp_body["error"].as_str().unwrap_or("compilation failed");
+            anyhow::bail!("Apply failed: {}", msg);
+        }
+        404 => {
+            let msg = resp_body["error"].as_str().unwrap_or("not found");
+            anyhow::bail!("Apply failed: {}", msg);
+        }
+        _ => {
+            let msg = resp_body["error"].as_str().unwrap_or("unknown error");
+            anyhow::bail!("Apply failed ({}): {}", status, msg);
+        }
+    };
+
+    Ok(chain_root_id)
 }
 
 /// Build the `source_ref` provenance object by shelling read-only `git` in the

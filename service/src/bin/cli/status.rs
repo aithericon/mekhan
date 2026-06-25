@@ -16,7 +16,7 @@ pub async fn run(_server: &str, directory: &str) -> Result<()> {
 
     // Use server from the lock file (ignore --server flag for push/status)
     let server_url = &meta.server_url;
-    let base_id = &meta.base_template_id;
+    let base_id = meta.require_base_template_id()?;
 
     // Resolve chain head — push/status target the latest row's Y.Doc, not
     // a stale historical version pinned in the lock.

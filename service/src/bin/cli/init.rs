@@ -52,7 +52,14 @@ pub async fn run(
         );
     }
 
-    fs_ops::export_to_dir(&dir, &graph, &files, template_id, server, format)?;
+    fs_ops::export_to_dir(
+        &dir,
+        &graph,
+        &files,
+        fs_ops::CreationKey::BaseTemplateId(template_id.to_string()),
+        server,
+        format,
+    )?;
     handle.disconnect().await?;
 
     println!(

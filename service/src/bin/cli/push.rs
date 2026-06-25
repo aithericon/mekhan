@@ -26,7 +26,7 @@ pub async fn run(_server: &str, directory: &str, dry_run: bool) -> Result<()> {
 
     // Use server from the lock file
     let server_url = &meta.server_url;
-    let base_id = &meta.base_template_id;
+    let base_id = meta.require_base_template_id()?;
 
     // Resolve chain head — push targets the latest row's Y.Doc. (If that row
     // is already published the eventual asset/test sync calls will fail

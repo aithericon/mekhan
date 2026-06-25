@@ -4263,6 +4263,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/templates/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * POST /api/v1/templates/apply
+         * @description Coordinate-keyed GitOps entry point: create-if-absent / upsert from a fully
+         *     declarative git artifact. Unlike `POST /api/v1/templates/{id}/apply`, no
+         *     pre-existing chain id is required — the upsert is keyed on a stable
+         *     `vendor/slug` `coordinate`, scoped per workspace. CI can therefore
+         *     create-or-version idempotently from the `mekhan.lock.json` alone.
+         *
+         *     Resolution order for `(workspace, coordinate)`:
+         *     1. An existing `origin = 'gitops'` chain with this coordinate → Bump.
+         *     2. Else adopt-by-name: exactly one `origin IS NULL` chain whose name equals
+         *        the coordinate slug → stamp `origin = 'gitops'` + coordinate and Bump.
+         *        (>1 match → 409 disambiguation.)
+         *     3. Else create a fresh born-published v1 chain (`origin = 'gitops'`,
+         *        `template_kind = 'workflow'`).
+         *
+         *     Born-published like the `{id}` path; `template_kind = 'workflow'` keeps the
+         *     chain out of the palette/catalogue. Binary node assets are unsupported on
+         *     this path (text node files only).
+         */
+        post: operations["apply_by_coordinate"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/templates/apply-air": {
         parameters: {
             query?: never;
@@ -5879,6 +5915,43 @@ export interface components {
             name: string;
             source_ref?: null | components["schemas"]["SourceRef"];
             trigger: components["schemas"]["PreAirTriggerSpec"];
+        };
+        /**
+         * @description Request body for `POST /api/v1/templates/apply` — the coordinate-keyed
+         *     GitOps path (create-if-absent / upsert).
+         *
+         *     Unlike `POST /api/v1/templates/{id}/apply` (which requires a pre-existing
+         *     chain id), this endpoint keys the upsert on a stable `vendor/slug`
+         *     `coordinate` carried in the git artifact, so CI can create-or-version
+         *     idempotently from the file alone. On a first apply for an
+         *     `(workspace, coordinate)` pair it seeds a fresh born-published v1 chain
+         *     (`origin = 'gitops'`, `template_kind = 'workflow'`); a re-apply bumps it.
+         *
+         *     Like the `{id}` path the `graph` REPLACES the chain head wholesale (no
+         *     CRDT merge). Binary node assets are NOT supported on this path in the
+         *     first cut — only text node files (the `files` map) travel in the body and
+         *     are uploaded server-side under the freshly-minted version key.
+         */
+        ApplyByCoordinateRequest: {
+            /**
+             * @description Stable `vendor/slug` coordinate, e.g. `online-clinic/document-pipeline-v1`.
+             *     Validated to exactly one slash, lowercase `[a-z0-9-]` segments.
+             */
+            coordinate: string;
+            description?: string | null;
+            files?: {
+                [key: string]: {
+                    [key: string]: string;
+                };
+            };
+            graph: components["schemas"]["WorkflowGraph"];
+            /**
+             * @description Display name for the chain. Defaults to the coordinate's slug segment
+             *     when absent (used only on the create/adopt branch; a bump keeps the
+             *     existing chain name).
+             */
+            name?: string | null;
+            source_ref?: null | components["schemas"]["SourceRef"];
         };
         /**
          * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
@@ -24688,6 +24761,66 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Server error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    apply_by_coordinate: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyByCoordinateRequest"];
+            };
+        };
+        responses: {
+            /** @description Applied: created v1, adopted+bumped, or bumped */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WorkflowTemplate"];
+                };
+            };
+            /** @description Invalid coordinate / graph / binary asset present */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description No active workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Ambiguous adopt-by-name (>1 candidate chain) */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
                 };
             };
             /** @description Server error */
