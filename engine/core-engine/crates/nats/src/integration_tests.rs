@@ -3506,101 +3506,15 @@ async fn test_per_workspace_metadata_kv_isolation() {
 }
 
 // =============================================================================
-// Net Snapshot KV Integration Tests (PART C: snapshot-on-hibernate)
+// Net Snapshot Integration Tests (PART C: snapshot-on-hibernate)
 // =============================================================================
-
-#[tokio::test]
-async fn test_net_snapshot_round_trip() {
-    use crate::net_snapshot::NetSnapshotStore;
-    use petri_application::net_snapshot::{NetSnapshot, SnapshotStore, SNAPSHOT_VERSION};
-    use petri_domain::Marking;
-
-    let url = shared_nats_url().await;
-    let ctx = NatsTestContext::with_url(url)
-        .await
-        .expect("Failed to create context");
-
-    // Unique per-test workspace so the per-ws bucket can't collide with other
-    // tests sharing the NATS server.
-    let ws = format!("snapws-{}", ctx.prefix);
-    let net_id = "snap-net";
-    let store = NetSnapshotStore::new(ctx.jetstream.clone());
-
-    // Absent → None (no snapshot yet).
-    assert!(
-        store.get(&ws, net_id).await.is_none(),
-        "no snapshot should exist initially"
-    );
-
-    let snap = NetSnapshot {
-        marking: Marking::new(),
-        dedup: vec![],
-        last_hash: Some("deadbeef".to_string()),
-        event_count: 7,
-        next_sequence: 7,
-        last_stream_seq: 42,
-        version: SNAPSHOT_VERSION,
-    };
-    store.put(&ws, net_id, &snap).await;
-
-    let got = store
-        .get(&ws, net_id)
-        .await
-        .expect("snapshot must round-trip");
-    assert_eq!(got.last_hash, Some("deadbeef".to_string()));
-    assert_eq!(got.event_count, 7);
-    assert_eq!(got.next_sequence, 7);
-    assert_eq!(got.last_stream_seq, 42);
-
-    // Delete reclaims it → None again.
-    store.delete(&ws, net_id).await;
-    assert!(
-        store.get(&ws, net_id).await.is_none(),
-        "snapshot must be gone after delete"
-    );
-
-    // Cleanup the per-ws bucket.
-    let bucket = crate::kv_bucket_for(crate::net_snapshot::SNAPSHOT_KV_BUCKET, &ws);
-    ctx.jetstream.delete_key_value(&bucket).await.ok();
-    ctx.cleanup().await.ok();
-}
-
-#[tokio::test]
-async fn test_net_snapshot_future_version_ignored() {
-    use crate::net_snapshot::NetSnapshotStore;
-    use petri_application::net_snapshot::{NetSnapshot, SnapshotStore, SNAPSHOT_VERSION};
-    use petri_domain::Marking;
-
-    let url = shared_nats_url().await;
-    let ctx = NatsTestContext::with_url(url)
-        .await
-        .expect("Failed to create context");
-
-    let ws = format!("snapvws-{}", ctx.prefix);
-    let net_id = "snap-net-v";
-    let store = NetSnapshotStore::new(ctx.jetstream.clone());
-
-    // A snapshot written by a NEWER engine (version > supported) must be
-    // ignored on read → wake falls back to full replay.
-    let snap = NetSnapshot {
-        marking: Marking::new(),
-        dedup: vec![],
-        last_hash: None,
-        event_count: 0,
-        next_sequence: 0,
-        last_stream_seq: 0,
-        version: SNAPSHOT_VERSION + 1,
-    };
-    store.put(&ws, net_id, &snap).await;
-    assert!(
-        store.get(&ws, net_id).await.is_none(),
-        "a newer-versioned snapshot must be ignored (→ full replay)"
-    );
-
-    let bucket = crate::kv_bucket_for(crate::net_snapshot::SNAPSHOT_KV_BUCKET, &ws);
-    ctx.jetstream.delete_key_value(&bucket).await.ok();
-    ctx.cleanup().await.ok();
-}
+//
+// The former NATS-KV `SnapshotStore` adapter tests (`test_net_snapshot_round_trip`
+// and `test_net_snapshot_future_version_ignored`) were removed when the snapshot
+// store moved to OpenDAL object storage (`petri_api::ObjectSnapshotStore`); the
+// equivalent hermetic round-trip / version-skew / cap coverage now lives in
+// `petri-api`'s `snapshot_store_object` tests. The wake-protocol integration
+// tests below still exercise the store-agnostic `SnapshotInputs` → wake path.
 
 /// MAJOR 2a regression: a snapshot wake with an EMPTY post-snapshot delta must
 /// still seed the NATS store's authoritative write state, so the first live

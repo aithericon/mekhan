@@ -15,8 +15,10 @@ pub mod nomad_allocator;
 pub mod router;
 pub mod scenario_bridge;
 pub mod slurm_allocator;
+pub mod snapshot_store_object;
 
 pub use artifact_store::ArtifactStoreState;
+pub use snapshot_store_object::ObjectSnapshotStore;
 #[cfg(feature = "catalogue")]
 pub use net_registry::CatalogueIntegrationConfig;
 pub use net_registry::HumanIntegrationConfig;
