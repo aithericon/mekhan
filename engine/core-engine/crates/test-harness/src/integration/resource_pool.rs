@@ -1843,6 +1843,173 @@ async fn presence_runner_pool_frees_lease_on_cancel_while_online() {
 }
 
 // ===========================================================================
+// DRIFT RECOVERY — the EXACT live incident the happy-path tests above miss, and
+// the contract the reconciler fix relies on.
+//
+// `presence_runner_pool_frees_lease_on_cancel_while_online` cancels a CLEAN held
+// lease and proves the finalizer drain returns it. That path was always green —
+// and the live incident never took it. By cancel time the pool was already
+// `pool=0, in_use=0`: the held unit had VANISHED (a pool-net hibernate/rehydrate
+// or OOM restart that didn't restore the in-memory token, or an engine-side reap
+// that emitted no compensating release). So `leases_reclaimed: 0`, the drain was
+// a no-op with nothing to release, and recovery depended on RE-ESTABLISHING
+// capacity from the still-online runner — not on releasing an in_use token.
+//
+// The engine pool net is deliberately dumb token-accounting: it has NO notion of
+// "this runner is still online", so it cannot and must not self-heal lost
+// capacity. Recovery is mekhan's job — its presence heartbeat is a level-triggered
+// reconciler (`presence/runners.rs::handle_presence` → `slots_to_reconcile`): it
+// observes the runner has fewer than C units in the engine and re-mints the
+// deficit via a fresh `presence_acquire`. This test pins the ENGINE half of that
+// contract: a fresh acquire after a loss restores the pool to EXACTLY one free
+// unit, and the cancel's stranded release never spuriously inflates it. The mekhan
+// half (the heartbeat computing the right deficit) is pinned by
+// `presence::runners::tests::reconcile_tops_up_lost_units_and_stays_lazy_on_shrink`.
+// ===========================================================================
+
+/// Capacity LOST (not held), runner ONLINE: cancel alone cannot restore it (the
+/// engine has no presence knowledge), and the reconciler's re-mint converges the
+/// pool back to one free unit. Distinct from the happy-path presence test, which
+/// cancels a clean held lease.
+#[tokio::test]
+async fn reconcile_restores_pool_after_capacity_lost_then_cancelled_online() {
+    let ctx = PoolTestContext::setup(1).await;
+
+    let (pool_net, pp) = build_presence_pool_net();
+    ctx.pool.initialize(pool_net).await.unwrap();
+
+    // Initialize the holder up front so `settle` has a topology to drive.
+    let (req_net, rp) = build_presence_holder_net(&ctx.pool_id);
+    ctx.requesters[0].initialize(req_net).await.unwrap();
+
+    // The online runner's heartbeat admits one presence unit (harness stand-in
+    // for a mekhan `presence_acquire` injection).
+    ctx.pool
+        .create_token(
+            pp.presence_acquire.clone(),
+            TokenColor::Data(serde_json::json!({
+                "unit_id": "runner-a#0",
+                "runner_id": "runner-a"
+            })),
+        )
+        .await
+        .unwrap();
+    settle(&ctx, 2).await;
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        1,
+        "the online runner admitted one free unit"
+    );
+
+    // The holder claims and leases the unit (in_use=1, pool=0).
+    ctx.requesters[0]
+        .create_token(
+            rp.start.clone(),
+            TokenColor::Data(serde_json::json!({ "grant_id": "job-0" })),
+        )
+        .await
+        .unwrap();
+    settle(&ctx, 4).await;
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.in_use),
+        1,
+        "the presence unit is held while running"
+    );
+    assert_eq!(ctx.pool.get_marking().await.token_count(&pp.pool), 0);
+
+    // --- CAPACITY IS LOST ---------------------------------------------------
+    // The held unit VANISHES with no release: model the pool-net lifecycle drop
+    // (hibernate/rehydrate or OOM restart that didn't restore the in-memory
+    // token, or an engine-side held-unit reap that emitted no compensating
+    // release). The pool now matches the live incident's degraded shape.
+    let held_id = ctx
+        .pool
+        .get_marking()
+        .await
+        .tokens_at(&pp.in_use)
+        .iter()
+        .map(|t| t.id.clone())
+        .next()
+        .expect("the held unit token");
+    ctx.pool
+        .remove_token(
+            pp.in_use.clone(),
+            Some(held_id),
+            None,
+            Some("lifecycle drop".to_string()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.in_use),
+        0,
+        "held unit lost"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        0,
+        "DEGRADED: pool=0, in_use=0 — the exact live incident state"
+    );
+
+    // --- CANCEL, runner still ONLINE ---------------------------------------
+    // The UI cancel runs the terminate sequence: drain finalizers, then journal
+    // NetCancelled. The drained release bridges to the pool's `release_inbox`,
+    // but there is no in_use token to correlate with, so `t_release` cannot fire
+    // — the release strands. No presence_expired is injected (runner is online),
+    // so `t_reap_held` cannot fire either.
+    let fired = terminate_holder(&ctx.requesters[0], &ctx.requester_ids[0]).await;
+    assert!(
+        !fired.is_empty(),
+        "cancel still drains the release finalizer — but it has nothing to free"
+    );
+    settle(&ctx, 6).await;
+
+    // Cancel ALONE cannot restore lost capacity: the engine pool net has no notion
+    // that the runner is still online, and the drained release strands in
+    // `release_inbox` with no in_use token to correlate against. This is correct
+    // engine behaviour — and exactly why a reconciler is required.
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        0,
+        "cancel alone does not restore lost capacity — recovery needs the reconciler"
+    );
+
+    // --- RECONCILER RECOVERY -----------------------------------------------
+    // mekhan's presence reconciler observes (next heartbeat, ~10s) that the online
+    // runner has 0 units in the engine — below its target C — and re-mints the
+    // deficit. Modelled here by a fresh `presence_acquire` for a NEW episode (the
+    // `@2` epoch), the harness stand-in for `slots_to_reconcile`'s injection.
+    ctx.pool
+        .create_token(
+            pp.presence_acquire.clone(),
+            TokenColor::Data(serde_json::json!({
+                "unit_id": "runner-a#0@2",
+                "runner_id": "runner-a"
+            })),
+        )
+        .await
+        .unwrap();
+    settle(&ctx, 6).await;
+
+    // CONVERGENCE INVARIANT: one online runner ⇒ exactly one free unit available
+    // for the next claim. The stranded release (grant_id `job-0`) must NOT
+    // spuriously fire — `t_release`'s grant_id correlation keeps it inert, so the
+    // pool lands at 1, never 2.
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.pool),
+        1,
+        "the reconciler's re-mint restores exactly one free unit for the online runner"
+    );
+    assert_eq!(
+        ctx.pool.get_marking().await.token_count(&pp.in_use),
+        0,
+        "no held unit — the stranded release never spuriously fired"
+    );
+
+    ctx.teardown().await;
+}
+
+// ===========================================================================
 // R3 — tokens backend: the mekhan `build_token_pool_net` contract end to end.
 //
 // This proves the chain the R3 milestone delivers: mekhan's parameterized
