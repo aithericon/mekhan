@@ -2304,7 +2304,7 @@ mod tests {
     fn document_pipeline_v1_join_node_round_trips() {
         use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
 
-        let graph_path = repo_root().join("demos/document-pipeline-v1/graph.json");
+        let graph_path = repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1/graph.json");
         let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
         let graph: WorkflowGraph =
             serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
@@ -2342,7 +2342,7 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-v1"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1"))
             .expect("document-pipeline-v1 must load");
 
         let files = node_files_inline(&demo.files);
@@ -2415,7 +2415,7 @@ mod tests {
         };
         use crate::models::template::{JoinMode, WorkflowNodeData};
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"))
             .expect("document-pipeline-branching-v1 must load");
         assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
         assert_eq!(
@@ -2541,7 +2541,7 @@ mod tests {
             return;
         };
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"))
             .expect("document-pipeline-branching-v1 must load");
 
         let files = node_files_inline(&demo.files);
@@ -2661,7 +2661,7 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/classify-and-group-v1"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/classify-and-group-v1"))
             .expect("classify-and-group-v1 must load");
         assert_eq!(demo.metadata.name, "Classify & Group v1");
         assert_eq!(
@@ -2723,7 +2723,7 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/di-extraction-canary"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/di-extraction-canary"))
             .expect("di-extraction-canary must load");
         assert_eq!(demo.metadata.name, "DI Extraction Canary");
         assert_eq!(
@@ -3036,7 +3036,7 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/output-safety-gate"))
+        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/output-safety-gate"))
             .expect("output-safety-gate must load");
         assert_eq!(demo.metadata.name, "Output Safety Gate");
         assert_eq!(
