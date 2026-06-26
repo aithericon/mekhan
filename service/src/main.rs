@@ -535,6 +535,18 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!(error = ?e, "platform model-serving-group seed failed");
     }
 
+    // Internal LLM model pool: the two platform-tier resources every workflow
+    // binds to — the inference router (`internal_pool_router`, `internal_llm`)
+    // and its model registry (`internal_pool_registry`, `model_registry`). The
+    // pool is a global inference data plane, so these control-plane resources
+    // live at the platform tier (owned by PLATFORM_SCOPE_ID) and resolve for
+    // workflows compiled in ANY workspace (the resolver widens to
+    // `workspace_id = $caller OR scope_kind = 'platform'`). Seed before the
+    // listener accepts requests. Idempotent + best-effort.
+    if let Err(e) = mekhan_service::internal_pool::ensure_platform_internal_pool(&state).await {
+        tracing::warn!(error = ?e, "platform internal-pool resource seed failed");
+    }
+
     // Config-seeded platform bootstrap registration tokens (MEKHAN__BOOTSTRAP__*):
     // upsert reusable, platform-scoped worker/runner registration tokens so the
     // executor + model-pool runners self-enroll declaratively (no interactive

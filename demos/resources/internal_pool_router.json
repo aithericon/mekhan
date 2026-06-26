@@ -1,8 +1,0 @@
-{
-  "path": "internal_pool_router",
-  "resource_type": "internal_llm",
-  "display_name": "Internal Model Pool Router (dev)",
-  "config": {
-    "base_url": "${MEKHAN_ROUTER_URL:-http://127.0.0.1:13200}"
-  }
-}

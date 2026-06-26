@@ -1255,8 +1255,10 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
         // Shared internal-pool models are owned by the platform tier — their
         // `model_states` row lands under PLATFORM_SCOPE_ID so every tenant's
         // picker surfaces it. A genuine tenant-demo model stays at the demo
-        // workspace. The backing registry resource itself is still seeded into
-        // the demo workspace, so the registry lookup below stays workspace-local.
+        // workspace. The backing registry resource (`internal_pool_registry`) is
+        // now ALSO platform-tier (seeded by `internal_pool::ensure_platform_internal_pool`),
+        // so the registry lookup below binds the same `target_workspace` —
+        // PLATFORM_SCOPE_ID for the internal pool, the demo workspace otherwise.
         let is_internal_pool = fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
         let target_workspace = if is_internal_pool {
             crate::models::asset::PLATFORM_SCOPE_ID
@@ -1264,14 +1266,16 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
             DEMO_WORKSPACE_ID
         };
         // Resolve the optional backing registry resource → its row id (the
-        // projection's `registry_resource_id`). Absent / unresolved → NULL.
+        // projection's `registry_resource_id`). Absent / unresolved → NULL. The
+        // registry resource shares the model_state's scope (platform for the
+        // internal pool), so resolve it under `target_workspace`.
         let registry_resource_id: Option<uuid::Uuid> = match &fx.registry_resource {
             Some(alias) => {
                 let row: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
                     "SELECT id FROM resources \
                      WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
                 )
-                .bind(DEMO_WORKSPACE_ID)
+                .bind(target_workspace)
                 .bind(alias)
                 .fetch_optional(&state.db)
                 .await;
