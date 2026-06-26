@@ -1259,7 +1259,8 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
         // now ALSO platform-tier (seeded by `internal_pool::ensure_platform_internal_pool`),
         // so the registry lookup below binds the same `target_workspace` —
         // PLATFORM_SCOPE_ID for the internal pool, the demo workspace otherwise.
-        let is_internal_pool = fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
+        let is_internal_pool =
+            fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
         let target_workspace = if is_internal_pool {
             crate::models::asset::PLATFORM_SCOPE_ID
         } else {
@@ -2304,7 +2305,8 @@ mod tests {
     fn document_pipeline_v1_join_node_round_trips() {
         use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
 
-        let graph_path = repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1/graph.json");
+        let graph_path = repo_root()
+            .join("service/tests/fixtures/clinic-workflows/document-pipeline-v1/graph.json");
         let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
         let graph: WorkflowGraph =
             serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
@@ -2342,8 +2344,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1"))
-            .expect("document-pipeline-v1 must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1"),
+        )
+        .expect("document-pipeline-v1 must load");
 
         let files = node_files_inline(&demo.files);
         let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
@@ -2415,8 +2419,11 @@ mod tests {
         };
         use crate::models::template::{JoinMode, WorkflowNodeData};
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"))
-            .expect("document-pipeline-branching-v1 must load");
+        let demo = load_demo(
+            &repo_root()
+                .join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"),
+        )
+        .expect("document-pipeline-branching-v1 must load");
         assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
         assert_eq!(
             demo.metadata.template_id,
@@ -2541,8 +2548,11 @@ mod tests {
             return;
         };
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"))
-            .expect("document-pipeline-branching-v1 must load");
+        let demo = load_demo(
+            &repo_root()
+                .join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"),
+        )
+        .expect("document-pipeline-branching-v1 must load");
 
         let files = node_files_inline(&demo.files);
         let CompileArtifacts {
@@ -2661,8 +2671,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/classify-and-group-v1"))
-            .expect("classify-and-group-v1 must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/classify-and-group-v1"),
+        )
+        .expect("classify-and-group-v1 must load");
         assert_eq!(demo.metadata.name, "Classify & Group v1");
         assert_eq!(
             demo.metadata.template_id,
@@ -2723,8 +2735,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/di-extraction-canary"))
-            .expect("di-extraction-canary must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/di-extraction-canary"),
+        )
+        .expect("di-extraction-canary must load");
         assert_eq!(demo.metadata.name, "DI Extraction Canary");
         assert_eq!(
             demo.metadata.template_id,
@@ -3036,8 +3050,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("service/tests/fixtures/clinic-workflows/output-safety-gate"))
-            .expect("output-safety-gate must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/output-safety-gate"),
+        )
+        .expect("output-safety-gate must load");
         assert_eq!(demo.metadata.name, "Output Safety Gate");
         assert_eq!(
             demo.metadata.template_id,
