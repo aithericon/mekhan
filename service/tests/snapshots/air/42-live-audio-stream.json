@@ -1385,7 +1385,7 @@
       "id": "start_fmeta_0/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
@@ -1441,35 +1441,35 @@
       "id": "start_fmeta_0/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_7",
       "id": "start_fmeta_0/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_7",
       "id": "start_fmeta_0/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_7",
       "id": "start_fmeta_0/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_7",
       "id": "start_fmeta_0/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_3",
@@ -1588,7 +1588,7 @@
       "id": "streamer/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_13",
@@ -1658,7 +1658,7 @@
       "id": "streamer/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_9",
@@ -1672,35 +1672,35 @@
       "id": "streamer/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_14",
       "id": "streamer/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_14",
       "id": "streamer/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_14",
       "id": "streamer/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_14",
       "id": "streamer/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_11",

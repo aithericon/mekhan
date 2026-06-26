@@ -402,12 +402,22 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
     // they can be passed into the submit contract's event_routes.
 
     ctx.scope("Events", |ctx| {
-        let progress_log = ctx.state::<DynamicToken>("progress_log", "Progress Log");
-        let artifact_log = ctx.state::<DynamicToken>("artifact_log", "Artifact Log");
-        let metric_log = ctx.state::<DynamicToken>("metric_log", "Metric Log");
-        let phase_log = ctx.state::<DynamicToken>("phase_log", "Phase Log");
-        let output_log = ctx.state::<DynamicToken>("output_log", "Output Log");
-        let message_log = ctx.state::<DynamicToken>("message_log", "Message Log");
+        // Telemetry log places are record-and-discard SINKS, not state places.
+        // Each `log_*` transition consumes a streamed event signal, runs its
+        // effect (which journals an `EffectCompleted` that Mekhan's causality
+        // projector reads from `effect_result`), and routes a token here. Those
+        // tokens have NO consumer — as plain `state` places they accumulated
+        // one token per telemetry event forever, bloating the marking until the
+        // hibernation snapshot exceeded NATS `max_payload` and every wake
+        // full-replayed the event log (engine OOM). As `sink` places the token
+        // is dropped from the marking after firing, so the marking stays O(1)
+        // regardless of how many metric/log/output events a job emits.
+        let progress_log = ctx.sink::<DynamicToken>("progress_log", "Progress Log");
+        let artifact_log = ctx.sink::<DynamicToken>("artifact_log", "Artifact Log");
+        let metric_log = ctx.sink::<DynamicToken>("metric_log", "Metric Log");
+        let phase_log = ctx.sink::<DynamicToken>("phase_log", "Phase Log");
+        let output_log = ctx.sink::<DynamicToken>("output_log", "Output Log");
+        let message_log = ctx.sink::<DynamicToken>("message_log", "Message Log");
 
         if bridges.process {
             // Route progress events through the typed process_progress effect.

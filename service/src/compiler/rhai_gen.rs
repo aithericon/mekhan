@@ -373,7 +373,10 @@ pub(crate) fn build_retry_topology(
     // step crashed and can't log this itself. `failure_logged` is a sink (no
     // consumer), matching the lifecycle's other log places.
     let failure_log = ctx.state::<DynamicToken>("failure_log", "Failure Log Input");
-    let failure_logged = ctx.state::<DynamicToken>("failure_logged", "Failure Logged");
+    // `failure_logged` has no consumer — the `log_failure` effect journals the
+    // entry for causality. A `sink` drops the token from the marking instead of
+    // parking it (mirrors the lifecycle's telemetry log sinks).
+    let failure_logged = ctx.sink::<DynamicToken>("failure_logged", "Failure Logged");
 
     // Normalise both lifecycle failure sources into one place. Timeouts carry
     // no `detail`; we only need the resubmit-relevant fields.

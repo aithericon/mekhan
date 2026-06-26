@@ -195,6 +195,23 @@ pub fn validate_topology(net: &PetriNet) -> AnalysisReport {
                     ));
                 }
             }
+            PlaceKind::Sink => {
+                // Record-and-discard sink — fed by a producing transition,
+                // token dropped from the marking. No outgoing arcs by design,
+                // so no DEAD_END warning. Reachability still matters: a sink
+                // with no producer is dead weight.
+                if in_d == 0 {
+                    issues.push(warning(
+                        &place_id_str,
+                        "place",
+                        "UNREACHABLE",
+                        format!(
+                            "'{}': Sink place has no incoming arcs — nothing is ever discarded here",
+                            place.name
+                        ),
+                    ));
+                }
+            }
         }
     }
 

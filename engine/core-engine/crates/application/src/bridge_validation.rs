@@ -290,6 +290,7 @@ fn kind_label(kind: &PlaceKind) -> &'static str {
         PlaceKind::BridgeOut { .. } => "bridge_out",
         PlaceKind::BridgeReply { .. } => "bridge_reply",
         PlaceKind::Terminal => "terminal",
+        PlaceKind::Sink => "sink",
     }
 }
 

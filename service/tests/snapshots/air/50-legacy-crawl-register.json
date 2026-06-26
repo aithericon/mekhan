@@ -1503,7 +1503,7 @@
       "id": "crawl/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_12",
@@ -1573,7 +1573,7 @@
       "id": "crawl/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_8",
@@ -1587,35 +1587,35 @@
       "id": "crawl/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_13",
       "id": "crawl/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_13",
       "id": "crawl/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_13",
       "id": "crawl/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_13",
       "id": "crawl/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_10",
@@ -1734,7 +1734,7 @@
       "id": "fold/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_19",
@@ -1804,7 +1804,7 @@
       "id": "fold/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_15",
@@ -1818,35 +1818,35 @@
       "id": "fold/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_20",
       "id": "fold/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_20",
       "id": "fold/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_20",
       "id": "fold/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_20",
       "id": "fold/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_17",
@@ -2115,7 +2115,7 @@
       "id": "register/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_26",
@@ -2185,7 +2185,7 @@
       "id": "register/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_22",
@@ -2199,35 +2199,35 @@
       "id": "register/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_27",
       "id": "register/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_27",
       "id": "register/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_27",
       "id": "register/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_27",
       "id": "register/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_24",
@@ -2346,7 +2346,7 @@
       "id": "seed_nas/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_5",
@@ -2416,7 +2416,7 @@
       "id": "seed_nas/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_1",
@@ -2430,35 +2430,35 @@
       "id": "seed_nas/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "seed_nas/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "seed_nas/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "seed_nas/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "seed_nas/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_3",

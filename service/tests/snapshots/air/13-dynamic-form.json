@@ -1948,7 +1948,7 @@
       "id": "design/artifact_log",
       "name": "Artifact Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_5",
@@ -2018,7 +2018,7 @@
       "id": "design/failure_logged",
       "name": "Failure Logged",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_1",
@@ -2032,35 +2032,35 @@
       "id": "design/message_log",
       "name": "Message Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "design/metric_log",
       "name": "Metric Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "design/output_log",
       "name": "Output Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "design/phase_log",
       "name": "Phase Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_6",
       "id": "design/progress_log",
       "name": "Progress Log",
       "token_schema": "#/definitions/DynamicToken",
-      "type": "state"
+      "type": "sink"
     },
     {
       "group_id": "group_3",
