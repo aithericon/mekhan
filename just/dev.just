@@ -1754,6 +1754,12 @@ up-engine scheduler="off":
     fi
 
     echo "▶ starting engine on :{{engine_port}}…"
+    # PETRI_SNAPSHOT_STORE_* points the engine's net-snapshot adapter at the
+    # local dev rustfs (S3). Setting _ENDPOINT is the on/off gate — with it set,
+    # hibernated nets snapshot to object storage so they survive a NATS KV drop
+    # (`just dev reset` wipes the JetStream volume). Reuses the dev artifact
+    # bucket (`mekhan-artifacts`) under a `snapshots/` prefix; rustfs is a fixed
+    # local service (:19005, not slotted), creds rustfsadmin/rustfsadmin.
     # VAULT_ADDR + VAULT_TOKEN flip the engine's `executor-vault-secrets`
     # path on: at job-submit time it scans the spec for secret-template
     # refs, resolves them via VaultSecretStore, and wraps them into a
@@ -1770,6 +1776,12 @@ up-engine scheduler="off":
         VAULT_ADDR="{{vault_addr}}" \
         VAULT_TOKEN="{{vault_token}}" \
         PORT="{{engine_port}}" \
+        PETRI_SNAPSHOT_STORE_ENDPOINT="{{s3_endpoint}}" \
+        PETRI_SNAPSHOT_STORE_BUCKET="mekhan-artifacts" \
+        PETRI_SNAPSHOT_STORE_REGION="us-east-1" \
+        PETRI_SNAPSHOT_STORE_PREFIX="snapshots/" \
+        PETRI_SNAPSHOT_STORE_ACCESS_KEY="rustfsadmin" \
+        PETRI_SNAPSHOT_STORE_SECRET_KEY="rustfsadmin" \
         "${CARGO_TARGET_DIR:-$PWD/engine/target}/debug/core-engine")
     echo "  ✓ engine (pid $pid)  {{engine_url}}  log: {{log_dir}}/engine.log"
 

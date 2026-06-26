@@ -304,6 +304,24 @@ EOH
 EOH
       }
 
+      # Net-snapshot object store (PETRI_SNAPSHOT_STORE_*). The engine's snapshot
+      # adapter persists hibernated nets to S3 so they survive a NATS KV loss.
+      # Secret keys rendered from Vault at alloc start (env = true) — same
+      # `${storage_secret_path}` + field names the service/executor read for S3,
+      # so no new Vault secret or policy is needed (the group-level `vault {}`
+      # stanza already grants this task read on that path).
+      template {
+        destination = "secrets/snapshot-storage.env"
+        change_mode = "restart"
+        env         = true
+        data        = <<-EOH
+{{- with secret "${storage_secret_path}" }}
+PETRI_SNAPSHOT_STORE_ACCESS_KEY={{ .Data.data.s3_access_key }}
+PETRI_SNAPSHOT_STORE_SECRET_KEY={{ .Data.data.s3_secret_key }}
+{{- end }}
+EOH
+      }
+
       env {
 
         PORT                = "${engine_service_port}"
@@ -313,6 +331,14 @@ EOH
         EXECUTOR_NATS_CREDS = "$${NOMAD_SECRETS_DIR}/nats.creds"
         EXECUTOR_ENABLED    = "true"
         EXECUTOR_NAMESPACE  = "executor"
+        # Net-snapshot object store. _ENDPOINT is the on/off gate; non-secret
+        # config here, S3 keys from the snapshot-storage.env template above.
+        # Same endpoint/bucket the service S3 plane uses (Hetzner Object Storage,
+        # region fsn1), namespaced under a `snapshots/` prefix.
+        PETRI_SNAPSHOT_STORE_ENDPOINT = "${s3_endpoint}"
+        PETRI_SNAPSHOT_STORE_BUCKET   = "${s3_bucket}"
+        PETRI_SNAPSHOT_STORE_REGION   = "fsn1"
+        PETRI_SNAPSHOT_STORE_PREFIX   = "snapshots/"
         # Vault — engine resolves `{{secret:...}}` refs against VaultSecretStore
         # and wraps resolved values into a single-use token before publishing
         # on NATS. Needs VAULT_TOKEN (Nomad-injected via the workload-identity
