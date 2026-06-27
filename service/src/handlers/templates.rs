@@ -1825,6 +1825,11 @@ async fn apply_compile_and_persist(
     files: &mut HashMap<String, HashMap<String, String>>,
     source_ref_json: Option<&serde_json::Value>,
     mode: PersistMode<'_>,
+    // Coordinate apply only: the `<vendor>` segment of the `vendor/slug`
+    // coordinate. When `Some`, the chain is homed into a workspace-root folder
+    // named after the vendor inside the same transaction (atomic with the
+    // template upsert). `None` for the UUID `{id}` apply path, which never homes.
+    home_vendor: Option<&str>,
 ) -> Result<WorkflowTemplate, ApiError> {
     let publisher = PublishService::new(state);
 
@@ -1964,9 +1969,102 @@ async fn apply_compile_and_persist(
         }
     };
 
+    // Coordinate apply only: home the chain into a workspace-root folder named
+    // after the coordinate vendor, in the SAME transaction so apply stays
+    // atomic. Idempotent — re-apply heals the same folder + home rather than
+    // duplicating. The UUID `{id}` path passes `None` and is unaffected.
+    if let Some(vendor) = home_vendor {
+        home_in_vendor_folder(
+            &mut *tx,
+            workspace_id,
+            vendor,
+            applied.chain_root_id(),
+            principal_id,
+        )
+        .await?;
+    }
+
     tx.commit().await?;
 
     Ok(applied)
+}
+
+/// Title-case a kebab/snake vendor slug into a folder display name
+/// (`"online-clinic"` → `"Online Clinic"`).
+fn humanize_vendor(slug: &str) -> String {
+    slug.split(['-', '_'])
+        .filter(|s| !s.is_empty())
+        .map(|w| {
+            let mut chars = w.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().chain(chars).collect::<String>(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Create-if-absent a workspace-root folder for a coordinate `vendor` and home
+/// the chain (`base_template_id`) into it. Both upserts run on the supplied
+/// connection so the caller's apply transaction stays atomic.
+///
+/// Idempotent: the folder is keyed on the root-slug partial unique index
+/// (`(workspace_id, slug) WHERE parent_id IS NULL`) so a re-apply converges on
+/// the same row without duplicating; the home is keyed on
+/// `template_folders.base_template_id` (`ON CONFLICT DO UPDATE`). The folder
+/// sits at workspace root (`parent_id NULL`, `path = '/<vendor>'`), NOT under
+/// `/demos`. `actor_id` is reused for both `created_by`/`updated_by` and
+/// `moved_by`.
+async fn home_in_vendor_folder(
+    conn: &mut sqlx::PgConnection,
+    workspace_id: Uuid,
+    vendor: &str,
+    base_template_id: Uuid,
+    actor_id: Uuid,
+) -> Result<(), ApiError> {
+    let display_name = humanize_vendor(vendor);
+    let path = format!("/{vendor}");
+
+    // Folder: create-if-absent at workspace root. `DO UPDATE SET path` is a
+    // no-op restamp (path is derived from the slug) that still yields a
+    // `RETURNING id` on the conflict path, leaving any user-set display name /
+    // description untouched on re-apply.
+    let (folder_id,): (Uuid,) = sqlx::query_as(
+        "INSERT INTO folders \
+             (workspace_id, parent_id, slug, display_name, description, path, created_by, updated_by) \
+          VALUES ($1, NULL, $2, $3, '', $4, $5, $5) \
+         ON CONFLICT (workspace_id, slug) WHERE parent_id IS NULL \
+              DO UPDATE SET path = EXCLUDED.path \
+         RETURNING id",
+    )
+    .bind(workspace_id)
+    .bind(vendor)
+    .bind(&display_name)
+    .bind(&path)
+    .bind(actor_id)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| ApiError::internal(format!("ensure vendor folder: {e}")))?;
+
+    sqlx::query(
+        "INSERT INTO template_folders (base_template_id, folder_id, workspace_id, moved_by) \
+              VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (base_template_id) \
+              DO UPDATE SET folder_id = EXCLUDED.folder_id, \
+                            workspace_id = EXCLUDED.workspace_id, \
+                            moved_by = EXCLUDED.moved_by, \
+                            moved_at = NOW()",
+    )
+    .bind(base_template_id)
+    .bind(folder_id)
+    .bind(workspace_id)
+    .bind(actor_id)
+    .execute(&mut *conn)
+    .await
+    .map_err(|e| ApiError::internal(format!("home template in vendor folder: {e}")))?;
+
+    Ok(())
 }
 
 /// Machine-readable code stamped on the 409 raised when the gitops-coordinate
@@ -2055,6 +2153,8 @@ pub async fn apply_template(
         &mut files_map,
         source_ref_json.as_ref(),
         persist_mode,
+        // UUID `{id}` apply never homes into a coordinate-vendor folder.
+        None,
     )
     .await?;
 
@@ -2210,6 +2310,12 @@ pub async fn apply_by_coordinate(
     reject_binary_files_on_coordinate_path(&req.files)?;
 
     let principal_id = user.subject_as_uuid();
+    // Vendor segment of `vendor/slug` — names the workspace-root folder the
+    // chain is homed into. A bare coordinate (no `/`) has no vendor → no home.
+    let vendor = req
+        .coordinate
+        .split_once('/')
+        .map(|(v, _)| v.to_string());
     // Slug segment of `vendor/slug` — the create/adopt default name.
     let slug = req
         .coordinate
@@ -2267,6 +2373,7 @@ pub async fn apply_by_coordinate(
                 &mut files_map,
                 source_ref_json.as_ref(),
                 PersistMode::Bump { src: &latest },
+                vendor.as_deref(),
             )
             .await?;
             finish_apply_post_commit(
@@ -2330,6 +2437,7 @@ pub async fn apply_by_coordinate(
                     &mut files_map,
                     source_ref_json.as_ref(),
                     PersistMode::Bump { src: &adopted },
+                    vendor.as_deref(),
                 )
                 .await?;
                 finish_apply_post_commit(
@@ -2372,6 +2480,7 @@ pub async fn apply_by_coordinate(
                 coordinate: &req.coordinate,
                 visibility,
             },
+            vendor.as_deref(),
         )
         .await;
 
