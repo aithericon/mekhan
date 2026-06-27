@@ -33,10 +33,21 @@ use crate::subjects::Subjects;
 /// confirm cache application within the timeout. The event IS durable; the
 /// caller should still wake the eval loop and may NACK for redelivery
 /// (idempotent publish in `event_store::append` makes redelivery safe).
+///
+/// `NotReady` signals the target net was resolved but its topology is not yet
+/// loaded — typically because `resolve_net` triggered an ASYNC wake from
+/// hibernation and the inject raced it. Nothing was persisted, but the
+/// condition is transient: a redelivery after the wake completes will succeed.
+/// Crucially this must NOT be folded into `Other` (→ dead-letter): a bridge
+/// token dropped here silently strands cross-net state (e.g. a runner-pool
+/// release/claim landing on a hibernated `pool-*` net — the lease is never
+/// freed and the next claim starves forever).
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeInjectError {
     #[error("Consumer apply timeout (event persisted, cache lagging)")]
     Timeout,
+    #[error("Target net topology not loaded yet (wake in progress)")]
+    NotReady,
     #[error("{0}")]
     Other(String),
 }
@@ -70,6 +81,40 @@ fn classify_resolve_error(e: BridgeResolveError) -> ProcessError {
     }
 }
 
+/// Whether a bridge-inject failure should be retried (NACK + redeliver) rather
+/// than dead-lettered. `Timeout` (event persisted, consumer lagging) and
+/// `NotReady` (target net topology not loaded yet — an async wake raced the
+/// inject) are both transient: a redelivery resolves them. `Other` is a genuine
+/// inject failure that won't fix itself on retry.
+fn inject_error_is_transient(e: &BridgeInjectError) -> bool {
+    matches!(e, BridgeInjectError::Timeout | BridgeInjectError::NotReady)
+}
+
+/// Map a bridge-inject failure to the message-loop retry policy. Transient
+/// variants ([`inject_error_is_transient`]) → [`ProcessError::Transient`] (NACK
+/// + redeliver); `Other` → [`ProcessError::Business`] (dead-letter).
+///
+/// NOTE: `NotReady` MUST stay on the Transient side. Folding it into `Other`
+/// (the historical bug) dead-letters a bridge token whenever its target net is
+/// mid-wake — e.g. a runner-pool `release`/`claim` published to a hibernated
+/// `pool-*` net — silently stranding the lease and starving every later claim.
+fn classify_inject_error(
+    e: BridgeInjectError,
+    net_id: &str,
+    place_name: &str,
+    signal_key: &str,
+) -> ProcessError {
+    match e {
+        BridgeInjectError::Timeout | BridgeInjectError::NotReady => {
+            ProcessError::Transient(format!(
+                "Bridge inject not ready ({e}) for net={net_id} place={place_name} \
+                 signal_key={signal_key}; notified eval + nacking for redelivery"
+            ))
+        }
+        BridgeInjectError::Other(m) => ProcessError::Business(m),
+    }
+}
+
 /// Trait for resolving a net instance by ID for bridge token injection.
 #[async_trait::async_trait]
 pub trait BridgeResolver: Send + Sync {
@@ -77,8 +122,7 @@ pub trait BridgeResolver: Send + Sync {
     /// If the net is hibernated, wake it first. Rejects completed/cancelled nets
     /// with [`BridgeResolveError::Terminal`] (so the caller dead-letters rather
     /// than retries) and not-yet-present nets with [`BridgeResolveError::NotReady`].
-    async fn resolve_net(&self, net_id: &str)
-        -> Result<Arc<dyn BridgeTarget>, BridgeResolveError>;
+    async fn resolve_net(&self, net_id: &str) -> Result<Arc<dyn BridgeTarget>, BridgeResolveError>;
 }
 
 /// Trait for injecting bridge tokens into a resolved net instance.
@@ -166,7 +210,11 @@ impl GlobalBridgeListener {
         // single cross-workspace consumer with one durable per workspace using
         // `Subjects::bridge_workspace_filter(ws)` (`petri.{ws}.*.bridge.>`)
         // so each tenant's bridge stream is independently consumable.
-        let filter = format!("{}.*.*.{}.>", Subjects::PETRI_ROOT, Subjects::BRIDGE_CATEGORY);
+        let filter = format!(
+            "{}.*.*.{}.>",
+            Subjects::PETRI_ROOT,
+            Subjects::BRIDGE_CATEGORY
+        );
 
         let consumer_config = ConsumerConfig {
             durable_name: Some(self.consumer_name.clone()),
@@ -258,24 +306,23 @@ impl MessageHandler for GlobalBridgeHandler<'_> {
             .await
         {
             Ok(()) => {}
-            Err(BridgeInjectError::Timeout) => {
-                // Event IS already on JetStream — only the local consumer
-                // hasn't caught up. Wake the eval loop so the (eventually
-                // applied) token gets processed, then NACK for redelivery.
-                // Idempotent publish in `event_store::append` ensures the
-                // retry won't create a duplicate TokenCreated.
-                target.notify_eval();
-                if let Some(ref activity) = self.activity {
-                    let _ = activity.touch(net_id).await;
+            Err(e) => {
+                // Timeout / NotReady are transient wake-or-lag races that a
+                // redelivery resolves; wake the eval loop so the (eventually
+                // applied, or freshly retried) token gets processed. Idempotent
+                // publish in `event_store::append` makes redelivery safe.
+                if inject_error_is_transient(&e) {
+                    target.notify_eval();
+                    if let Some(ref activity) = self.activity {
+                        let _ = activity.touch(net_id).await;
+                    }
                 }
-                return Err(ProcessError::Transient(format!(
-                    "Consumer apply timeout for net={} place={} signal_key={}; \
-                     notified eval + nacking for redelivery",
-                    net_id, place_name, transfer.signal_key
-                )));
-            }
-            Err(BridgeInjectError::Other(e)) => {
-                return Err(ProcessError::Business(e));
+                return Err(classify_inject_error(
+                    e,
+                    net_id,
+                    place_name,
+                    &transfer.signal_key,
+                ));
             }
         }
 
@@ -335,6 +382,57 @@ mod tests {
         assert!(
             matches!(err, ProcessError::Transient(_)),
             "not-ready net must retry, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn inject_not_ready_retries_not_dead_letters() {
+        // REGRESSION: a bridge token whose target net is mid-wake (topology not
+        // loaded yet) must be NACKed for redelivery — NOT dead-lettered. The
+        // historical bug mapped this to `Other` → Business → drop, which
+        // silently stranded runner-pool release/claim tokens on hibernated
+        // `pool-*` nets and deadlocked the holder forever.
+        assert!(inject_error_is_transient(&BridgeInjectError::NotReady));
+        let err = classify_inject_error(
+            BridgeInjectError::NotReady,
+            "pool-x",
+            "release_inbox",
+            "sig-1",
+        );
+        assert!(
+            matches!(err, ProcessError::Transient(_)),
+            "topology-not-loaded inject must retry, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn inject_timeout_retries() {
+        // The event is already durable on JetStream; redeliver so the lagging
+        // consumer applies it.
+        assert!(inject_error_is_transient(&BridgeInjectError::Timeout));
+        let err = classify_inject_error(BridgeInjectError::Timeout, "net-x", "p_in", "sig-2");
+        assert!(
+            matches!(err, ProcessError::Transient(_)),
+            "consumer-lag inject must retry, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn inject_other_dead_letters() {
+        // A genuine inject failure (e.g. schema rejection) won't fix itself on
+        // retry — dead-letter it rather than NACK forever.
+        assert!(!inject_error_is_transient(&BridgeInjectError::Other(
+            "schema mismatch".into()
+        )));
+        let err = classify_inject_error(
+            BridgeInjectError::Other("schema mismatch".into()),
+            "net-x",
+            "p_in",
+            "sig-3",
+        );
+        assert!(
+            matches!(err, ProcessError::Business(_)),
+            "genuine inject failure must dead-letter, got {err:?}"
         );
     }
 }

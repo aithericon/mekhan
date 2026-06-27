@@ -1105,6 +1105,15 @@ impl petri_nats::BridgeTarget for InstanceBridgeTarget {
             Err(petri_application::ServiceError::EventStore(
                 petri_application::EventStoreError::Timeout,
             )) => Err(petri_nats::BridgeInjectError::Timeout),
+            // The net was resolved but its topology isn't loaded yet — almost
+            // always because `resolve_net` triggered an ASYNC wake from
+            // hibernation and this inject raced it. Transient: NACK + redeliver
+            // (NOT `Other`, which would dead-letter and silently drop the token
+            // — e.g. a runner-pool release/claim landing on a hibernated
+            // `pool-*` net, stranding the lease forever).
+            Err(petri_application::ServiceError::NoTopology) => {
+                Err(petri_nats::BridgeInjectError::NotReady)
+            }
             Err(e) => Err(petri_nats::BridgeInjectError::Other(e.to_string())),
         }
     }
