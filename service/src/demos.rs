@@ -3882,15 +3882,17 @@ mod tests {
                         // The catalog trigger now carries a catalogue query DSL
                         // string (the same DSL the data browser submits),
                         // compiled + evaluated server-side at ingest. The
-                        // `category:metric` term scopes to BO metric artifacts.
-                        //
-                        // NOTE: the prior HashMap filter also pinned a
-                        // `user_metadata.kind = bo_observation` sentinel; the
-                        // current DSL has no user_metadata containment sugar, so
-                        // that discriminator is intentionally dropped here (see
-                        // the convergence blast-radius note). A follow-up may add
-                        // a `umeta:` sugar / `meta.kind` field spec to restore it.
-                        assert_eq!(cat.query, "category:metric", "catalogue query DSL");
+                        // `category:metric` term scopes to BO metric artifacts,
+                        // and the `umeta.kind:bo_observation` term restores the
+                        // discriminator the prior HashMap filter pinned via a
+                        // `user_metadata.kind = bo_observation` sentinel. The
+                        // `umeta.<key>` field family (an open-ended user_metadata
+                        // JSONB projection) is the `umeta:` sugar the earlier
+                        // version of this test flagged as a follow-up.
+                        assert_eq!(
+                            cat.query, "category:metric umeta.kind:bo_observation",
+                            "catalogue query DSL"
+                        );
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
                 }
