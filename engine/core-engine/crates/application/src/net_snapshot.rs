@@ -4,8 +4,9 @@
 //!
 //! This module is transport-agnostic. It defines:
 //! - [`NetSnapshot`] — the serializable state captured at hibernate.
-//! - [`SnapshotStore`] — the outbound port a concrete store (e.g. the NATS KV
-//!   bucket in `petri-nats`) implements.
+//! - [`SnapshotStore`] — the outbound port a concrete store (the OpenDAL
+//!   object-store adapter `ObjectSnapshotStore` in `petri-api`; see ADR-20)
+//!   implements.
 //!
 //! ## Why a snapshot on top of the bounded tail
 //!
@@ -25,7 +26,7 @@
 //!    only the post-snapshot delta replays.
 //!
 //! The snapshot is a best-effort fast-path: every failure mode (no snapshot,
-//! oversized, deserialize error, KV unavailable) degrades cleanly to today's
+//! oversized, deserialize error, store unavailable) degrades cleanly to today's
 //! full replay, so correctness never depends on it.
 
 use petri_domain::{Marking, PersistedEvent, PlaceId};
