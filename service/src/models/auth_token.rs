@@ -18,6 +18,12 @@ pub struct CreateTokenRequest {
     /// Optional RFC 3339 expiry for the token. Omit for no expiry.
     #[serde(default)]
     pub expires_at: Option<String>,
+    /// Workspace this token is scoped to — its binding is FIXED at mint. Omit to
+    /// bind to the minter's current active workspace; if set, the minter must be
+    /// a member (or it must be a browse-only `is_system` workspace they may
+    /// enter), else the mint is rejected with 400.
+    #[serde(default)]
+    pub workspace_id: Option<uuid::Uuid>,
 }
 
 /// One token row in `GET /api/v1/auth/tokens`. Never carries the secret.
@@ -35,6 +41,8 @@ pub struct TokenSummary {
     /// RFC 3339 token expiry — omitted when the token never expires.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// The workspace this token is scoped to — fixed at mint.
+    pub workspace_id: String,
 }
 
 /// Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the
@@ -49,6 +57,8 @@ pub struct CreatedToken {
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expires_at: Option<String>,
+    /// The workspace this token is scoped to — fixed at mint.
+    pub workspace_id: String,
     /// The Personal Access Token (`uat_{id}.{secret}`). Present only here, only
     /// once — mekhan stores only the SHA-256 of the secret half.
     pub secret: String,

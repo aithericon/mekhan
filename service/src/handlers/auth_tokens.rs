@@ -26,7 +26,9 @@ use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::runner::{mint_token, USER_PAT_TOKEN_PREFIX};
 use crate::AppState;
 
-/// One `user_pats` row, projected for the list endpoint.
+/// One `user_pats` row, projected for the list endpoint. `FromRow` maps by
+/// column NAME, so the field order need not match the table; each field must
+/// appear in the explicit SELECT list below.
 #[derive(sqlx::FromRow)]
 struct TokenRow {
     id: uuid::Uuid,
@@ -34,6 +36,7 @@ struct TokenRow {
     description: Option<String>,
     created_at: DateTime<Utc>,
     expires_at: Option<DateTime<Utc>>,
+    workspace_id: uuid::Uuid,
 }
 
 /// GET /api/v1/auth/tokens — the caller's automation tokens.
@@ -51,7 +54,7 @@ pub async fn list_tokens(
     CookieAuthUser(user): CookieAuthUser,
 ) -> Result<Json<Vec<TokenSummary>>, ApiError> {
     let rows = sqlx::query_as::<_, TokenRow>(
-        "SELECT id, name, description, created_at, expires_at \
+        "SELECT id, name, description, created_at, expires_at, workspace_id \
            FROM user_pats \
           WHERE user_id = $1 AND revoked_at IS NULL \
           ORDER BY created_at",
@@ -69,6 +72,7 @@ pub async fn list_tokens(
             description: r.description,
             created_at: Some(r.created_at.to_rfc3339()),
             expires_at: r.expires_at.map(|t| t.to_rfc3339()),
+            workspace_id: r.workspace_id.to_string(),
         })
         .collect();
     Ok(Json(tokens))
@@ -113,13 +117,39 @@ pub async fn create_token(
         None => None,
     };
 
+    // Resolve + validate the workspace binding (fixed at mint). When omitted,
+    // bind to the minter's CURRENT active workspace; a minter with none gets a
+    // 400 (not the 403 `require_workspace` would emit — the design wants "no
+    // active workspace" to read as a bad request). When provided, the minter
+    // must be able to reach it (member, or a browse-only `is_system` workspace)
+    // — `require_workspace_read`'s `NotMember` maps to 400, never a silent bind.
+    let workspace_id = match req.workspace_id {
+        Some(ws) => {
+            crate::auth::require_workspace_read(&state.db, &user, ws)
+                .await
+                .map_err(|e| match e {
+                    crate::auth::MembershipError::NotMember(_) => {
+                        ApiError::bad_request("not a member of the requested workspace")
+                    }
+                    crate::auth::MembershipError::Db(db) => {
+                        ApiError::internal(format!("workspace validation: {db}"))
+                    }
+                    other => ApiError::bad_request(other.to_string()),
+                })?;
+            ws
+        }
+        None => user
+            .workspace_id
+            .ok_or_else(|| ApiError::bad_request("no active workspace"))?,
+    };
+
     let id = uuid::Uuid::new_v4();
     let minted = mint_token(USER_PAT_TOKEN_PREFIX, id);
     let now = Utc::now();
 
     sqlx::query(
-        "INSERT INTO user_pats (id, user_id, name, description, token_hash, created_at, expires_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        "INSERT INTO user_pats (id, user_id, name, description, token_hash, created_at, expires_at, workspace_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(id)
     .bind(user.subject_as_uuid())
@@ -128,6 +158,7 @@ pub async fn create_token(
     .bind(&minted.token_hash)
     .bind(now)
     .bind(expires_at)
+    .bind(workspace_id)
     .execute(&state.db)
     .await
     .map_err(|e| ApiError::internal(format!("create token: {e}")))?;
@@ -138,6 +169,7 @@ pub async fn create_token(
         description,
         created_at: Some(now.to_rfc3339()),
         expires_at: req.expires_at,
+        workspace_id: workspace_id.to_string(),
         secret: minted.full_token,
     }))
 }

@@ -2648,6 +2648,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/default-workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * PUT /api/v1/me/default-workspace
+         * @description Persist the caller's DEFAULT workspace (`users.default_workspace_id`) — step
+         *     2 of the shared resolution ladder. Unlike the active-workspace cookie (a
+         *     per-session override), this survives logout and is what a PAT or a fresh
+         *     session resolves to when no explicit scope is present. It also disambiguates
+         *     a caller who belongs to several workspaces, so the ladder no longer fails
+         *     loud / forces a picker for them.
+         *
+         *     Lives next to the active-workspace switcher for code-locality (both are
+         *     `/api/v1/me/*` per-user session/preference state). Refuses workspaces the
+         *     caller can't reach — a 403 — using the same `require_workspace_read` rule
+         *     (member, OR a browse-only `is_system` workspace) the switcher uses.
+         */
+        put: operations["set_default_workspace"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-catalog/{source}": {
         parameters: {
             query?: never;
@@ -7736,6 +7766,14 @@ export interface components {
             expires_at?: string | null;
             /** @description Human-friendly label — stored as `user_pats.name`, shown in the list. */
             name: string;
+            /**
+             * Format: uuid
+             * @description Workspace this token is scoped to — its binding is FIXED at mint. Omit to
+             *     bind to the minter's current active workspace; if set, the minter must be
+             *     a member (or it must be a browse-only `is_system` workspace they may
+             *     enter), else the mint is rejected with 400.
+             */
+            workspace_id?: string | null;
         };
         /** @description Request body for `POST /api/v1/workers/registration-tokens`. */
         CreateWorkerRegistrationTokenRequest: {
@@ -7803,6 +7841,8 @@ export interface components {
              *     once — mekhan stores only the SHA-256 of the secret half.
              */
             secret: string;
+            /** @description The workspace this token is scoped to — fixed at mint. */
+            workspace_id: string;
         };
         /**
          * @description Response for a freshly-minted worker registration token. `token` is the full
@@ -13113,6 +13153,14 @@ export interface components {
              */
             workspace_id: string;
         };
+        SetDefaultWorkspaceRequest: {
+            /**
+             * Format: uuid
+             * @description Target workspace id. The caller must already be a member (or it must be a
+             *     browse-only `is_system` workspace they may enter).
+             */
+            workspace_id: string;
+        };
         SetDevIdentityRequest: {
             /** @description `subject` of a roster identity (e.g. `"dev-user"` or `"dev-user-2"`). */
             subject: string;
@@ -14134,6 +14182,8 @@ export interface components {
              */
             id: string;
             name: string;
+            /** @description The workspace this token is scoped to — fixed at mint. */
+            workspace_id: string;
         };
         /**
          * @description What happens when a tool call inside an [`WorkflowNodeData::Agent`]
@@ -21468,6 +21518,37 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    set_default_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetDefaultWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Default workspace set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cannot reach the target workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
             };
         };
     };

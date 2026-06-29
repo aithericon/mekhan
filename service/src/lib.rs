@@ -806,6 +806,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::me::set_active_workspace,
             handlers::me::clear_active_workspace
         ))
+        // Default-workspace preference — persisted (`users.default_workspace_id`),
+        // step 2 of the shared active-workspace resolution ladder.
+        .routes(routes!(handlers::me::set_default_workspace))
         // Dev-only identity switcher — impersonate a seeded dev user under
         // `dev_noop` (empty roster / 404 in any real auth mode).
         .routes(routes!(handlers::dev_identity::list_dev_identities))

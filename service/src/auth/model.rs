@@ -230,6 +230,12 @@ pub enum AuthError {
     AudienceMismatch,
     #[error("unable to fetch signing keys: {0}")]
     JwksUnavailable(String),
+    /// The active-workspace resolution ladder found several reachable
+    /// workspaces but no scope or default to disambiguate, and the caller
+    /// (a non-interactive PAT) cannot defer to a UI picker. Maps to 403 —
+    /// the request is authenticated but cannot be attributed to one tenant.
+    #[error("workspace ambiguous — scope the token or set a default workspace")]
+    WorkspaceAmbiguous,
     #[error("internal auth error: {0}")]
     Internal(String),
 }

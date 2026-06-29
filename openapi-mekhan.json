@@ -7944,6 +7944,41 @@
         }
       }
     },
+    "/api/v1/me/default-workspace": {
+      "put": {
+        "tags": [
+          "me"
+        ],
+        "summary": "PUT /api/v1/me/default-workspace",
+        "description": "Persist the caller's DEFAULT workspace (`users.default_workspace_id`) — step\n2 of the shared resolution ladder. Unlike the active-workspace cookie (a\nper-session override), this survives logout and is what a PAT or a fresh\nsession resolves to when no explicit scope is present. It also disambiguates\na caller who belongs to several workspaces, so the ladder no longer fails\nloud / forces a picker for them.\n\nLives next to the active-workspace switcher for code-locality (both are\n`/api/v1/me/*` per-user session/preference state). Refuses workspaces the\ncaller can't reach — a 403 — using the same `require_workspace_read` rule\n(member, OR a browse-only `is_system` workspace) the switcher uses.",
+        "operationId": "set_default_workspace",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetDefaultWorkspaceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Default workspace set"
+          },
+          "403": {
+            "description": "Cannot reach the target workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/model-catalog/{source}": {
       "get": {
         "tags": [
@@ -20963,6 +20998,14 @@
           "name": {
             "type": "string",
             "description": "Human-friendly label — stored as `user_pats.name`, shown in the list."
+          },
+          "workspace_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Workspace this token is scoped to — its binding is FIXED at mint. Omit to\nbind to the minter's current active workspace; if set, the minter must be\na member (or it must be a browse-only `is_system` workspace they may\nenter), else the mint is rejected with 400."
           }
         }
       },
@@ -21069,6 +21112,7 @@
         "required": [
           "id",
           "name",
+          "workspace_id",
           "secret"
         ],
         "properties": {
@@ -21099,6 +21143,10 @@
           "secret": {
             "type": "string",
             "description": "The Personal Access Token (`uat_{id}.{secret}`). Present only here, only\nonce — mekhan stores only the SHA-256 of the secret half."
+          },
+          "workspace_id": {
+            "type": "string",
+            "description": "The workspace this token is scoped to — fixed at mint."
           }
         }
       },
@@ -32304,6 +32352,19 @@
           }
         }
       },
+      "SetDefaultWorkspaceRequest": {
+        "type": "object",
+        "required": [
+          "workspace_id"
+        ],
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Target workspace id. The caller must already be a member (or it must be a\nbrowse-only `is_system` workspace they may enter)."
+          }
+        }
+      },
       "SetDevIdentityRequest": {
         "type": "object",
         "required": [
@@ -34143,7 +34204,8 @@
         "description": "One token row in `GET /api/v1/auth/tokens`. Never carries the secret.",
         "required": [
           "id",
-          "name"
+          "name",
+          "workspace_id"
         ],
         "properties": {
           "created_at": {
@@ -34172,6 +34234,10 @@
           },
           "name": {
             "type": "string"
+          },
+          "workspace_id": {
+            "type": "string",
+            "description": "The workspace this token is scoped to — fixed at mint."
           }
         }
       },
