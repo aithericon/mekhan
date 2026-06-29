@@ -452,6 +452,20 @@ fn count_units_in_marking(marking: &serde_json::Value, runner_id: &str) -> u32 {
     n
 }
 
+/// Slots to inject to reconcile a present runner's pool to its target `C`, given
+/// the engine's CURRENT unit count (`existing` = free + held tokens for the
+/// runner — the leak-free authority). Level-triggered: returns the deficit
+/// `C - existing`, or 0 when already at/over target. So SHRINK stays lazy (a held
+/// surplus drains on release/expire, never negative-minted) and an engine read
+/// error — which callers map to `existing == C` — never double-admits. Shared by
+/// BOTH the absent→present edge and the already-present heartbeat reconcile so the
+/// two arms can never drift apart (the drift being the stuck-pool incident).
+fn slots_to_reconcile(existing: u32, target_c: u32) -> u32 {
+    core::grow_slots(false, existing, target_c)
+        .map(|r| r.len() as u32)
+        .unwrap_or(0)
+}
+
 /// Build the caller parts of a BARE `presence_expired { runner_id }` signal
 /// (pure, so the envelope byte-shape is pinned in [`super::core`]'s tests).
 /// `now_ms` is the emission stamp folded into the signal key. Injected via the
@@ -492,17 +506,10 @@ async fn handle_presence(
         .upsert_runner(runner_id.to_string(), backends.clone(), concurrency)
         .await;
 
-    // Fast path: already present → bump last_seen + reconcile the C delta under
-    // the lock. We still re-touch last_seen_at periodically below, but avoid a DB
-    // lookup on every heartbeat of an already-admitted runner.
-    //
-    // GROW-EAGER / SHRINK-LAZY: if the wire C exceeds the applied C, we EAGERLY
-    // inject the new slots (`applied..wire`) so the extra capacity is available
-    // immediately, then bump the stored applied C. If the wire C is smaller, we
-    // only lower the stored target (SHRINK is lazy — a held surplus slot must
-    // finish its lease; it drains on release or at the next full expire). We need
-    // the pool_net_id + namespace/caps to inject grow slots, so collect what we
-    // need under the lock, then inject outside it.
+    // Fast path: already present → bump last_seen, refresh advisory facets, and
+    // RECONCILE the pool against the engine's real unit count. We collect what we
+    // need under the lock, drop it, then do the engine read + any inject OUTSIDE
+    // the lock (never hold the presence mutex across network I/O).
     {
         let mut map = presence.lock().await;
         if let Some(entry) = map.get_mut(&runner_id) {
@@ -515,47 +522,66 @@ async fn handle_presence(
             // current if a runner moves host / changes GPU between heartbeats).
             entry.host = host.clone();
             if entry.present {
-                // Compute the grow delta. SHRINK is lazy (just lower the target);
-                // GROW eagerly injects the new slots below. A pool-less
-                // (liveness-only) entry never injects.
-                let new_slots =
-                    core::grow_slots(entry.pool_net_id.is_empty(), entry.concurrency, concurrency);
-                let grow =
-                    new_slots.map(|s| (entry.pool_workspace.clone(), entry.pool_net_id.clone(), s));
-                // Always record the new target C (grow OR shrink).
+                let pool_net_id = entry.pool_net_id.clone();
+                let pool_workspace = entry.pool_workspace.clone();
+                // Record the new target C (the sweep reads it to know how many
+                // expire signals to inject; SHRINK is lazy — a held surplus slot
+                // drains on release or at the next full expire, never force-killed
+                // here).
                 entry.concurrency = concurrency;
                 drop(map);
 
-                if let Some((pool_workspace, pool_net_id, new_slots)) = grow {
-                    // Re-resolve the trusted namespace + caps from the DB row to
-                    // mint the new slots (never from the wire payload).
-                    if let Some(runner) = load_live_runner(db, runner_id).await {
-                        let executor_namespace = format!("runner-jobs/{runner_id}");
-                        let caps = runner.capabilities.clone();
-                        // Fresh epoch for the grow batch (the grown slot indices are
-                        // already new, but stamping the episode keeps the dedup id
-                        // unique if the same index is re-grown after a later shrink).
-                        let epoch = Utc::now().timestamp_millis();
-                        for slot in new_slots {
-                            core::inject_acquire(
-                                nats,
-                                &pool_workspace,
-                                &pool_net_id,
-                                acquire_injection(
-                                    runner_id,
-                                    slot,
-                                    epoch,
-                                    &executor_namespace,
-                                    &caps,
-                                ),
-                                "presence acquire",
-                            )
-                            .await;
+                // DRIFT RECONCILE (level-triggered) — the load-bearing fix for the
+                // stuck-pool incident. A present, pool-backed runner must have
+                // exactly C units accounted in the engine (free `pool` + held
+                // `in_use`). Top up the deficit against the engine's CURRENT count
+                // — the leak-free authority — on EVERY heartbeat, NOT just when the
+                // wire C grows. The old code reconciled only the in-memory C delta,
+                // so a steady-C runner whose engine units VANISHED mid-lease (a
+                // pool-net hibernate/rehydrate or OOM drop, or a held-unit reap that
+                // left no compensating release) sat at 0 forever until a full expire
+                // finally flipped it absent. `count == None` (engine error) is
+                // treated as "already at C" so a transient blip never double-admits;
+                // the next heartbeat reconciles. This subsumes the old GROW-EAGER
+                // path: a wire-C increase shows up as `existing < C` here too. Costs
+                // one cheap engine state read per heartbeat — justified, since the
+                // alternative is multi-minute capacity outages. A pool-less /
+                // liveness-only entry skips the read and never injects.
+                if !pool_net_id.is_empty() {
+                    let existing = count_runner_units(petri, &pool_net_id, runner_id)
+                        .await
+                        .unwrap_or(concurrency);
+                    let need = slots_to_reconcile(existing, concurrency);
+                    if need > 0 {
+                        // Re-resolve the trusted namespace + caps from the DB row to
+                        // mint the missing slots (never from the wire payload).
+                        if let Some(runner) = load_live_runner(db, runner_id).await {
+                            let executor_namespace = format!("runner-jobs/{runner_id}");
+                            let caps = runner.capabilities.clone();
+                            // Fresh epoch so each re-mint is dedup-distinct from any
+                            // prior (reaped/lost) episode of the same slot index.
+                            let epoch = Utc::now().timestamp_millis();
+                            for slot in 0..need {
+                                core::inject_acquire(
+                                    nats,
+                                    &pool_workspace,
+                                    &pool_net_id,
+                                    acquire_injection(
+                                        runner_id,
+                                        slot,
+                                        epoch,
+                                        &executor_namespace,
+                                        &caps,
+                                    ),
+                                    "presence reconcile",
+                                )
+                                .await;
+                            }
+                            tracing::info!(
+                                %runner_id, pool_net_id, concurrency, existing, need,
+                                "presence drift reconciled; re-minted missing pool slots"
+                            );
                         }
-                        tracing::info!(
-                            %runner_id, pool_net_id, concurrency,
-                            "presence concurrency grew; minted new slots"
-                        );
                     }
                 }
 
@@ -645,9 +671,7 @@ async fn handle_presence(
     let existing = count_runner_units(petri, &pool_net_id, runner_id)
         .await
         .unwrap_or(concurrency);
-    let need = core::grow_slots(false, existing, concurrency)
-        .map(|r| r.len() as u32)
-        .unwrap_or(0);
+    let need = slots_to_reconcile(existing, concurrency);
 
     // Mint `need` distinct slots (slot 0..need), one bridge token each. `unit_id`
     // is per-slot AND per-epoch so each is an independently grantable lease that
@@ -1134,6 +1158,41 @@ mod tests {
         assert_eq!(count_units_in_marking(&marking, "deadbeef"), 0);
         // An empty/odd marking shape counts as zero (never panics).
         assert_eq!(count_units_in_marking(&serde_json::json!({}), me), 0);
+    }
+
+    /// The stuck-pool fix, at the decision level: BOTH `handle_presence` arms now
+    /// reconcile a present runner's pool against the engine's REAL unit count via
+    /// `slots_to_reconcile` (the absent→present edge and the already-present
+    /// heartbeat alike). The root cause was that the steady-state heartbeat used
+    /// only the in-memory C delta (`grow_slots(applied_C, wire_C)` = 0 when C is
+    /// steady), so a present runner whose engine units were silently lost (a
+    /// pool-net hibernate/rehydrate or OOM drop, or a held-unit reap that did NOT
+    /// flip mekhan's `present` flag) was never replenished — the pool sat at 0
+    /// until a full expire. Reconciling against engine truth re-mints the deficit
+    /// on the next heartbeat (~10s) regardless of how the units vanished.
+    ///
+    /// (The wiring — that the fast path actually calls `count_runner_units` then
+    /// injects `slots_to_reconcile` slots — is exercised end to end against a live
+    /// engine in dogfood; here we pin the pure reconcile decision.)
+    #[test]
+    fn reconcile_tops_up_lost_units_and_stays_lazy_on_shrink() {
+        const C: u32 = 2;
+        // The degraded state: the engine silently lost the runner's units while it
+        // stayed present at steady C. The reconcile re-mints the full deficit.
+        assert_eq!(
+            slots_to_reconcile(0, C),
+            2,
+            "both silently-lost slots are re-minted — the stuck-pool fix"
+        );
+        assert_eq!(slots_to_reconcile(1, C), 1, "the one lost slot is re-minted");
+        // No drift → no churn (engine already at C).
+        assert_eq!(slots_to_reconcile(C, C), 0, "engine already at C → inject nothing");
+        // SHRINK stays lazy: engine above the lowered target → never negative-minted;
+        // the held surplus drains on release/expire.
+        assert_eq!(slots_to_reconcile(3, C), 0, "surplus drains lazily, not force-killed");
+        // A transient engine-read error is mapped by callers to `existing == C`, so
+        // it resolves to a zero top-up — a blip can never double-admit.
+        assert_eq!(slots_to_reconcile(C, C), 0, "engine blip → no double-admit");
     }
 
     #[tokio::test]

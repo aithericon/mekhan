@@ -5156,7 +5156,7 @@ mod tests {
     fn deeply_nested_llm_config_lowers_via_config_ref_not_literal() {
         let mut definitions = std::collections::BTreeMap::new();
         // Deliberately deep + array-heavy — emulates the failing
-        // `demos/document-pipeline-v1` `ExtractionFields` shape that
+        // `service/tests/fixtures/clinic-workflows/document-pipeline-v1` `ExtractionFields` shape that
         // tripped the Rhai parser before this fix.
         definitions.insert(
             "ExtractionFields".to_string(),

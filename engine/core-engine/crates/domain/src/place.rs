@@ -62,6 +62,17 @@ pub enum PlaceKind {
     /// No outgoing arcs by convention. The first token's data may
     /// contain an `exit_code` field read on completion.
     Terminal,
+    /// Record-and-discard sink — tokens routed here are NOT added to the
+    /// local marking. The producing transition still fires (and an effect
+    /// transition still journals its `EffectCompleted`/`effect_result`), so
+    /// the audit trail is preserved; the token itself is dropped instead of
+    /// accumulating. Used for high-volume telemetry log places (metric/log/
+    /// output/phase/progress/artifact) that have no consumer — parking those
+    /// tokens bloats the marking unboundedly, which skips hibernation
+    /// snapshots (> NATS max_payload) and forces full event-log replay on
+    /// every wake. Unlike `Terminal`, a `Sink` does NOT signal net
+    /// completion. No outgoing arcs by convention.
+    Sink,
 }
 
 /// A place (location) in the Petri Net where tokens can reside.
@@ -262,6 +273,19 @@ impl Place {
         }
     }
 
+    /// Create a sink place (record-and-discard — tokens dropped from marking).
+    pub fn sink(name: impl Into<String>) -> Self {
+        let name_str: String = name.into();
+        Self {
+            id: PlaceId(name_str.clone()),
+            name: name_str,
+            kind: PlaceKind::Sink,
+            capacity: None,
+            group_id: None,
+            token_schema: None,
+        }
+    }
+
     /// Create a bridge-reply place (routes tokens back via consumed reply_routing's reply_to).
     pub fn bridge_reply(name: impl Into<String>) -> Self {
         let name_str: String = name.into();
@@ -334,6 +358,12 @@ impl Place {
         matches!(self.kind, PlaceKind::BridgeOut { .. })
     }
 
+    /// Check if this place is a record-and-discard sink (token dropped from
+    /// the marking after the producing transition fires).
+    pub fn is_sink(&self) -> bool {
+        matches!(self.kind, PlaceKind::Sink)
+    }
+
     /// Check if this place is externally fed (skip UNREACHABLE checks).
     pub fn is_externally_fed(&self) -> bool {
         matches!(
@@ -362,5 +392,26 @@ mod tests {
         let parsed: Place = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.name, "done");
         assert!(matches!(parsed.kind, PlaceKind::Terminal));
+    }
+
+    #[test]
+    fn test_sink_constructor_and_helpers() {
+        let place = Place::sink("metric_log");
+        assert_eq!(place.name, "metric_log");
+        assert!(matches!(place.kind, PlaceKind::Sink));
+        assert!(place.is_sink());
+        // A sink is not externally fed and is not a bridge-out.
+        assert!(!place.is_externally_fed());
+        assert!(!place.is_bridge_out());
+    }
+
+    #[test]
+    fn test_sink_serialization_roundtrip() {
+        let place = Place::sink("metric_log");
+        let json = serde_json::to_string(&place).unwrap();
+        // The serde tag is "sink" (snake_case rename of the Sink variant).
+        assert!(json.contains("\"kind\":\"sink\""));
+        let parsed: Place = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed.kind, PlaceKind::Sink));
     }
 }

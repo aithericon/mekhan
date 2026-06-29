@@ -16,6 +16,7 @@ pub mod demos;
 pub mod file_servers;
 pub mod fleet;
 pub mod handlers;
+pub mod internal_pool;
 pub mod inventory;
 pub mod lifecycle;
 /// Legacy-migration pipeline driver (docs/32 Phase 5). Transport-agnostic

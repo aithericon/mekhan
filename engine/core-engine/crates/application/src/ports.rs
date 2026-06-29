@@ -216,6 +216,9 @@ pub trait EventRepository: Send + Sync {
             // Full-retention stores have no separate JetStream cursor and wake by
             // full replay (snapshots are disabled for them); `0` is inert.
             last_stream_seq: 0,
+            // The event store has no topology; the registry's `write_snapshot`
+            // fills this from `service.get_topology()` before persisting.
+            topology: None,
         }
     }
 

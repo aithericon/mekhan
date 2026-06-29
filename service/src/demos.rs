@@ -1255,23 +1255,28 @@ async fn seed_model_states(state: &crate::AppState, root: &Path) {
         // Shared internal-pool models are owned by the platform tier — their
         // `model_states` row lands under PLATFORM_SCOPE_ID so every tenant's
         // picker surfaces it. A genuine tenant-demo model stays at the demo
-        // workspace. The backing registry resource itself is still seeded into
-        // the demo workspace, so the registry lookup below stays workspace-local.
-        let is_internal_pool = fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
+        // workspace. The backing registry resource (`internal_pool_registry`) is
+        // now ALSO platform-tier (seeded by `internal_pool::ensure_platform_internal_pool`),
+        // so the registry lookup below binds the same `target_workspace` —
+        // PLATFORM_SCOPE_ID for the internal pool, the demo workspace otherwise.
+        let is_internal_pool =
+            fx.registry_resource.as_deref() == Some(INTERNAL_POOL_REGISTRY_ALIAS);
         let target_workspace = if is_internal_pool {
             crate::models::asset::PLATFORM_SCOPE_ID
         } else {
             DEMO_WORKSPACE_ID
         };
         // Resolve the optional backing registry resource → its row id (the
-        // projection's `registry_resource_id`). Absent / unresolved → NULL.
+        // projection's `registry_resource_id`). Absent / unresolved → NULL. The
+        // registry resource shares the model_state's scope (platform for the
+        // internal pool), so resolve it under `target_workspace`.
         let registry_resource_id: Option<uuid::Uuid> = match &fx.registry_resource {
             Some(alias) => {
                 let row: Result<Option<(uuid::Uuid,)>, _> = sqlx::query_as(
                     "SELECT id FROM resources \
                      WHERE workspace_id = $1 AND path = $2 AND deleted_at IS NULL",
                 )
-                .bind(DEMO_WORKSPACE_ID)
+                .bind(target_workspace)
                 .bind(alias)
                 .fetch_optional(&state.db)
                 .await;
@@ -2300,7 +2305,8 @@ mod tests {
     fn document_pipeline_v1_join_node_round_trips() {
         use crate::models::template::{JoinMode, WorkflowGraph, WorkflowNodeData};
 
-        let graph_path = repo_root().join("demos/document-pipeline-v1/graph.json");
+        let graph_path = repo_root()
+            .join("service/tests/fixtures/clinic-workflows/document-pipeline-v1/graph.json");
         let raw = std::fs::read_to_string(&graph_path).expect("graph.json must exist");
         let graph: WorkflowGraph =
             serde_json::from_str(&raw).expect("graph.json must deserialize as WorkflowGraph");
@@ -2338,8 +2344,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-v1"))
-            .expect("document-pipeline-v1 must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/document-pipeline-v1"),
+        )
+        .expect("document-pipeline-v1 must load");
 
         let files = node_files_inline(&demo.files);
         let CompileArtifacts { node_configs, .. } = compile_to_air_with_options(
@@ -2411,8 +2419,11 @@ mod tests {
         };
         use crate::models::template::{JoinMode, WorkflowNodeData};
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
-            .expect("document-pipeline-branching-v1 must load");
+        let demo = load_demo(
+            &repo_root()
+                .join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"),
+        )
+        .expect("document-pipeline-branching-v1 must load");
         assert_eq!(demo.metadata.name, "Document Pipeline — Branching v1");
         assert_eq!(
             demo.metadata.template_id,
@@ -2537,8 +2548,11 @@ mod tests {
             return;
         };
 
-        let demo = load_demo(&repo_root().join("demos/document-pipeline-branching-v1"))
-            .expect("document-pipeline-branching-v1 must load");
+        let demo = load_demo(
+            &repo_root()
+                .join("service/tests/fixtures/clinic-workflows/document-pipeline-branching-v1"),
+        )
+        .expect("document-pipeline-branching-v1 must load");
 
         let files = node_files_inline(&demo.files);
         let CompileArtifacts {
@@ -2657,8 +2671,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/classify-and-group-v1"))
-            .expect("classify-and-group-v1 must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/classify-and-group-v1"),
+        )
+        .expect("classify-and-group-v1 must load");
         assert_eq!(demo.metadata.name, "Classify & Group v1");
         assert_eq!(
             demo.metadata.template_id,
@@ -2719,8 +2735,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/di-extraction-canary"))
-            .expect("di-extraction-canary must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/di-extraction-canary"),
+        )
+        .expect("di-extraction-canary must load");
         assert_eq!(demo.metadata.name, "DI Extraction Canary");
         assert_eq!(
             demo.metadata.template_id,
@@ -3032,8 +3050,10 @@ mod tests {
             compile_to_air_with_options, node_files_inline, CompileArtifacts, CompileOptions,
         };
 
-        let demo = load_demo(&repo_root().join("demos/output-safety-gate"))
-            .expect("output-safety-gate must load");
+        let demo = load_demo(
+            &repo_root().join("service/tests/fixtures/clinic-workflows/output-safety-gate"),
+        )
+        .expect("output-safety-gate must load");
         assert_eq!(demo.metadata.name, "Output Safety Gate");
         assert_eq!(
             demo.metadata.template_id,
@@ -3862,15 +3882,17 @@ mod tests {
                         // The catalog trigger now carries a catalogue query DSL
                         // string (the same DSL the data browser submits),
                         // compiled + evaluated server-side at ingest. The
-                        // `category:metric` term scopes to BO metric artifacts.
-                        //
-                        // NOTE: the prior HashMap filter also pinned a
-                        // `user_metadata.kind = bo_observation` sentinel; the
-                        // current DSL has no user_metadata containment sugar, so
-                        // that discriminator is intentionally dropped here (see
-                        // the convergence blast-radius note). A follow-up may add
-                        // a `umeta:` sugar / `meta.kind` field spec to restore it.
-                        assert_eq!(cat.query, "category:metric", "catalogue query DSL");
+                        // `category:metric` term scopes to BO metric artifacts,
+                        // and the `umeta.kind:bo_observation` term restores the
+                        // discriminator the prior HashMap filter pinned via a
+                        // `user_metadata.kind = bo_observation` sentinel. The
+                        // `umeta.<key>` field family (an open-ended user_metadata
+                        // JSONB projection) is the `umeta:` sugar the earlier
+                        // version of this test flagged as a follow-up.
+                        assert_eq!(
+                            cat.query, "category:metric umeta.kind:bo_observation",
+                            "catalogue query DSL"
+                        );
                     }
                     other => panic!("trigger source must be Catalog, got {other:?}"),
                 }

@@ -46,6 +46,10 @@
 | [**14 — Terminal Places**](./adr/14-terminal-places.md) | Accepted | Declarative net completion detection |
 | [**15 — Lifecycle Events**](./adr/15-lifecycle-events.md) | Accepted | NetCreated/Completed/Cancelled events and metadata projection |
 | [**16 — Hibernation**](./adr/16-hibernation.md) | Accepted | ActivityTracker, HibernationMaster, GlobalSignalListener |
+| [**17 — Artifact Provenance**](./adr/17-artifact-provenance.md) | Accepted (design) | Bidirectional artifact ↔ workflow lineage |
+| [**18 — Event-Log Causality**](./adr/18-event-log-causality.md) | Proposed | Provenance from the event log instead of traceparent |
+| [**19 — Tool Use First-Class**](./adr/19-tool-use-first-class.md) | Accepted | Tool use as a first-class LLM pipeline capability |
+| [**20 — Net Snapshots**](./adr/20-net-snapshots.md) | Accepted | Object-store wake fast-path (replaces NATS KV snapshots) |
 
 ## Getting Started
 

@@ -521,12 +521,23 @@ async fn main() {
 
     let registry = Arc::new(registry);
 
-    // Install the wake-snapshot store (PART C). Backed by per-workspace NATS KV
-    // (`KV_NET_SNAPSHOT_{ws}`). With it installed, hibernate captures a snapshot
-    // and the wake path replays only the post-snapshot delta — a cold wake of a
-    // huge net is then O(events since hibernate), not O(total events). Every
-    // failure mode degrades to full replay, so this is a pure fast-path.
-    registry.set_snapshot_store(Arc::new(petri_nats::NetSnapshotStore::new(jetstream.clone())));
+    // Install the wake-snapshot store (PART C). Backed by an OpenDAL object
+    // store (S3/GCS/Azure/local fs), configured via `PETRI_SNAPSHOT_STORE_*`.
+    // With it installed, hibernate captures a snapshot and the wake path replays
+    // only the post-snapshot delta — a cold wake of a huge net is then O(events
+    // since hibernate), not O(total events). Every failure mode degrades to full
+    // replay, so this is a pure fast-path.
+    match petri_api::ObjectSnapshotStore::from_env() {
+        Some(store) => {
+            info!("Snapshot store: object store (OpenDAL)");
+            registry.set_snapshot_store(Arc::new(store));
+        }
+        None => {
+            tracing::warn!(
+                "Snapshot store: DISABLED (PETRI_SNAPSHOT_STORE_* unset) — wakes will full-replay"
+            );
+        }
+    }
 
     // Install the subworkflow_cancel adapter — needs Arc<NetRegistry> so it
     // can call `terminate` on its own registry. The Timeout node's body
@@ -1094,6 +1105,15 @@ impl petri_nats::BridgeTarget for InstanceBridgeTarget {
             Err(petri_application::ServiceError::EventStore(
                 petri_application::EventStoreError::Timeout,
             )) => Err(petri_nats::BridgeInjectError::Timeout),
+            // The net was resolved but its topology isn't loaded yet — almost
+            // always because `resolve_net` triggered an ASYNC wake from
+            // hibernation and this inject raced it. Transient: NACK + redeliver
+            // (NOT `Other`, which would dead-letter and silently drop the token
+            // — e.g. a runner-pool release/claim landing on a hibernated
+            // `pool-*` net, stranding the lease forever).
+            Err(petri_application::ServiceError::NoTopology) => {
+                Err(petri_nats::BridgeInjectError::NotReady)
+            }
             Err(e) => Err(petri_nats::BridgeInjectError::Other(e.to_string())),
         }
     }

@@ -109,6 +109,6 @@ but they're the deltas vs. what currently ships.
 
 Identical to the other bundled demos:
 
-- `mekhan_service::demos::load_demo("demos/document-pipeline-v1")`
+- `mekhan_service::demos::load_demo("service/tests/fixtures/clinic-workflows/document-pipeline-v1")`
 - The startup seeder publishes it under templateId `00000000-0000-0000-0000-000000000050`.
 - `MEKHAN__DEMOS__SEED=true` (default in `just dev::up-mekhan`).

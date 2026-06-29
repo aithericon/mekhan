@@ -1168,6 +1168,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_sink_place_drops_tokens_marking_stays_bounded() {
+        // A `Sink` place is record-and-discard: the producing transition fires
+        // (and is journaled), but the output token is NOT added to the marking.
+        // This is the durable fix for the telemetry-log accumulator OOM — N
+        // events must leave the marking O(1), not O(N).
+        let service = create_test_service();
+
+        let mut net = PetriNet::new();
+        let feed = Place::internal("feed");
+        let sink = Place::sink("metric_log");
+        let to_sink = Transition::new("to_sink", "#{out: inp}")
+            .with_input_ports(vec![Port::new("inp")])
+            .with_output_ports(vec![Port::new("out")]);
+
+        let feed_id = feed.id.clone();
+        let sink_id = sink.id.clone();
+        let t_id = to_sink.id.clone();
+
+        net.add_place(feed);
+        net.add_place(sink);
+        net.add_transition(to_sink);
+        net.add_arc(PetriArc::input(feed_id.clone(), t_id.clone(), "inp"));
+        net.add_arc(PetriArc::output(t_id, "out", sink_id.clone()));
+
+        service.initialize(net).await.unwrap();
+
+        // Emit many "telemetry events" into the sink.
+        const N: usize = 50;
+        for i in 0..N {
+            service
+                .create_token(
+                    feed_id.clone(),
+                    TokenColor::Data(serde_json::json!({ "i": i })),
+                )
+                .await
+                .unwrap();
+        }
+
+        let result = service.evaluate_until_quiescent(1000).await.unwrap();
+
+        // Every event fired (the producing transition runs + is journaled)...
+        assert_eq!(result.steps_executed, N);
+        assert_eq!(result.final_state, EvaluateFinalState::Quiescent);
+        // ...but the firing recorded NO produced token (the sink dropped it).
+        for ev in &result.events {
+            if let DomainEvent::TransitionFired {
+                produced_tokens, ..
+            } = &ev.event
+            {
+                assert!(
+                    produced_tokens.is_empty(),
+                    "sink firing must not record a produced token"
+                );
+            }
+        }
+
+        // The marking is O(1): nothing parked at the sink, feed drained.
+        let events = service.get_events().await;
+        let marking = TestStateProjection::new().project(&events);
+        assert_eq!(
+            marking.token_count(&sink_id),
+            0,
+            "sink place must never accumulate tokens in the marking"
+        );
+        assert_eq!(marking.token_count(&feed_id), 0);
+    }
+
+    #[tokio::test]
     async fn test_evaluate_until_quiescent_multiple_steps() {
         let service = create_test_service();
 

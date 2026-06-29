@@ -11,7 +11,9 @@
 		ArrowUpRight,
 		Cog,
 		CircleX,
-		X
+		X,
+		ArrowDownWideNarrow,
+		ArrowUpWideNarrow
 	} from '@lucide/svelte';
 	import NodeKindBadge, { type NodeKind } from './NodeKindBadge.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -35,6 +37,12 @@
 	// Filter state
 	let typeFilter = new SvelteSet<string>();
 	let textSearch = $state('');
+
+	// Sort + windowing. Events arrive in ascending sequence order; default to
+	// newest-first so the latest activity is at the top of a long stream.
+	let sortNewestFirst = $state(true);
+	const RENDER_LIMIT = 200;
+	let showAll = $state(false);
 
 	const eventTypeChips: { key: NodeKind; label: string }[] = [
 		{ key: 'TransitionFired', label: 'Fired' },
@@ -62,11 +70,20 @@
 		return result;
 	});
 
-	// Map currentIndex (in original array) to index in filtered array for highlighting
-	const filteredCurrentIndex = $derived.by(() => {
+	// Sorted view: filteredEvents is ascending by sequence, so reverse for
+	// newest-first (cheap, no re-sort on every streamed event).
+	const sortedEvents = $derived(sortNewestFirst ? filteredEvents.slice().reverse() : filteredEvents);
+
+	// Window the rendered list so a multi-thousand-event stream doesn't mount
+	// thousands of DOM nodes. With newest-first this shows the most recent N.
+	const displayedEvents = $derived(showAll ? sortedEvents : sortedEvents.slice(0, RENDER_LIMIT));
+	const hiddenCount = $derived(sortedEvents.length - displayedEvents.length);
+
+	// Map currentIndex (in original array) to index in displayed array for highlighting
+	const displayedCurrentIndex = $derived.by(() => {
 		if (currentIndex < 0 || currentIndex >= events.length) return -1;
 		const currentSeq = events[currentIndex].sequence;
-		return filteredEvents.findIndex(e => e.sequence === currentSeq);
+		return displayedEvents.findIndex(e => e.sequence === currentSeq);
 	});
 
 	// Serialize the events the user is currently looking at (filters/search
@@ -77,8 +94,8 @@
 		return JSON.stringify(filteredEvents.map((e) => e.event), null, 2);
 	}
 
-	function handleFilteredEventClick(filteredIndex: number) {
-		const event = filteredEvents[filteredIndex];
+	function handleFilteredEventClick(displayedIndex: number) {
+		const event = displayedEvents[displayedIndex];
 		const originalIndex = events.findIndex(e => e.sequence === event.sequence);
 		if (originalIndex >= 0) {
 			onSelectEvent(originalIndex);
@@ -271,6 +288,19 @@
 					{events.length}
 				{/if}
 			</span>
+			<Button
+				variant="ghost"
+				size="icon-xs"
+				onclick={() => (sortNewestFirst = !sortNewestFirst)}
+				title={sortNewestFirst ? 'Sorted newest first — click for oldest first' : 'Sorted oldest first — click for newest first'}
+				aria-label="Toggle sort order"
+			>
+				{#if sortNewestFirst}
+					<ArrowDownWideNarrow class="w-3.5 h-3.5" />
+				{:else}
+					<ArrowUpWideNarrow class="w-3.5 h-3.5" />
+				{/if}
+			</Button>
 			{#if filteredEvents.length > 0}
 				<CopyButton
 					getText={eventsAsJson}
@@ -313,13 +343,13 @@
 
 	<div class="flex-1 overflow-hidden" bind:clientHeight={containerHeight}>
 		<div class="flex-1 overflow-y-auto" style="height: {containerHeight}px;">
-			{#each filteredEvents as event, index (event.sequence)}
+			{#each displayedEvents as event, index (event.sequence)}
 				{@const summary = getEventSummary(event.event)}
 				{@const Icon = summary.icon}
 				<div style="height: {ITEM_HEIGHT}px;">
 					<button
 						class="w-full h-full text-left px-2 py-1.5 border-b border-border hover:bg-muted transition-colors
-							{index === filteredCurrentIndex ? 'bg-primary/10 border-l-2 border-l-primary' : ''}"
+							{index === displayedCurrentIndex ? 'bg-primary/10 border-l-2 border-l-primary' : ''}"
 						onclick={() => handleFilteredEventClick(index)}
 					>
 						<div class="flex items-center gap-1.5">
@@ -350,6 +380,21 @@
 					</button>
 				</div>
 			{/each}
+			{#if hiddenCount > 0}
+				<button
+					class="w-full px-2 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors border-b border-border"
+					onclick={() => (showAll = true)}
+				>
+					Show {hiddenCount} more {sortNewestFirst ? 'older' : 'newer'} event{hiddenCount === 1 ? '' : 's'}
+				</button>
+			{:else if showAll && sortedEvents.length > RENDER_LIMIT}
+				<button
+					class="w-full px-2 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground transition-colors border-b border-border"
+					onclick={() => (showAll = false)}
+				>
+					Collapse to {RENDER_LIMIT}
+				</button>
+			{/if}
 		</div>
 	</div>
 </div>

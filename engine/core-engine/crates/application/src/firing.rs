@@ -255,6 +255,21 @@ pub(crate) fn route_output_tokens(
                         ));
                         continue;
                     }
+                    petri_domain::PlaceKind::Sink => {
+                        // Record-and-discard: the token was schema-validated
+                        // above, but a Sink place never enters the local
+                        // marking. We deliberately do NOT push to
+                        // `produced_tokens`, so the token is absent from the
+                        // marking, the hibernation snapshot, AND the
+                        // TransitionFired/EffectCompleted event's
+                        // `produced_tokens` list. For an effect transition the
+                        // `EffectCompleted` event (with `effect_result`) is
+                        // still journaled, which is what Mekhan's causality
+                        // projector reads — so the audit trail is preserved
+                        // while the otherwise-unbounded telemetry token is
+                        // dropped. See `PlaceKind::Sink`.
+                        continue;
+                    }
                     _ => {
                         // Output tokens inherit the firing's merged consumed
                         // reply-routing — UNLESS this arc opts out via

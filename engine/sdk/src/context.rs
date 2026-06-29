@@ -568,6 +568,23 @@ impl Context {
         self.create_place::<T>(id, name, "signal")
     }
 
+    /// Create a Sink place (record-and-discard).
+    ///
+    /// A sink accepts the producing transition's output token but never
+    /// retains it in the marking — the token is dropped after firing. Use
+    /// for high-volume, consumer-less telemetry places (metric/log/output…)
+    /// whose audit value already lives in the journaled effect event:
+    /// parking those tokens bloats the marking and breaks hibernation
+    /// snapshots. Unlike [`Context::terminal`], a sink does NOT signal net
+    /// completion.
+    pub fn sink<T: Token>(
+        &mut self,
+        id: impl Into<String>,
+        name: impl Into<String>,
+    ) -> PlaceHandle<T> {
+        self.create_place::<T>(id, name, "sink")
+    }
+
     /// Define a resource state machine.
     ///
     /// Resources are external entities (workers, jobs, GPUs) that can be in different states.
