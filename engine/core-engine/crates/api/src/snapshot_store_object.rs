@@ -231,6 +231,7 @@ mod inner {
                 event_count: 7,
                 next_sequence: 7,
                 last_stream_seq: 42,
+                topology: None,
                 version,
             }
         }

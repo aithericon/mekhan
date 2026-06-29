@@ -27,14 +27,29 @@ A **snapshot** makes wake `O(events since last hibernate)`:
 
 1. **Hibernate** captures the folded base — marking, dedup seed, hash-chain tip,
    event count, next sequence — plus the JetStream `last_stream_seq` the consumer
-   had applied, as a `NetSnapshot`.
-2. **Wake** seeds the freshly-built store from the snapshot and starts the consumer
-   at `DeliverPolicy::ByStartSequence(last_stream_seq + 1)`, so only the
+   had applied **and the net's topology**, as a `NetSnapshot`.
+2. **Wake** seeds the freshly-built store from the snapshot, **restores the
+   topology**, and starts the consumer at
+   `DeliverPolicy::ByStartSequence(last_stream_seq + 1)`, so only the
    post-snapshot delta replays.
 
 The snapshot is a **best-effort fast-path**: every failure mode (no snapshot,
 oversized, deserialize error, store unavailable, unknown version) degrades cleanly
 to a full event-log replay. Correctness never depends on it.
+
+#### Topology must travel in the snapshot
+
+Topology is normally hydrated by replaying the `NetInitialized` event, which sits
+at the **head** of the log. A snapshot wake resumes the consumer *past* that point
+(`ByStartSequence(last_stream_seq + 1)`), so `NetInitialized` never replays — a
+delta-wake that relied on the log alone would restore the marking but leave the net
+**topology-less**, and every bridge inject into it would return `NoTopology`
+forever (the symptom that surfaced on hibernated capacity-pool nets). The snapshot
+therefore carries `topology: Option<PetriNet>` (`SNAPSHOT_VERSION = 2`), captured
+from the live topology store at hibernate — capturing the *live* topology (not just
+`NetInitialized`) also preserves any mid-life `update_transition_script` patches.
+A pre-v2 snapshot (no topology) cannot be delta-woken safely, so the wake path skips
+the fast-path for it and full-replays, which re-hydrates topology from the log.
 
 ### Why NOT NATS KV
 
