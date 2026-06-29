@@ -91,9 +91,13 @@ pub struct NetSnapshot {
 pub const SNAPSHOT_VERSION: u32 = 2;
 
 impl NetSnapshot {
-    /// Rebuild a [`DedupSeed`] map from the serialized [`DedupEntry`] list.
-    pub fn dedup_seed(&self) -> DedupSeed {
-        let mut m = DedupSeed::new();
+    /// Rebuild a [`DedupSeed`] ring (at capacity `cap`) from the serialized
+    /// [`DedupEntry`] list. The restored set is already `<= cap` (it was
+    /// captured from a bounded ring), so no eviction fires here; `cap` is passed
+    /// so the restored ring keeps evicting at the store's policy on subsequent
+    /// live inserts.
+    pub fn dedup_seed(&self, cap: usize) -> DedupSeed {
+        let mut m = DedupSeed::with_cap(cap);
         for e in &self.dedup {
             m.insert(
                 (PlaceId::named(e.place_id.clone()), e.dedup_id.clone()),

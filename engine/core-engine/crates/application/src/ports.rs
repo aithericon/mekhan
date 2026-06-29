@@ -1,15 +1,140 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 
 use petri_domain::{
     apply_event_to_marking, DomainEvent, Marking, PersistedEvent, PetriNet, PlaceId, TransitionId,
 };
 use thiserror::Error;
 
-/// `(place_id, dedup_id)` → originating `TokenCreated` event. The idempotency
-/// index ([`crate::idempotency_index::DedupIndex`]) is seeded from this; a
-/// bounded event store contributes the entries of evicted events here so the
-/// dedup window survives prefix eviction.
-pub type DedupSeed = HashMap<(PlaceId, String), PersistedEvent>;
+/// Max distinct one-shot `(place,dedup_id)` entries retained for redelivery
+/// suppression before the OLDEST is FIFO-evicted.
+///
+/// **Why a bounded FIFO window is correct (the retention argument).** A
+/// redeliverable JetStream message is, at any instant, one of the UNACKED set:
+/// the ingress listeners ack only AFTER the resulting `TokenCreated` is durable
+/// (`nats/src/message_loop.rs`, ack-after-persist). So a one-shot id cannot stay
+/// unacked while K *newer* one-shot ids are applied past it — that would require
+/// the engine to apply K more events without acking this one, impossible unless
+/// it crashed (in which case those K were never applied). During hibernation no
+/// applies happen, so the ring is frozen; the unacked-at-hibernate set
+/// redelivers on wake and is still entirely within the most-recent-K window
+/// restored from the snapshot. The redeliverable horizon is therefore bounded by
+/// the summed `max_ack_pending` of the ingress consumers (~6 consumers ×
+/// server-default 1000 ≈ 6000 worst case). `16384` is ~2.7× that nominal ceiling
+/// and orders of magnitude over the *real* applied-but-unacked horizon (a handful
+/// under ack-after-persist). Raise via `PETRI_MAX_DEDUP_ENTRIES` if
+/// `max_ack_pending` is raised on ingress consumers.
+///
+/// Streaming emits pass `dedup_id = None` (Step-1 carve-out) and are never
+/// indexed, so they never consume a slot.
+pub const DEFAULT_MAX_DEDUP_ENTRIES: usize = 16384;
+
+/// Read the dedup-ring capacity from `PETRI_MAX_DEDUP_ENTRIES`, falling back to
+/// [`DEFAULT_MAX_DEDUP_ENTRIES`]. Mirrors the inline `PETRI_MAX_EVENT_TAIL_BYTES`
+/// parse in the infrastructure store; both the live `DedupIndex` and the store's
+/// `base_dedup` read their cap through this single point, so the two windows
+/// cannot drift in policy.
+pub fn default_max_dedup_entries() -> usize {
+    std::env::var("PETRI_MAX_DEDUP_ENTRIES")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_MAX_DEDUP_ENTRIES)
+}
+
+/// Bounded, insertion-ordered FIFO map of `(place_id, dedup_id)` → originating
+/// `TokenCreated` event. Backs BOTH the live idempotency index
+/// ([`crate::idempotency_index::DedupIndex`]) AND the event store's snapshot
+/// seed, so bounding the *type* bounds both with no divergence: on insert beyond
+/// `cap` the OLDEST (first-inserted, still-present) entry is evicted.
+///
+/// Retention only — the content KEY `(place_id, dedup_id)` is unchanged, so
+/// relay/bridge-replay/human cross-consumer dedup all keep working; only the
+/// window is bounded. See [`DEFAULT_MAX_DEDUP_ENTRIES`] for the headroom
+/// argument that proves the most-recent-K window covers every redeliverable
+/// message.
+#[derive(Debug, Clone)]
+pub struct BoundedDedup {
+    map: HashMap<(PlaceId, String), PersistedEvent>,
+    /// First-insertion order; each present key appears exactly once. Always the
+    /// key set of `map`, so `pop_front` is the genuinely-oldest live key.
+    order: VecDeque<(PlaceId, String)>,
+    cap: usize,
+}
+
+impl BoundedDedup {
+    /// New ring at the env-derived default cap ([`default_max_dedup_entries`]).
+    pub fn new() -> Self {
+        Self::with_cap(default_max_dedup_entries())
+    }
+
+    /// New ring with an explicit capacity (deterministic eviction tests).
+    ///
+    /// `cap` is clamped to `>= 1`: a zero cap would evict every key on the same
+    /// `insert` call that added it, silently disabling dedup and re-admitting
+    /// duplicate `TokenCreated` events — a misconfiguration footgun via
+    /// `PETRI_MAX_DEDUP_ENTRIES=0`, not a supported "disable" switch.
+    pub fn with_cap(cap: usize) -> Self {
+        Self {
+            map: HashMap::new(),
+            order: VecDeque::new(),
+            cap: cap.max(1),
+        }
+    }
+
+    /// Insert `key → event`, FIFO-evicting the oldest entry while over capacity.
+    /// Re-inserting an already-present key updates the value and leaves its FIFO
+    /// position unchanged (no double-counting in `order`).
+    pub fn insert(&mut self, key: (PlaceId, String), event: PersistedEvent) {
+        if self.map.insert(key.clone(), event).is_none() {
+            self.order.push_back(key);
+            while self.map.len() > self.cap {
+                match self.order.pop_front() {
+                    Some(old) => {
+                        self.map.remove(&old);
+                    }
+                    None => break,
+                }
+            }
+        }
+    }
+
+    /// Lookup by content key.
+    pub fn get(&self, key: &(PlaceId, String)) -> Option<&PersistedEvent> {
+        self.map.get(key)
+    }
+
+    /// Whether the content key is in the current window.
+    pub fn contains_key(&self, key: &(PlaceId, String)) -> bool {
+        self.map.contains_key(key)
+    }
+
+    /// Number of entries currently retained (`<= cap`).
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Whether the ring is empty.
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
+    /// Iterate the retained `(key, event)` pairs (unordered).
+    pub fn iter(&self) -> impl Iterator<Item = (&(PlaceId, String), &PersistedEvent)> {
+        self.map.iter()
+    }
+}
+
+impl Default for BoundedDedup {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// `(place_id, dedup_id)` → originating `TokenCreated` event, retained in a
+/// bounded FIFO window ([`BoundedDedup`]). The idempotency index
+/// ([`crate::idempotency_index::DedupIndex`]) is seeded from this; a bounded
+/// event store contributes the entries of evicted events here so the dedup
+/// window survives prefix eviction.
+pub type DedupSeed = BoundedDedup;
 
 /// Error type for event store operations.
 #[derive(Error, Debug, Clone)]
@@ -360,6 +485,86 @@ pub trait ActivitySink: Send + Sync {
 mod tests {
     use super::*;
     use petri_domain::{PlaceId, Token, TokenColor, TransitionId};
+
+    /// A `TokenCreated` `PersistedEvent` carrying a deterministic one-shot
+    /// `dedup_id` — the shape the bounded ring indexes.
+    fn one_shot(place: &PlaceId, dedup_id: &str) -> PersistedEvent {
+        PersistedEvent::new(
+            0,
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Unit),
+                place_id: place.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: Some(dedup_id.to_string()),
+            },
+            None,
+        )
+    }
+
+    /// (a) The ring caps at `K` and FIFO-evicts the OLDEST entries first.
+    #[test]
+    fn bounded_dedup_evicts_oldest_beyond_cap() {
+        let place = PlaceId::named("p");
+        let mut ring = BoundedDedup::with_cap(4);
+        for i in 0..6 {
+            let id = format!("id-{i}");
+            ring.insert((place.clone(), id.clone()), one_shot(&place, &id));
+        }
+        assert_eq!(ring.len(), 4, "ring must cap at K=4");
+        // Oldest two (id-0, id-1) evicted.
+        assert!(ring.get(&(place.clone(), "id-0".to_string())).is_none());
+        assert!(ring.get(&(place.clone(), "id-1".to_string())).is_none());
+        // Newest four retained.
+        for i in 2..6 {
+            assert!(
+                ring.contains_key(&(place.clone(), format!("id-{i}"))),
+                "id-{i} (within most-recent-K window) must be retained"
+            );
+        }
+    }
+
+    /// (b) A recently-applied one-shot id is recognized (the redelivery-suppress
+    /// path) and `get` returns its originating event while within the window.
+    #[test]
+    fn bounded_dedup_recognizes_recent_within_window() {
+        let place = PlaceId::named("p");
+        let mut ring = BoundedDedup::with_cap(4);
+        let evt = one_shot(&place, "recent");
+        let evt_seq = evt.sequence;
+        ring.insert((place.clone(), "recent".to_string()), evt);
+        // Fill the rest of the window but stay within K so "recent" survives.
+        for i in 0..3 {
+            let id = format!("filler-{i}");
+            ring.insert((place.clone(), id.clone()), one_shot(&place, &id));
+        }
+        let key = (place.clone(), "recent".to_string());
+        assert!(ring.contains_key(&key), "recent id must still be recognized");
+        assert_eq!(
+            ring.get(&key).map(|e| e.sequence),
+            Some(evt_seq),
+            "get must return the originating event"
+        );
+    }
+
+    /// Re-inserting a present key updates the value WITHOUT advancing its FIFO
+    /// position (no double-count in `order`), so it is not spuriously evicted.
+    #[test]
+    fn bounded_dedup_reinsert_preserves_fifo_position() {
+        let place = PlaceId::named("p");
+        let mut ring = BoundedDedup::with_cap(2);
+        ring.insert((place.clone(), "a".to_string()), one_shot(&place, "a"));
+        ring.insert((place.clone(), "b".to_string()), one_shot(&place, "b"));
+        // Re-touch "a" — must NOT move it to the back of the FIFO order.
+        ring.insert((place.clone(), "a".to_string()), one_shot(&place, "a"));
+        // Insert "c": evicts the genuine oldest ("a"), keeping "b" and "c".
+        ring.insert((place.clone(), "c".to_string()), one_shot(&place, "c"));
+        assert_eq!(ring.len(), 2);
+        assert!(ring.contains_key(&(place.clone(), "b".to_string())));
+        assert!(ring.contains_key(&(place.clone(), "c".to_string())));
+        assert!(!ring.contains_key(&(place.clone(), "a".to_string())));
+    }
 
     #[test]
     fn test_apply_effect_failed_tokens_consumed() {

@@ -174,6 +174,7 @@ The SDK provides a fluent Rust DSL for defining scenarios that compile to AIR (A
 | `PETRI_VALIDATE_SCHEMAS` | `true` | Set to `false` to disable all schema validation |
 | `PETRI_IDLE_TIMEOUT_SECS` | `300` | Idle seconds before a net hibernates (ADR-16) |
 | `PETRI_MAX_EVENT_TAIL_BYTES` | `16777216` | Byte cap on the in-memory event tail (16 MiB); prefix folds into a base marking |
+| `PETRI_MAX_DEDUP_ENTRIES` | `16384` | Max distinct one-shot `(place,dedup_id)` entries retained for redelivery suppression; FIFO-evicts the oldest, bounding BOTH the in-memory idempotency index AND the snapshot dedup set |
 | `PETRI_SNAPSHOT_STORE_ENDPOINT` | — | Object-store endpoint for wake snapshots (ADR-20). **Unset → snapshots disabled** (wake full-replays) |
 | `PETRI_SNAPSHOT_STORE_BACKEND` | `s3` | `s3` \| `local` \| `gcs` \| `azblob` \| `sftp` |
 | `PETRI_SNAPSHOT_STORE_{BUCKET,REGION,PREFIX,ACCESS_KEY,SECRET_KEY}` | — | Snapshot object-store config (independent of `ARTIFACT_STORE_*`) |
