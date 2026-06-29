@@ -39,6 +39,14 @@ use tokio::sync::{oneshot, watch};
 
 use crate::subjects::Subjects;
 
+/// Cap on the pull-consumer prefetch buffer (messages held in client RAM ahead
+/// of the sequential apply loop). Without it, async-nats prefetches a large
+/// default batch; on hydration that pulls the *entire* historical backlog into
+/// memory at once, and on the live consumer it buffers a high-volume crawl
+/// firehose faster than the loop applies it — both balloon engine RSS. Capping
+/// keeps the backlog durably on the JetStream server instead.
+const MAX_MESSAGES_PER_BATCH: usize = 256;
+
 /// Background event consumer that populates the in-memory cache from NATS.
 ///
 /// Created by the store factory and started as a background tokio task.
@@ -209,6 +217,7 @@ impl EventConsumer {
         // Phase 1: Hydration — replay all historical events
         let mut messages = consumer
             .stream()
+            .max_messages_per_batch(MAX_MESSAGES_PER_BATCH)
             .heartbeat(Duration::from_secs(15))
             .messages()
             .await
@@ -308,6 +317,7 @@ impl EventConsumer {
                     // Re-open message stream and drain remaining events
                     messages = consumer
                         .stream()
+                        .max_messages_per_batch(MAX_MESSAGES_PER_BATCH)
                         .heartbeat(Duration::from_secs(15))
                         .messages()
                         .await
@@ -428,6 +438,7 @@ impl EventConsumer {
 
             let mut messages = match live_consumer
                 .stream()
+                .max_messages_per_batch(MAX_MESSAGES_PER_BATCH)
                 .heartbeat(Duration::from_secs(15))
                 .messages()
                 .await

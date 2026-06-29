@@ -33,6 +33,11 @@ use petri_scheduler_bridge::{
 
 use crate::config::ExecutorConfig;
 
+/// Prefetch cap for the executor status/events relay consumers. Bounds the
+/// in-RAM buffer of pulled-but-not-yet-relayed telemetry messages so a metric
+/// firehose can't balloon engine memory (see the consumer setup in `run`).
+const WATCHER_MAX_MESSAGES_PER_BATCH: usize = 64;
+
 /// Ceiling on the serialized byte size of a single `emit`/`scatter` streaming
 /// **item** payload before the engine refuses to park it inline in the net
 /// marking, substituting a slim `{ "__omitted__": … }` placeholder instead.
@@ -225,8 +230,17 @@ impl ExecutorWatcher {
         // Consumer idle heartbeat detects stalled delivery. With ping_interval
         // keeping the TCP connection alive (see NatsConfig), the heartbeat
         // won't fire spuriously over WAN or Docker bridge networks.
+        // Cap the prefetch buffer (messages pulled into client RAM ahead of the
+        // sequential relay loop). These two streams carry the executor TELEMETRY
+        // firehose — `metric`/`progress`/`log`/`phase` events, hundreds per crawl
+        // batch, each a fat JSON payload. Uncapped, async-nats prefetches a large
+        // default batch and buffers the firehose faster than it is relayed+sinked:
+        // a profiled 100k-metric run held ~100k cloned `serde_json::Value`s
+        // (~110 MB live) here — the dominant term in the engine's OOM. The cap
+        // backpressures the pull so JetStream holds the backlog durably instead.
         let mut status_messages = status_consumer
             .stream()
+            .max_messages_per_batch(WATCHER_MAX_MESSAGES_PER_BATCH)
             .heartbeat(Duration::from_secs(15))
             .messages()
             .await
@@ -234,6 +248,7 @@ impl ExecutorWatcher {
 
         let mut event_messages = events_consumer
             .stream()
+            .max_messages_per_batch(WATCHER_MAX_MESSAGES_PER_BATCH)
             .heartbeat(Duration::from_secs(15))
             .messages()
             .await

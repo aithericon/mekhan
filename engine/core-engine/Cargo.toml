@@ -6,6 +6,9 @@ license.workspace = true
 
 [features]
 default = ["executor", "executor-vault-secrets", "nomad", "slurm", "catalogue", "artifact-store"]
+# Heap profiling: builds the engine with dhat's allocator + profiler so it writes
+# dhat-heap.json on graceful shutdown. Investigation-only; never in a release.
+dhat-heap = ["dep:dhat"]
 artifact-store = ["petri-api/artifact-store"]
 catalogue = ["petri-api/catalogue"]
 nomad = ["dep:petri-nomad", "petri-api/nomad"]
@@ -24,6 +27,10 @@ petri-nats.workspace = true
 async-nats.workspace = true
 uuid.workspace = true
 futures.workspace = true
+
+# Heap profiler (feature `dhat-heap` only) — measures LOGICAL live allocations to
+# investigate the engine's memory footprint under load; not built by default.
+dhat = { version = "0.3", optional = true }
 
 # Optional Nomad integration
 petri-nomad = { workspace = true, optional = true }
@@ -51,3 +58,9 @@ parking_lot.workspace = true
 tower-http.workspace = true
 utoipa.workspace = true
 utoipa-swagger-ui.workspace = true
+
+[dev-dependencies]
+# Heap profiler for the `heap_probe` example — measures LOGICAL live allocations
+# (allocator/libc-independent), used to investigate the engine's memory footprint
+# under a metric-heavy event stream. See examples/heap_probe.rs.
+dhat = "0.3"

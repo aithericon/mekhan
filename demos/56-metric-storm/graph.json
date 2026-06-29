@@ -1,0 +1,62 @@
+{
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "slug": "start",
+      "position": { "x": 0, "y": 0 },
+      "data": {
+        "type": "start",
+        "label": "Start",
+        "processName": "Metric Storm",
+        "initial": { "id": "in", "label": "Params", "fields": [] }
+      }
+    },
+    {
+      "id": "storm",
+      "type": "automated_step",
+      "slug": "storm",
+      "position": { "x": 290, "y": 0 },
+      "data": {
+        "type": "automated_step",
+        "label": "Emit metric storm",
+        "description": "Emits a large number of streaming metric + log events (no artifacts, no marking tokens) to reproduce the crawl's metric firehose in isolation for memory profiling.",
+        "executionSpec": {
+          "backendType": "python",
+          "entrypoint": "main.py",
+          "config": {
+            "python": "python3",
+            "requirements": [],
+            "virtualenv": false,
+            "sdk": true,
+            "inherit_env": true,
+            "env": {}
+          }
+        },
+        "output": {
+          "id": "out",
+          "label": "Result",
+          "fields": [
+            { "name": "emitted", "label": "Emitted", "kind": "number", "required": true }
+          ]
+        }
+      }
+    },
+    {
+      "id": "end",
+      "type": "end",
+      "position": { "x": 600, "y": 0 },
+      "data": {
+        "type": "end",
+        "label": "Done",
+        "resultMapping": [
+          { "targetField": "emitted", "expression": "storm.emitted" }
+        ]
+      }
+    }
+  ],
+  "edges": [
+    { "id": "e_start_storm", "source": "start", "target": "storm", "targetHandle": "in", "type": "sequence" },
+    { "id": "e_storm_end", "source": "storm", "target": "end", "targetHandle": "in", "type": "sequence" }
+  ]
+}

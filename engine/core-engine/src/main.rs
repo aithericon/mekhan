@@ -2,6 +2,15 @@ mod config;
 #[allow(dead_code)]
 mod hydration;
 
+/// Heap profiling (build with `--features dhat-heap`). dhat measures LOGICAL live
+/// allocations — what the program holds, independent of the allocator/libc — so it
+/// distinguishes *live data* from *allocator slack*. On graceful shutdown (SIGINT/
+/// SIGTERM → `start_server` returns → `main` returns) the held `Profiler` drops and
+/// writes `dhat-heap.json`. Off by default (system allocator, zero overhead).
+#[cfg(feature = "dhat-heap")]
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 use std::sync::Arc;
 
 use petri_api::HumanIntegrationConfig;
@@ -23,6 +32,11 @@ use crate::config::EngineConfig;
 
 #[tokio::main]
 async fn main() {
+    // Heap profiler guard (feature `dhat-heap`). Held for all of `main`; on
+    // graceful shutdown it drops and writes dhat-heap.json.
+    #[cfg(feature = "dhat-heap")]
+    let _dhat_profiler = dhat::Profiler::new_heap();
+
     // Initialize tracing (override with RUST_LOG env var)
     tracing_subscriber::registry()
         .with(
@@ -723,8 +737,34 @@ async fn start_server(app: axum::Router, port: u16) {
         .unwrap_or_else(|_| panic!("Failed to bind to {}", bind_addr));
 
     axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("Failed to start server");
+}
+
+/// Resolves on SIGINT (Ctrl-C) or SIGTERM so the server returns cleanly, letting
+/// `main` run its shutdown path — and, under `--features dhat-heap`, letting the
+/// held `dhat::Profiler` drop and write its report.
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        if let Ok(mut sig) =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
+            sig.recv().await;
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {}
+        _ = terminate => {}
+    }
+    tracing::info!("Shutdown signal received — stopping server");
 }
 
 async fn ensure_timer_kv(
