@@ -236,6 +236,10 @@ where
         )
         .route("/:net_id/state", get(net_scoped::net_get_state::<E, T, S>))
         .route(
+            "/:net_id/memory",
+            get(net_scoped::net_memory::<E, T, S>),
+        )
+        .route(
             "/:net_id/command/fire/:transition_id",
             post(net_scoped::net_fire_transition::<E, T, S>),
         )
@@ -297,6 +301,10 @@ where
         .route(
             "/api/bridges/check",
             get(super::handlers::check_all_bridges::<E, T, S>),
+        )
+        .route(
+            "/api/debug/memory",
+            get(super::handlers::registry_memory::<E, T, S>),
         )
         .with_state(registry.clone());
 

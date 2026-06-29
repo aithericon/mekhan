@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 use std::sync::RwLock;
 
 use petri_application::net_snapshot::NetSnapshot;
-use petri_application::{DedupSeed, EventRepository, EventStoreError, SnapshotInputs};
+use petri_application::{
+    dedup_seed_bytes, DedupSeed, EventRepository, EventStoreError, EventStoreMemory, SnapshotInputs,
+};
 use petri_domain::{apply_event_to_marking, DomainEvent, Marking, PersistedEvent};
 
 /// Default in-memory tail budget for the per-net event cache. The durable NATS
@@ -292,6 +294,30 @@ impl MemoryEventStore {
         g.tail = VecDeque::new();
         g.tail_bytes = 0;
     }
+
+    /// Approximate in-memory footprint of this store, read directly from the
+    /// folded base + the running `tail_bytes` counter under one read lock.
+    ///
+    /// `tail_bytes` is already maintained on every push/evict, so only the base
+    /// marking and base dedup index are serialized here. `base_dedup_*` reflect
+    /// the PERMANENT (append-only) dedup index — the field to watch for the
+    /// streaming-telemetry leak that historically OOM'd high-volume nets.
+    pub fn memory_report_now(&self) -> EventStoreMemory {
+        let g = self.inner.read().unwrap();
+        EventStoreMemory {
+            tail_bytes: g.tail_bytes,
+            tail_events: g.tail.len(),
+            base_marking_bytes: serde_json::to_vec(&g.base_marking)
+                .map(|b| b.len())
+                .unwrap_or(0),
+            base_dedup_bytes: dedup_seed_bytes(&g.base_dedup),
+            base_dedup_entries: g.base_dedup.len(),
+            base_count: g.base_count,
+            event_count: g.len(),
+            total_bytes: 0,
+        }
+        .finalize()
+    }
 }
 
 impl Default for MemoryEventStore {
@@ -446,6 +472,10 @@ impl EventRepository for MemoryEventStore {
 
     async fn seed_from_snapshot(&self, snapshot: &NetSnapshot) {
         self.seed_from_snapshot(snapshot)
+    }
+
+    async fn memory_report(&self) -> EventStoreMemory {
+        self.memory_report_now()
     }
 }
 
@@ -1265,5 +1295,68 @@ mod tests {
         );
         // The new event is now the chain tip.
         assert_eq!(woken.last_hash(), Some(appended.hash.clone()));
+    }
+
+    /// `memory_report` accounts the three growing regions and stays a faithful
+    /// leak detector: under a high-volume stream of EPHEMERAL (no-dedup) fat
+    /// tokens the tail stays bounded by the cap and the permanent dedup index
+    /// stays O(1), while the folded base marking is where the parked-token bytes
+    /// accumulate. This is exactly the signal an operator needs to tell "marking
+    /// growth" from "the dedup leak" before an OOM.
+    #[tokio::test]
+    async fn memory_report_accounts_regions_and_flags_dedup_bound() {
+        let place = PlaceId::named("metric_log");
+        let cap = 64 * 1024;
+        let store = MemoryEventStore::with_tail_cap(cap);
+
+        // One one-shot dedup-bearing event (must persist in the permanent index).
+        store.load_existing_event(PersistedEvent::new(
+            0,
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Unit),
+                place_id: place.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: Some("one-shot".to_string()),
+            },
+            None,
+        ));
+
+        // N ephemeral fat streaming emits (dedup_id = None) → evicted into base.
+        let n: u64 = 500;
+        for i in 1..=n {
+            store.load_existing_event(streaming_token(i, &place, 2 * 1024));
+        }
+
+        let report = store.memory_report_now();
+
+        // Cursor contract: every event is counted.
+        assert_eq!(report.event_count as u64, n + 1);
+        // Tail is bounded by the cap (+ at most one event of slack).
+        assert!(
+            report.tail_bytes <= cap + 4 * 1024,
+            "tail_bytes {} must stay near the cap {cap}",
+            report.tail_bytes
+        );
+        // The permanent dedup index holds ONLY the one-shot key — not the N
+        // ephemerals. This is the leak-detection signal.
+        assert_eq!(
+            report.base_dedup_entries, 1,
+            "ephemeral streaming emits must not accumulate in the dedup index"
+        );
+        assert!(report.base_dedup_bytes > 0, "the one-shot entry has bytes");
+        // The parked fat tokens live in the folded base marking.
+        assert!(
+            report.base_marking_bytes > report.base_dedup_bytes,
+            "base marking ({}) should dominate the dedup index ({}) here",
+            report.base_marking_bytes,
+            report.base_dedup_bytes
+        );
+        // total_bytes is the sum of the three serialized regions.
+        assert_eq!(
+            report.total_bytes,
+            report.tail_bytes + report.base_marking_bytes + report.base_dedup_bytes
+        );
     }
 }

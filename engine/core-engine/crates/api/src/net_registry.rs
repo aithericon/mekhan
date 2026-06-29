@@ -1598,6 +1598,18 @@ where
         self.nets.read().keys().cloned().collect()
     }
 
+    /// Snapshot of all live net instances `(net_id, instance)`. Clones the `Arc`s
+    /// under the read lock and releases it, so callers can `await` per-instance
+    /// work (e.g. memory accounting) without holding the registry lock.
+    #[allow(clippy::type_complexity)]
+    pub fn instances(&self) -> Vec<(String, Arc<NetInstance<E, T, S>>)> {
+        self.nets
+            .read()
+            .iter()
+            .map(|(id, inst)| (id.clone(), inst.clone()))
+            .collect()
+    }
+
     /// Remove a net instance by ID. Returns the removed instance if it existed.
     pub fn remove(&self, net_id: &str) -> Option<Arc<NetInstance<E, T, S>>> {
         let removed = self.nets.write().remove(net_id);

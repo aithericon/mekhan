@@ -6,7 +6,7 @@
  */
 
 import { connectSse, type SseConnection } from '$lib/net/sse';
-import { createPetriApi, PetriApiError } from '$lib/stores/petri-api';
+import { createPetriApi, PetriApiError, type NetMemory } from '$lib/stores/petri-api';
 import {
 	computeEventSpotlight,
 	computeMarkingDiff,
@@ -80,6 +80,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	type Services = { handlers: string[]; categories: Record<string, string[]> };
 	let analysisReport: AnalysisReport | null = $state(null);
 	let services: Services | null = $state(null);
+
+	// ── Memory footprint ────────────────────────────────────────────────
+	let memory: NetMemory | null = $state(null);
 
 	// ── SSE ─────────────────────────────────────────────────────────────
 	let sseConnection: SseConnection | null = null;
@@ -311,6 +314,14 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		}
 	}
 
+	async function fetchMemory() {
+		try {
+			memory = await api.fetchMemory();
+		} catch {
+			// Non-critical: the memory panel is diagnostic, never fatal.
+		}
+	}
+
 	async function loadScenario(scenario: unknown): Promise<{ success: boolean; error?: string; places_count?: number; transitions_count?: number; tokens_count?: number }> {
 		try {
 			// Envelope-aware: the transport in `petri-api.ts::loadScenario` wraps the
@@ -493,7 +504,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			await fetchTopology();
 			await fetchEvents();
 			await fetchRunMode();
-			await Promise.all([fetchAnalysis(), fetchServices()]);
+			await Promise.all([fetchAnalysis(), fetchServices(), fetchMemory()]);
 			startLiveUpdates();
 		} catch (e: any) {
 			error = `Initialization failed: ${e.message}`;
@@ -527,6 +538,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		get evaluating() { return evaluating; },
 		get analysisReport() { return analysisReport; },
 		get services() { return services; },
+		get memory() { return memory; },
 		get apiBase() { return apiBase; },
 
 		// Name resolution
@@ -550,6 +562,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		saveTransitionScript,
 		fetchAnalysis,
 		fetchServices,
+		fetchMemory,
 		loadScenario,
 
 		// Timeline & selection

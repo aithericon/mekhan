@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use petri_domain::{
     apply_event_to_marking, DomainEvent, Marking, PersistedEvent, PetriNet, PlaceId, TransitionId,
 };
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 /// `(place_id, dedup_id)` → originating `TokenCreated` event. The idempotency
@@ -10,6 +11,66 @@ use thiserror::Error;
 /// bounded event store contributes the entries of evicted events here so the
 /// dedup window survives prefix eviction.
 pub type DedupSeed = HashMap<(PlaceId, String), PersistedEvent>;
+
+/// Approximate in-memory footprint of a single net's event store, in serialized
+/// (JSON) bytes. Serialized size is a faithful proxy for heap footprint: the
+/// store holds these structures live, and JSON is the same representation that
+/// is snapshotted and streamed over NATS.
+///
+/// This is the data behind the per-net memory accounting surfaced by the engine's
+/// `GET /api/debug/memory` endpoint. The fields map 1:1 onto the three growing
+/// in-memory regions a net carries (see [`crate::net_snapshot`] and the bounded
+/// `MemoryEventStore`):
+///
+/// - **tail** — recent events kept verbatim, bounded by `PETRI_MAX_EVENT_TAIL_BYTES`,
+/// - **base marking** — the folded marking of all evicted (parked) tokens,
+/// - **base dedup** — the permanent `(place, dedup_id)` idempotency index, which
+///   is append-only and the historic OOM culprit for high-volume nets.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EventStoreMemory {
+    /// Serialized bytes of the resident event tail (bounded by the tail cap).
+    pub tail_bytes: usize,
+    /// Number of events resident in the tail.
+    pub tail_events: usize,
+    /// Serialized bytes of the folded base marking (all parked/evicted tokens).
+    pub base_marking_bytes: usize,
+    /// Serialized bytes of the permanent base dedup index (keys + events).
+    pub base_dedup_bytes: usize,
+    /// Number of entries in the base dedup index. Watch this for unbounded growth.
+    pub base_dedup_entries: usize,
+    /// Storage-order count of events folded into the base (evicted from the tail).
+    pub base_count: usize,
+    /// Total storage-order event count (`base_count + tail_events`).
+    pub event_count: usize,
+    /// Sum of the byte fields above — the approximate total heap footprint of
+    /// this net's event store.
+    pub total_bytes: usize,
+}
+
+impl EventStoreMemory {
+    /// Sum the serialized byte fields into `total_bytes`. Call after populating
+    /// `tail_bytes`, `base_marking_bytes`, and `base_dedup_bytes`.
+    pub fn finalize(mut self) -> Self {
+        self.total_bytes = self.tail_bytes + self.base_marking_bytes + self.base_dedup_bytes;
+        self
+    }
+}
+
+/// Serialized byte size of a value, used for memory accounting. A serialization
+/// failure counts as `0` — accounting under-reports rather than panicking.
+fn ser_bytes<T: Serialize>(v: &T) -> usize {
+    serde_json::to_vec(v).map(|b| b.len()).unwrap_or(0)
+}
+
+/// Sum the serialized footprint of a [`DedupSeed`]: each entry's originating
+/// event plus its `(place_id, dedup_id)` key. The map itself can't round-trip
+/// through JSON (tuple keys), so the entries are measured individually — which
+/// also matches how the snapshot serializes them ([`crate::net_snapshot::DedupEntry`]).
+pub fn dedup_seed_bytes(seed: &DedupSeed) -> usize {
+    seed.iter()
+        .map(|((place, id), event)| ser_bytes(event) + place.to_string().len() + id.len())
+        .sum()
+}
 
 /// Error type for event store operations.
 #[derive(Error, Debug, Clone)]
@@ -285,6 +346,34 @@ pub trait EventRepository: Send + Sync {
             }
         }
         m
+    }
+
+    /// Approximate in-memory footprint of this store, in serialized bytes.
+    ///
+    /// Intended for the engine's per-net memory accounting (`GET /api/debug/memory`),
+    /// so an operator can see which net is consuming RAM — and specifically
+    /// whether the permanent dedup index is growing unboundedly — before an OOM.
+    ///
+    /// Default folds the generic rebuild inputs ([`marking_base`](Self::marking_base)
+    /// + [`dedup_seed`](Self::dedup_seed)): correct for any impl but allocates.
+    /// The bounded `MemoryEventStore` overrides it to read its already-folded base
+    /// and the running `tail_bytes` counter directly under one lock, without
+    /// re-cloning the full history.
+    async fn memory_report(&self) -> EventStoreMemory {
+        let (base, tail, _extent) = self.marking_base().await;
+        let dedup = self.dedup_seed().await;
+        let tail_bytes: usize = tail.iter().map(ser_bytes).sum();
+        EventStoreMemory {
+            tail_bytes,
+            tail_events: tail.len(),
+            base_marking_bytes: ser_bytes(&base),
+            base_dedup_bytes: dedup_seed_bytes(&dedup),
+            base_dedup_entries: dedup.len(),
+            base_count: self.materialized_floor().await,
+            event_count: self.len().await,
+            total_bytes: 0,
+        }
+        .finalize()
     }
 }
 

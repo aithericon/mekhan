@@ -457,6 +457,12 @@ impl<C: EventRepository + 'static> EventRepository for NatsEventStore<C> {
         self.cache.snapshot_inputs().await
     }
 
+    async fn memory_report(&self) -> petri_application::EventStoreMemory {
+        // Footprint lives entirely in the read cache (the durable log is on
+        // NATS); forward to the bounded store's precise, lock-local report.
+        self.cache.memory_report().await
+    }
+
     async fn seed_from_snapshot(&self, snapshot: &petri_application::NetSnapshot) {
         self.cache.seed_from_snapshot(snapshot).await
     }

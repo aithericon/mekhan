@@ -419,6 +419,12 @@ where
         self.topology.get_topology()
     }
 
+    /// Approximate in-memory footprint of this net's event store, in serialized
+    /// bytes. Powers the engine's per-net memory accounting endpoint.
+    pub async fn memory_report(&self) -> crate::ports::EventStoreMemory {
+        self.events.memory_report().await
+    }
+
     /// Capture the inputs for a hibernation snapshot (full marking, dedup seed,
     /// chain tip, event count, next sequence) from the event store. The
     /// registry's hibernate hook pairs this with the consumer-tracked
