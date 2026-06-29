@@ -10456,6 +10456,78 @@
         }
       }
     },
+    "/api/v1/resources/apply": {
+      "post": {
+        "tags": [
+          "resources"
+        ],
+        "summary": "`POST /api/v1/resources/apply` — path-keyed, hash-idempotent upsert.",
+        "description": "The GitOps / CI entry point (`mekhan resource apply`). Where `create` is\n409-on-exists and `update`/`rotate` are UUID-keyed and ALWAYS bump a version,\n`apply` resolves an existing resource by `(scope, path)` and decides what to\ndo by hashing the submitted config:\n\n- absent             → create v1            → action `created`\n- present, same hash → no write at all      → action `unchanged`\n- present, diff hash → new version          → action `updated`\n- present, diff type → 409 (type is immutable; delete + re-apply)\n\nThis is what makes re-running a CI manifest safe: an unchanged resource\nwrites nothing — no version churn, no Vault round-trip. Secrets arrive inline\nin `config` (the caller — CI — pulls them from Vault and injects them, e.g.\nvia `${VAR}` interpolation in the CLI); mekhan writes them to its own secret\nstore exactly as on the create/rotate paths. Auth mirrors create on the\ncreate branch (Editor on the target scope) and update on the bump branch\n(Editor on the resource ACL); platform scope is admin-flag gated.",
+        "operationId": "apply_resource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateResourceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resource upserted (created / updated / unchanged)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResourceResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Editor role (scope or resource) required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Existing resource has a different type",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Secret backend write failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/resources/types": {
       "get": {
         "tags": [
@@ -17468,6 +17540,23 @@
                 "$ref": "#/components/schemas/SourceRef"
               }
             ]
+          }
+        }
+      },
+      "ApplyResourceResponse": {
+        "type": "object",
+        "description": "Outcome of `POST /api/v1/resources/apply` — the path-keyed, hash-idempotent\nupsert used by the CLI / CI GitOps flow. `action` reports what the apply did\nso a pipeline can log it (and so re-running the same manifest is visibly a\nno-op): `created` (resource did not exist → v1 written), `updated` (config\nchanged → new version), or `unchanged` (config hashed identically → nothing\nwritten). `resource` is the resulting summary either way.",
+        "required": [
+          "action",
+          "resource"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "description": "`created` | `updated` | `unchanged`."
+          },
+          "resource": {
+            "$ref": "#/components/schemas/ResourceSummary"
           }
         }
       },

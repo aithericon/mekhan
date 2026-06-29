@@ -3514,6 +3514,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/resources/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/resources/apply` — path-keyed, hash-idempotent upsert.
+         * @description The GitOps / CI entry point (`mekhan resource apply`). Where `create` is
+         *     409-on-exists and `update`/`rotate` are UUID-keyed and ALWAYS bump a version,
+         *     `apply` resolves an existing resource by `(scope, path)` and decides what to
+         *     do by hashing the submitted config:
+         *
+         *     - absent             → create v1            → action `created`
+         *     - present, same hash → no write at all      → action `unchanged`
+         *     - present, diff hash → new version          → action `updated`
+         *     - present, diff type → 409 (type is immutable; delete + re-apply)
+         *
+         *     This is what makes re-running a CI manifest safe: an unchanged resource
+         *     writes nothing — no version churn, no Vault round-trip. Secrets arrive inline
+         *     in `config` (the caller — CI — pulls them from Vault and injects them, e.g.
+         *     via `${VAR}` interpolation in the CLI); mekhan writes them to its own secret
+         *     store exactly as on the create/rotate paths. Auth mirrors create on the
+         *     create branch (Editor on the target scope) and update on the bump branch
+         *     (Editor on the resource ACL); platform scope is admin-flag gated.
+         */
+        post: operations["apply_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/resources/types": {
         parameters: {
             query?: never;
@@ -5982,6 +6018,19 @@ export interface components {
              */
             name?: string | null;
             source_ref?: null | components["schemas"]["SourceRef"];
+        };
+        /**
+         * @description Outcome of `POST /api/v1/resources/apply` — the path-keyed, hash-idempotent
+         *     upsert used by the CLI / CI GitOps flow. `action` reports what the apply did
+         *     so a pipeline can log it (and so re-running the same manifest is visibly a
+         *     no-op): `created` (resource did not exist → v1 written), `updated` (config
+         *     changed → new version), or `unchanged` (config hashed identically → nothing
+         *     written). `resource` is the resulting summary either way.
+         */
+        ApplyResourceResponse: {
+            /** @description `created` | `updated` | `unchanged`. */
+            action: string;
+            resource: components["schemas"]["ResourceSummary"];
         };
         /**
          * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
@@ -23222,6 +23271,66 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret backend write failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    apply_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateResourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource upserted (created / updated / unchanged) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResourceResponse"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role (scope or resource) required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Existing resource has a different type */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

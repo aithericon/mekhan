@@ -524,6 +524,8 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
             handlers::resources::create_resource
         ))
         .routes(routes!(handlers::resources::list_resource_types))
+        // Path-keyed, hash-idempotent upsert — the CLI / CI GitOps entry point.
+        .routes(routes!(handlers::resources::apply_resource))
         .routes(routes!(
             handlers::resources::get_resource,
             handlers::resources::update_resource,

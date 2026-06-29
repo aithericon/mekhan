@@ -141,6 +141,24 @@ async fn post_create(app: &Router, body: Value) -> (StatusCode, Value) {
     (status, body)
 }
 
+async fn post_apply(app: &Router, body: Value) -> (StatusCode, Value) {
+    let resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/resources/apply")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = resp.status();
+    let body = body_json(resp.into_body()).await;
+    (status, body)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
@@ -600,4 +618,136 @@ async fn audit_returns_one_row_per_write_action() {
         .collect();
     actions.sort();
     assert_eq!(actions, vec!["create", "delete", "rotate"]);
+}
+
+#[tokio::test]
+async fn apply_upserts_idempotently_by_content_hash() {
+    let (app, db, store) = resources_test_app().await;
+
+    // 1. First apply of a new path → CREATED at v1.
+    let (status, body) = post_apply(
+        &app,
+        json!({
+            "path": "ci_pg",
+            "resource_type": "postgres",
+            "config": pg_config_full(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "apply create failed: {body}");
+    assert_eq!(body["action"], "created");
+    assert_eq!(body["resource"]["latest_version"].as_i64(), Some(1));
+    let id = Uuid::parse_str(body["resource"]["id"].as_str().unwrap()).unwrap();
+
+    // 2. Re-apply the SAME config, but with object keys in a different order.
+    //    The canonical hash must ignore key order → UNCHANGED, still v1.
+    let (status, body) = post_apply(
+        &app,
+        json!({
+            "path": "ci_pg",
+            "resource_type": "postgres",
+            "config": {
+                "sslmode": "require",
+                "password": "hunter2",
+                "database": "app",
+                "username": "app_rw",
+                "port": 5432,
+                "host": "db.example.internal"
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "re-apply failed: {body}");
+    assert_eq!(
+        body["action"], "unchanged",
+        "reordered keys must hash equal"
+    );
+    assert_eq!(body["resource"]["latest_version"].as_i64(), Some(1));
+
+    // 3. Apply a CHANGED config (rotated secret only) → UPDATED to v2, and the
+    //    new secret lands at the new version's vault path. This proves a secret
+    //    change is detected even though secrets never round-trip on a read.
+    let (status, body) = post_apply(
+        &app,
+        json!({
+            "path": "ci_pg",
+            "resource_type": "postgres",
+            "config": {
+                "host": "db.example.internal",
+                "port": 5432,
+                "database": "app",
+                "username": "app_rw",
+                "password": "rotated-pw",
+                "sslmode": "require"
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "apply update failed: {body}");
+    assert_eq!(body["action"], "updated");
+    assert_eq!(body["resource"]["latest_version"].as_i64(), Some(2));
+
+    let workspace_id =
+        sqlx::query_scalar::<_, Uuid>("SELECT workspace_id FROM resources WHERE id = $1")
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    let secrets = store
+        .get_version(&vault_path_for(workspace_id, id, 2))
+        .await
+        .expect("v2 vault path must be populated");
+    assert_eq!(secrets["password"], "rotated-pw");
+
+    // 4. Re-apply the v2 config again → UNCHANGED, still v2 (no churn).
+    let (status, body) = post_apply(
+        &app,
+        json!({
+            "path": "ci_pg",
+            "resource_type": "postgres",
+            "config": {
+                "host": "db.example.internal",
+                "port": 5432,
+                "database": "app",
+                "username": "app_rw",
+                "password": "rotated-pw",
+                "sslmode": "require"
+            },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["action"], "unchanged");
+    assert_eq!(body["resource"]["latest_version"].as_i64(), Some(2));
+}
+
+#[tokio::test]
+async fn apply_rejects_type_change_on_existing_path() {
+    let (app, _db, _store) = resources_test_app().await;
+    let (status, _) = post_apply(
+        &app,
+        json!({
+            "path": "typed",
+            "resource_type": "postgres",
+            "config": pg_config_full(),
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // Same path, different type → 409 (type is immutable across apply).
+    let (status, body) = post_apply(
+        &app,
+        json!({
+            "path": "typed",
+            "resource_type": "openai",
+            "config": { "base_url": "https://api.openai.com", "api_key": "sk-x" },
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "got {body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap_or("")
+        .contains("different type"));
 }
