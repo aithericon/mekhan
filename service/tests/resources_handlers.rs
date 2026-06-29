@@ -746,8 +746,11 @@ async fn apply_rejects_type_change_on_existing_path() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT, "got {body}");
-    assert!(body["error"]
-        .as_str()
-        .unwrap_or("")
-        .contains("different type"));
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap_or("")
+            .contains("already exists with type"),
+        "expected a type-immutability conflict message; got: {body}"
+    );
 }
