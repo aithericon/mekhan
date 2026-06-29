@@ -13,7 +13,6 @@
 //! stream emits) is *not* used as the dedup key — that conflation caused
 //! streaming metric tokens to be silently dropped.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use petri_domain::{PersistedEvent, PlaceId};
@@ -21,7 +20,11 @@ use tokio::sync::{OnceCell, RwLock};
 
 use crate::EventRepository;
 
-type Map = HashMap<(PlaceId, String), PersistedEvent>;
+/// Bounded FIFO ring (`crate::DedupSeed` == `BoundedDedup`): self-caps at K and
+/// FIFO-evicts the oldest entry, so the live index can no longer grow without
+/// bound. The seed it is initialized from (`events.dedup_seed()`) is the same
+/// bounded type carrying the store's cap.
+type Map = crate::DedupSeed;
 
 /// Lazy-populated map from `(place_id, dedup_id)` to the originating
 /// `TokenCreated` event. First touch scans the full event log to seed,

@@ -50,7 +50,15 @@ pub async fn start_causality_ingest(
         }
     };
 
-    let mut messages = match consumer.messages().await {
+    // Cap the pull batch (same incident rationale as the inventory-fold and
+    // step-executions consumers): this loop processes one message at a time
+    // (sequential DB writes per event), so a high-volume crawl streaming
+    // hundreds of telemetry events/sec outpaces it. An UNCAPPED prefetch lets
+    // the async_nats client buffer whole default-size batches of unacked
+    // messages in memory, growing ~5 MB/s until the service OOMs. A small
+    // window backpressures the pull so JetStream holds the backlog durably
+    // instead; 8 × worst-case seconds stays well inside ack_wait.
+    let mut messages = match consumer.stream().max_messages_per_batch(8).messages().await {
         Ok(m) => m,
         Err(e) => {
             tracing::error!("failed to start causality message stream: {e}");

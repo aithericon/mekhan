@@ -41,6 +41,11 @@ pub struct MemoryEventStore {
     /// Eviction threshold in serialized bytes. The tail is trimmed (oldest
     /// folded into base) until `tail_bytes <= cap` OR `tail.len() == 1`.
     tail_cap_bytes: usize,
+    /// Max distinct one-shot `(place,dedup_id)` entries the `base_dedup` ring
+    /// retains before FIFO-evicting the oldest (see
+    /// [`petri_application::DEFAULT_MAX_DEDUP_ENTRIES`]). Carried so `reset` /
+    /// `seed_from_snapshot` rebuild the ring at the same cap.
+    dedup_cap: usize,
 }
 
 struct Inner {
@@ -74,11 +79,11 @@ struct Inner {
 }
 
 impl Inner {
-    fn empty() -> Self {
+    fn empty(dedup_cap: usize) -> Self {
         Self {
             base_count: 0,
             base_marking: Marking::new(),
-            base_dedup: DedupSeed::new(),
+            base_dedup: DedupSeed::with_cap(dedup_cap),
             base_last_hash: None,
             tail: VecDeque::new(),
             tail_bytes: 0,
@@ -141,21 +146,31 @@ fn push_tail(g: &mut Inner, e: PersistedEvent, cap: usize) {
 
 impl MemoryEventStore {
     /// Construct with the tail cap read from `PETRI_MAX_EVENT_TAIL_BYTES`
-    /// (default [`DEFAULT_MAX_EVENT_TAIL_BYTES`]).
+    /// (default [`DEFAULT_MAX_EVENT_TAIL_BYTES`]) and the dedup-ring cap from
+    /// `PETRI_MAX_DEDUP_ENTRIES` (default
+    /// [`petri_application::DEFAULT_MAX_DEDUP_ENTRIES`]).
     pub fn new() -> Self {
         let cap = std::env::var("PETRI_MAX_EVENT_TAIL_BYTES")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_MAX_EVENT_TAIL_BYTES);
-        Self::with_tail_cap(cap)
+        Self::with_caps(cap, petri_application::default_max_dedup_entries())
     }
 
-    /// Construct with an explicit tail cap in serialized bytes. Useful for
-    /// deterministic tests of the eviction path.
+    /// Construct with an explicit tail cap in serialized bytes, defaulting the
+    /// dedup-ring cap from the env. Useful for deterministic tests of the
+    /// byte-eviction path; ~20 existing callers rely on this signature.
     pub fn with_tail_cap(tail_cap_bytes: usize) -> Self {
+        Self::with_caps(tail_cap_bytes, petri_application::default_max_dedup_entries())
+    }
+
+    /// Construct with explicit tail-byte AND dedup-entry caps. Used for
+    /// deterministic tests of the bounded dedup ring.
+    pub fn with_caps(tail_cap_bytes: usize, dedup_cap: usize) -> Self {
         Self {
-            inner: RwLock::new(Inner::empty()),
+            inner: RwLock::new(Inner::empty(dedup_cap)),
             tail_cap_bytes,
+            dedup_cap,
         }
     }
 
@@ -282,7 +297,7 @@ impl MemoryEventStore {
     pub fn seed_from_snapshot(&self, snapshot: &NetSnapshot) {
         let mut g = self.inner.write().unwrap();
         g.base_marking = snapshot.marking.clone();
-        g.base_dedup = snapshot.dedup_seed();
+        g.base_dedup = snapshot.dedup_seed(self.dedup_cap);
         g.base_last_hash = snapshot.last_hash.clone();
         g.base_count = snapshot.event_count as usize;
         g.next_sequence = snapshot.next_sequence;
@@ -362,7 +377,7 @@ impl EventRepository for MemoryEventStore {
     }
 
     async fn reset(&self) {
-        *self.inner.write().unwrap() = Inner::empty();
+        *self.inner.write().unwrap() = Inner::empty(self.dedup_cap);
     }
 
     async fn current_sequence(&self) -> u64 {
@@ -1153,6 +1168,59 @@ mod tests {
         assert!(
             seed.contains_key(&(place.clone(), "dk-1".to_string())),
             "dedup key must survive the snapshot round-trip"
+        );
+    }
+
+    /// (d) Bounded dedup ring: a snapshot captured from a store with dedup cap
+    /// `K` holds at most `K` dedup entries, and seeding a fresh `K`-capped store
+    /// from it recognizes a recent (within-window) id while an evicted-oldest id
+    /// stays absent. Pins the retention-only fix: the snapshot `dedup` set is now
+    /// bounded by `K` (was unbounded/append-only).
+    #[tokio::test]
+    async fn snapshot_roundtrip_bounds_dedup_and_restores_recent() {
+        let place = PlaceId::named("p");
+        const K: usize = 4;
+        // Large tail cap (events stay in the tail; the bound is enforced purely
+        // by the dedup ring's K, exercised via the clone in dedup_seed_full).
+        let src = MemoryEventStore::with_caps(64 * 1024, K);
+
+        // 6 distinct one-shot TokenCreated events → ring must cap to K=4,
+        // evicting the two oldest (id-0, id-1) and keeping id-2..=id-5.
+        for i in 0..6u64 {
+            let id = format!("id-{i}");
+            src.load_existing_event(PersistedEvent::new(
+                i,
+                DomainEvent::TokenCreated {
+                    token: Token::new(TokenColor::Unit),
+                    place_id: place.clone(),
+                    place_name: None,
+                    workflow_id: None,
+                    signal_key: None,
+                    dedup_id: Some(id),
+                },
+                None,
+            ));
+        }
+
+        let snapshot = src.snapshot_inputs_now().into_snapshot();
+        assert!(
+            snapshot.dedup.len() <= K,
+            "snapshot dedup set must be bounded by K={K}, got {}",
+            snapshot.dedup.len()
+        );
+
+        // Seed a fresh K-capped store from the snapshot.
+        let woken = MemoryEventStore::with_caps(64 * 1024, K);
+        woken.seed_from_snapshot(&snapshot);
+        let seed = woken.dedup_seed().await;
+        assert!(seed.len() <= K, "restored ring must stay bounded by K");
+        assert!(
+            seed.contains_key(&(place.clone(), "id-5".to_string())),
+            "a recent within-window id must be recognized after wake"
+        );
+        assert!(
+            !seed.contains_key(&(place.clone(), "id-0".to_string())),
+            "an evicted-oldest id must NOT reappear after wake"
         );
     }
 
