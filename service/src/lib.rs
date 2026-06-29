@@ -737,6 +737,24 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(handlers::invites::resend_invite))
         .routes(routes!(handlers::invites::revoke_invite))
         .routes(routes!(handlers::invites::accept_invite))
+        // Service accounts — non-human, WORKSPACE-OWNED API principals (survive
+        // member offboarding). Human-Admin-gated management; machine principals
+        // (`sat_`/`rnr_`/`wkr_`) are explicitly refused so a service account
+        // can never mint more service accounts. The `sat_` bearer itself is
+        // dispatched in require_auth_middleware.
+        .routes(routes!(
+            handlers::service_accounts::create_service_account,
+            handlers::service_accounts::list_service_accounts
+        ))
+        .routes(routes!(
+            handlers::service_accounts::patch_service_account,
+            handlers::service_accounts::delete_service_account
+        ))
+        .routes(routes!(
+            handlers::service_accounts::create_sa_token,
+            handlers::service_accounts::list_sa_tokens
+        ))
+        .routes(routes!(handlers::service_accounts::revoke_sa_token))
         // Object grants (Phase 3) — per-object ACLs for folders / templates /
         // instances. GET = effective access list; PUT/DELETE edit direct grants.
         .routes(routes!(handlers::object_grants::list_folder_grants))

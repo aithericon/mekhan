@@ -13,6 +13,7 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import UserChip from '$lib/components/iam/UserChip.svelte';
 	import RoleSelect from '$lib/components/iam/RoleSelect.svelte';
+	import ServiceAccounts from '$lib/components/workspace/ServiceAccounts.svelte';
 	import {
 		Card,
 		CardHeader,
@@ -403,6 +404,9 @@
 					{/if}
 				</CardContent>
 			</Card>
+
+			<!-- Service accounts — workspace-owned API principals (survive offboarding) -->
+			<ServiceAccounts {workspaceId} {canAdmin} />
 
 			<!-- Folders (managed top-level, scoped to the active workspace) -->
 			<Card data-testid="folders-card">

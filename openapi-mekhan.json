@@ -17066,6 +17066,483 @@
         }
       }
     },
+    "/api/v1/workspaces/{workspace_id}/service-accounts": {
+      "get": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "GET /api/v1/workspaces/{workspace_id}/service-accounts — human-Admin-gated\nlist of ALL service accounts in the workspace (they are workspace-owned).",
+        "operationId": "list_service_accounts",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service accounts for the workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceAccountSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "POST /api/v1/workspaces/{workspace_id}/service-accounts — human-Admin-gated.",
+        "operationId": "create_service_account",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServiceAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Service account created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name/role",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}": {
+      "delete": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "DELETE .../service-accounts/{sa_id} — hard delete (CASCADE drops its tokens).",
+        "operationId": "delete_service_account",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sa_id",
+            "in": "path",
+            "description": "Service account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "PATCH .../service-accounts/{sa_id} — rename and/or toggle the disabled state.",
+        "operationId": "patch_service_account",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sa_id",
+            "in": "path",
+            "description": "Service account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PatchServiceAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated service account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceAccountSummary"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already in use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}/tokens": {
+      "get": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "GET .../service-accounts/{sa_id}/tokens — metadata only; NEVER the secret.",
+        "operationId": "list_sa_tokens",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sa_id",
+            "in": "path",
+            "description": "Service account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tokens for the service account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ServiceAccountTokenSummary"
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "POST .../service-accounts/{sa_id}/tokens — mint a `sat_` token; the secret is\nreturned ONCE.",
+        "operationId": "create_sa_token",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sa_id",
+            "in": "path",
+            "description": "Service account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateServiceAccountTokenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Token created (secret shown once)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedServiceAccountToken"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid name",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Service account not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}/tokens/{token_id}": {
+      "delete": {
+        "tags": [
+          "service-accounts"
+        ],
+        "summary": "DELETE .../service-accounts/{sa_id}/tokens/{token_id} — revoke a token. The\nJOIN to `service_accounts` re-asserts the token's SA is in `workspace_id`.",
+        "operationId": "revoke_sa_token",
+        "parameters": [
+          {
+            "name": "workspace_id",
+            "in": "path",
+            "description": "Workspace id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "sa_id",
+            "in": "path",
+            "description": "Service account id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "description": "Token id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Revoked"
+          },
+          "403": {
+            "description": "Admin role required / machine principal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Token not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/healthz": {
       "get": {
         "tags": [
@@ -20979,6 +21456,49 @@
           }
         }
       },
+      "CreateServiceAccountRequest": {
+        "type": "object",
+        "description": "Request body for `POST /api/v1/workspaces/{workspace_id}/service-accounts`.",
+        "required": [
+          "name",
+          "role"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "One of `viewer` | `editor` | `admin`. `owner` is rejected with 400."
+          }
+        }
+      },
+      "CreateServiceAccountTokenRequest": {
+        "type": "object",
+        "description": "Request body for `POST .../service-accounts/{sa_id}/tokens`.",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Optional RFC 3339 expiry. `None` = never expires."
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateTemplateRequest": {
         "type": "object",
         "required": [
@@ -21192,6 +21712,35 @@
           },
           "token": {
             "type": "string"
+          }
+        }
+      },
+      "CreatedServiceAccountToken": {
+        "type": "object",
+        "description": "Response for a freshly-minted service-account token. `secret` is the full\n`sat_{id}.{secret}` credential, returned ONCE and never stored in plaintext.",
+        "required": [
+          "id",
+          "name",
+          "secret"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The full `sat_{id}.{secret}` token — shown exactly once."
           }
         }
       },
@@ -29867,6 +30416,25 @@
           }
         }
       },
+      "PatchServiceAccountRequest": {
+        "type": "object",
+        "description": "Request body for `PATCH .../service-accounts/{sa_id}`. Both fields optional —\nrename and/or toggle the disabled state.",
+        "properties": {
+          "disabled": {
+            "type": [
+              "boolean",
+              "null"
+            ],
+            "description": "`true` ⇒ set `disabled_at = now()`; `false` ⇒ clear it (re-enable)."
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "PdfSettings": {
         "type": "object",
         "properties": {
@@ -32424,6 +32992,91 @@
             "type": "string"
           },
           "value": {
+            "type": "string"
+          }
+        }
+      },
+      "ServiceAccountSummary": {
+        "type": "object",
+        "description": "Service-account list/summary row. MUST NOT carry any secret material.",
+        "required": [
+          "id",
+          "name",
+          "role",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The human admin who created the SA, or `None` if that account was deleted."
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "disabled_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "Non-NULL ⇒ disabled; every token of a disabled SA is rejected."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string",
+            "description": "Fixed workspace role: `viewer` | `editor` | `admin` (never `owner`)."
+          }
+        }
+      },
+      "ServiceAccountTokenSummary": {
+        "type": "object",
+        "description": "Token metadata row. NEVER carries `token_hash` or the secret.",
+        "required": [
+          "id",
+          "name",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_used_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
             "type": "string"
           }
         }

@@ -269,6 +269,19 @@ pub async fn require_auth_middleware(
             req.extensions_mut().insert(user);
             return Ok(next.run(req).await);
         }
+        // Service-account credential path: a `sat_`-prefixed bearer resolves
+        // against the local `service_account_tokens`/`service_accounts` tables to
+        // a WORKSPACE-OWNED, non-human principal. Its workspace + role are FIXED
+        // by the SA row (offboarding-proof), so — like `rnr_`/`wkr_` — there is
+        // NO `apply_override`: an attached active-workspace cookie can never
+        // re-scope it. Any non-`sat_` bearer or a failed verify still falls
+        // through UNCHANGED to the cookie path below.
+        if token.starts_with("sat_") {
+            let user = super::service_account_token::verify_service_account_token(&state.db, token)
+                .await?;
+            req.extensions_mut().insert(user);
+            return Ok(next.run(req).await);
+        }
     }
 
     let jar = CookieJar::from_headers(req.headers());

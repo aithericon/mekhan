@@ -31,6 +31,12 @@ pub const REG_TOKEN_PREFIX: &str = "rt_";
 /// `<prefix>{id}.{secret}` shape + mint/parse/verify helpers below; verified by
 /// [`crate::auth::user_pat`] against the `user_pats` table.
 pub const USER_PAT_TOKEN_PREFIX: &str = "uat_";
+/// Prefix of a workspace SERVICE-ACCOUNT token. Shares the same
+/// `<prefix>{id}.{secret}` shape + mint/parse/verify helpers below; verified by
+/// [`crate::auth::service_account_token`] against the `service_account_tokens`
+/// table. Unlike `uat_` it resolves to a NON-human, workspace-owned principal
+/// that survives member offboarding.
+pub const SERVICE_ACCOUNT_TOKEN_PREFIX: &str = "sat_";
 
 // ── DB rows ────────────────────────────────────────────────────────────────
 
@@ -604,6 +610,20 @@ mod tests {
             parse_token(REG_TOKEN_PREFIX, &minted.full_token).expect("parse should succeed");
         assert_eq!(parsed_id, id);
         assert!(verify_secret(&secret, &minted.token_hash));
+    }
+
+    #[test]
+    fn service_account_token_round_trip() {
+        let id = Uuid::new_v4();
+        let minted = mint_token(SERVICE_ACCOUNT_TOKEN_PREFIX, id);
+        assert!(minted.full_token.starts_with("sat_"));
+        let (parsed_id, secret) = parse_token(SERVICE_ACCOUNT_TOKEN_PREFIX, &minted.full_token)
+            .expect("parse should succeed");
+        assert_eq!(parsed_id, id);
+        assert!(verify_secret(&secret, &minted.token_hash));
+        // A `sat_` token must NOT parse under the human-PAT prefix (no cross-path
+        // confusion between the human `uat_` and machine `sat_` credential families).
+        assert!(parse_token(USER_PAT_TOKEN_PREFIX, &minted.full_token).is_none());
     }
 
     #[test]
