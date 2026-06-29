@@ -89,6 +89,10 @@ impl IntoResponse for AuthError {
                 StatusCode::SERVICE_UNAVAILABLE,
                 "authentication backend unavailable".to_string(),
             ),
+            // The only 403: authenticated, but the principal's tenant is
+            // ambiguous and can't be auto-picked (a PAT with several reachable
+            // workspaces and no scope/default). Surface the prescribed message.
+            AuthError::WorkspaceAmbiguous => (StatusCode::FORBIDDEN, self.to_string()),
             AuthError::Internal(_) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "internal auth error".to_string(),
@@ -228,13 +232,17 @@ pub async fn require_auth_middleware(
     // User PAT path for non-interactive clients (CI `mekhan apply`): a
     // `uat_`-prefixed bearer resolves against the local `user_pats` table to the
     // OWNING human principal (mekhan-native, offline in dev_noop — this replaces
-    // the retired Zitadel RFC 7662 introspection path). Unlike the rnr_/wkr_
-    // machine paths below, a user PAT acts AS the human, so it honors the
-    // active-workspace cookie via `apply_override` exactly like the cookie path.
+    // the retired Zitadel RFC 7662 introspection path). Unlike the cookie session,
+    // a workspace-scoped PAT is PINNED to the workspace bound at mint
+    // (verify_user_pat sets AuthUser.workspace_id = pat.workspace_id and
+    // fail-closed-validates live membership). It therefore does NOT honor the
+    // active-workspace cookie: that cookie is the interactive path's scope, and
+    // composing it with a PAT would let a token scoped to a low-blast-radius
+    // workspace act in another simply by attaching a crafted cookie, defeating
+    // the fixed-at-mint scoping guarantee. So no `apply_override` here.
     if let Some(token) = bearer_token(req.headers()) {
         if token.starts_with("uat_") {
-            let mut user = super::user_pat::verify_user_pat(&state, token).await?;
-            super::active_workspace::apply_override(&state.db, &mut user, req.headers()).await;
+            let user = super::user_pat::verify_user_pat(&state, token).await?;
             req.extensions_mut().insert(user);
             return Ok(next.run(req).await);
         }

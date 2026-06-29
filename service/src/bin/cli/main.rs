@@ -13,6 +13,7 @@ mod logs;
 mod publish;
 mod pull;
 mod push;
+mod resource;
 mod run;
 mod status;
 mod test_cmd;
@@ -165,6 +166,18 @@ enum Commands {
         action: DemosAction,
     },
 
+    /// Manage typed-credential / capacity resources (the things workflows bind
+    /// at publish time: databases, LLM providers, SMTP, runner pools, …).
+    ///
+    /// `apply` is a path-keyed, hash-idempotent upsert built for CI: re-running
+    /// the same manifest writes nothing unless the config changed. Secrets stay
+    /// out of the repo — manifests hold `${VAR}` placeholders the CLI fills from
+    /// the environment at apply time (CI pulls them from Vault into env first).
+    Resource {
+        #[command(subcommand)]
+        action: ResourceAction,
+    },
+
     /// Print the OpenAPI 3 spec to stdout (no DB or NATS required).
     /// Used by the frontend codegen pipeline to regenerate
     /// `app/src/lib/api/v1/schema.d.ts`.
@@ -194,6 +207,72 @@ enum DemosAction {
     /// Remove every seeded demo family, then re-seed from the server's
     /// on-disk demos directory. Overwrites any user edits.
     Reseed,
+}
+
+#[derive(Subcommand)]
+enum ResourceAction {
+    /// Idempotently upsert resources from manifest files / directories / stdin,
+    /// or built inline from flags. Re-running an unchanged manifest is a no-op
+    /// (the server compares a content hash). `${VAR}` / `${VAR:-default}` in a
+    /// manifest (and in `--set` values) is interpolated from the environment,
+    /// so secrets pulled from Vault into env vars never have to touch disk.
+    Apply {
+        /// Manifest files, directories of `*.json`, or `-` for stdin.
+        /// Optional when an inline resource is built with `--path`/`--type`.
+        paths: Vec<String>,
+
+        /// Build a single resource inline (no file). Requires `--type`.
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Resource type for an inline apply (e.g. `postgres`, `openai`).
+        #[arg(long = "type")]
+        resource_type: Option<String>,
+
+        /// UI label for an inline apply (defaults to `--path`).
+        #[arg(long)]
+        display_name: Option<String>,
+
+        /// Workspace id override (defaults to the token's workspace).
+        #[arg(long)]
+        workspace: Option<String>,
+
+        /// Placement scope: workspace (default), folder, template, platform.
+        #[arg(long)]
+        scope_kind: Option<String>,
+
+        /// Owner id for a folder/template scope.
+        #[arg(long)]
+        scope_id: Option<String>,
+
+        /// Create/keep the resource restricted (no workspace-role floor).
+        #[arg(long)]
+        restricted: bool,
+
+        /// Override / add a `config` field. Repeatable. `key=value`; the value
+        /// is env-interpolated then parsed as JSON (bare string if not JSON).
+        #[arg(short = 's', long = "set", value_name = "KEY=VALUE")]
+        set: Vec<String>,
+    },
+
+    /// List resources, optionally filtered by `--type`.
+    List {
+        /// Filter by resource type.
+        #[arg(long = "type")]
+        resource_type: Option<String>,
+    },
+
+    /// Show one resource's detail (secrets are server-redacted).
+    Get {
+        /// Resource UUID or `path`.
+        id_or_path: String,
+    },
+
+    /// Soft-delete a resource.
+    Delete {
+        /// Resource UUID or `path`.
+        id_or_path: String,
+    },
 }
 
 #[tokio::main]
@@ -248,6 +327,40 @@ async fn main() -> anyhow::Result<()> {
             };
             demos::run(&cli.server, act).await
         }
+        Commands::Resource { action } => match action {
+            ResourceAction::Apply {
+                paths,
+                path,
+                resource_type,
+                display_name,
+                workspace,
+                scope_kind,
+                scope_id,
+                restricted,
+                set,
+            } => {
+                resource::apply(
+                    &cli.server,
+                    &paths,
+                    path.as_deref(),
+                    resource_type.as_deref(),
+                    display_name.as_deref(),
+                    workspace.as_deref(),
+                    scope_kind.as_deref(),
+                    scope_id.as_deref(),
+                    restricted,
+                    &set,
+                )
+                .await
+            }
+            ResourceAction::List { resource_type } => {
+                resource::list(&cli.server, resource_type.as_deref()).await
+            }
+            ResourceAction::Get { id_or_path } => resource::get(&cli.server, &id_or_path).await,
+            ResourceAction::Delete { id_or_path } => {
+                resource::delete(&cli.server, &id_or_path).await
+            }
+        },
         Commands::Openapi => {
             let spec = mekhan_service::openapi_spec();
             let json = spec

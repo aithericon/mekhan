@@ -85,24 +85,16 @@ pub async fn apply_override(db: &PgPool, user: &mut AuthUser, headers: &HeaderMa
     // can "visit" demos without a membership row. The `workspaces` join also
     // rejects archived (soft-deleted) workspaces even with a stale cookie.
     let user_id = user.subject_as_uuid();
-    let row: Result<Option<(Option<String>, bool)>, _> = sqlx::query_as(
-        "SELECT m.role, w.is_system FROM workspaces w \
-           LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = $2 \
-          WHERE w.id = $1 AND w.archived_at IS NULL",
-    )
-    .bind(requested)
-    .bind(user_id)
-    .fetch_optional(db)
-    .await;
-    if let Ok(Some((role, is_system))) = row {
-        // Member role wins; otherwise a system workspace is enterable as viewer.
-        let effective = role.or_else(|| is_system.then(|| "viewer".to_string()));
-        if let Some(effective) = effective {
-            user.workspace_id = Some(requested);
-            // The override moves the caller into a different workspace — their
-            // role there differs from the resolver's default pick, so refresh it.
-            user.workspace_role = Some(effective);
-        }
+    // Route through the shared validator so the cookie path is literally step 1
+    // of the resolution ladder and can't drift from it. A failed/erroring check
+    // silently reverts to the resolver's pick (never errors the request).
+    if let Ok(Some(effective)) =
+        crate::auth::resolver::validate_workspace_access(db, user_id, requested).await
+    {
+        user.workspace_id = Some(requested);
+        // The override moves the caller into a different workspace — their
+        // role there differs from the resolver's default pick, so refresh it.
+        user.workspace_role = Some(effective);
     }
 }
 

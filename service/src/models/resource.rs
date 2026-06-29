@@ -242,6 +242,19 @@ pub struct CreateResourceRequest {
     pub restricted: Option<bool>,
 }
 
+/// Outcome of `POST /api/v1/resources/apply` — the path-keyed, hash-idempotent
+/// upsert used by the CLI / CI GitOps flow. `action` reports what the apply did
+/// so a pipeline can log it (and so re-running the same manifest is visibly a
+/// no-op): `created` (resource did not exist → v1 written), `updated` (config
+/// changed → new version), or `unchanged` (config hashed identically → nothing
+/// written). `resource` is the resulting summary either way.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct ApplyResourceResponse {
+    /// `created` | `updated` | `unchanged`.
+    pub action: String,
+    pub resource: ResourceSummary,
+}
+
 /// Request body for `PUT /api/v1/resources/{id}`. Either `display_name` or
 /// `config` (or both) may be set; if `config` is set the call bumps
 /// `latest_version` and writes a new vault_path. `display_name`-only

@@ -2648,6 +2648,36 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me/default-workspace": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * PUT /api/v1/me/default-workspace
+         * @description Persist the caller's DEFAULT workspace (`users.default_workspace_id`) — step
+         *     2 of the shared resolution ladder. Unlike the active-workspace cookie (a
+         *     per-session override), this survives logout and is what a PAT or a fresh
+         *     session resolves to when no explicit scope is present. It also disambiguates
+         *     a caller who belongs to several workspaces, so the ladder no longer fails
+         *     loud / forces a picker for them.
+         *
+         *     Lives next to the active-workspace switcher for code-locality (both are
+         *     `/api/v1/me/*` per-user session/preference state). Refuses workspaces the
+         *     caller can't reach — a 403 — using the same `require_workspace_read` rule
+         *     (member, OR a browse-only `is_system` workspace) the switcher uses.
+         */
+        put: operations["set_default_workspace"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/model-catalog/{source}": {
         parameters: {
             query?: never;
@@ -3478,6 +3508,42 @@ export interface paths {
         put?: never;
         /** `POST /api/v1/resources` — create a logical resource and its v1 row. */
         post: operations["create_resource"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/resources/apply": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * `POST /api/v1/resources/apply` — path-keyed, hash-idempotent upsert.
+         * @description The GitOps / CI entry point (`mekhan resource apply`). Where `create` is
+         *     409-on-exists and `update`/`rotate` are UUID-keyed and ALWAYS bump a version,
+         *     `apply` resolves an existing resource by `(scope, path)` and decides what to
+         *     do by hashing the submitted config:
+         *
+         *     - absent             → create v1            → action `created`
+         *     - present, same hash → no write at all      → action `unchanged`
+         *     - present, diff hash → new version          → action `updated`
+         *     - present, diff type → 409 (type is immutable; delete + re-apply)
+         *
+         *     This is what makes re-running a CI manifest safe: an unchanged resource
+         *     writes nothing — no version churn, no Vault round-trip. Secrets arrive inline
+         *     in `config` (the caller — CI — pulls them from Vault and injects them, e.g.
+         *     via `${VAR}` interpolation in the CLI); mekhan writes them to its own secret
+         *     store exactly as on the create/rotate paths. Auth mirrors create on the
+         *     create branch (Editor on the target scope) and update on the bump branch
+         *     (Editor on the resource ACL); platform scope is admin-flag gated.
+         */
+        post: operations["apply_resource"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5954,6 +6020,19 @@ export interface components {
             source_ref?: null | components["schemas"]["SourceRef"];
         };
         /**
+         * @description Outcome of `POST /api/v1/resources/apply` — the path-keyed, hash-idempotent
+         *     upsert used by the CLI / CI GitOps flow. `action` reports what the apply did
+         *     so a pipeline can log it (and so re-running the same manifest is visibly a
+         *     no-op): `created` (resource did not exist → v1 written), `updated` (config
+         *     changed → new version), or `unchanged` (config hashed identically → nothing
+         *     written). `resource` is the resulting summary either way.
+         */
+        ApplyResourceResponse: {
+            /** @description `created` | `updated` | `unchanged`. */
+            action: string;
+            resource: components["schemas"]["ResourceSummary"];
+        };
+        /**
          * @description Request body for `POST /api/v1/templates/{id}/apply` — the GitOps path.
          *     The `graph` REPLACES the chain head wholesale (no CRDT merge); binary
          *     assets are uploaded out-of-band via the files endpoint before this call.
@@ -7736,6 +7815,14 @@ export interface components {
             expires_at?: string | null;
             /** @description Human-friendly label — stored as `user_pats.name`, shown in the list. */
             name: string;
+            /**
+             * Format: uuid
+             * @description Workspace this token is scoped to — its binding is FIXED at mint. Omit to
+             *     bind to the minter's current active workspace; if set, the minter must be
+             *     a member (or it must be a browse-only `is_system` workspace they may
+             *     enter), else the mint is rejected with 400.
+             */
+            workspace_id?: string | null;
         };
         /** @description Request body for `POST /api/v1/workers/registration-tokens`. */
         CreateWorkerRegistrationTokenRequest: {
@@ -7803,6 +7890,8 @@ export interface components {
              *     once — mekhan stores only the SHA-256 of the secret half.
              */
             secret: string;
+            /** @description The workspace this token is scoped to — fixed at mint. */
+            workspace_id: string;
         };
         /**
          * @description Response for a freshly-minted worker registration token. `token` is the full
@@ -13113,6 +13202,14 @@ export interface components {
              */
             workspace_id: string;
         };
+        SetDefaultWorkspaceRequest: {
+            /**
+             * Format: uuid
+             * @description Target workspace id. The caller must already be a member (or it must be a
+             *     browse-only `is_system` workspace they may enter).
+             */
+            workspace_id: string;
+        };
         SetDevIdentityRequest: {
             /** @description `subject` of a roster identity (e.g. `"dev-user"` or `"dev-user-2"`). */
             subject: string;
@@ -14134,6 +14231,8 @@ export interface components {
              */
             id: string;
             name: string;
+            /** @description The workspace this token is scoped to — fixed at mint. */
+            workspace_id: string;
         };
         /**
          * @description What happens when a tool call inside an [`WorkflowNodeData::Agent`]
@@ -21471,6 +21570,37 @@ export interface operations {
             };
         };
     };
+    set_default_workspace: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SetDefaultWorkspaceRequest"];
+            };
+        };
+        responses: {
+            /** @description Default workspace set */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Cannot reach the target workspace */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
     browse_model_catalog: {
         parameters: {
             query?: {
@@ -23141,6 +23271,66 @@ export interface operations {
             };
             /** @description Server error */
             500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Secret backend write failed */
+            502: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    apply_resource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateResourceRequest"];
+            };
+        };
+        responses: {
+            /** @description Resource upserted (created / updated / unchanged) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ApplyResourceResponse"];
+                };
+            };
+            /** @description Validation failure */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Editor role (scope or resource) required */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Existing resource has a different type */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };

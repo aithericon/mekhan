@@ -50,6 +50,7 @@
 | [**18 — Event-Log Causality**](./adr/18-event-log-causality.md) | Proposed | Provenance from the event log instead of traceparent |
 | [**19 — Tool Use First-Class**](./adr/19-tool-use-first-class.md) | Accepted | Tool use as a first-class LLM pipeline capability |
 | [**20 — Net Snapshots**](./adr/20-net-snapshots.md) | Accepted | Object-store wake fast-path (replaces NATS KV snapshots) |
+| [**21 — Offset-Keyed Idempotent Ingress**](./adr/21-offset-keyed-idempotent-ingress.md) | Proposed | Bounded engine dedup by delivery position, not content |
 
 ## Getting Started
 

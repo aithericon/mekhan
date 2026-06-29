@@ -1,0 +1,13 @@
+{
+  "path": "app_pg",
+  "resource_type": "postgres",
+  "display_name": "Application Postgres",
+  "config": {
+    "host": "${PG_HOST:-db.internal}",
+    "port": 5432,
+    "database": "app",
+    "username": "app_rw",
+    "password": "${PG_PASSWORD}",
+    "sslmode": "require"
+  }
+}

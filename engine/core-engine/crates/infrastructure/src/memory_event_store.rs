@@ -964,6 +964,95 @@ mod tests {
         );
     }
 
+    /// A streaming/ephemeral `TokenCreated` carrying a fat payload but NO
+    /// `dedup_id` — the shape executor progress/metric/log emits take after the
+    /// watcher fix (they set `Nats-Msg-Id` for the 120s transport window but
+    /// leave `ExternalSignal.dedup_id = None`).
+    fn streaming_token(seq: u64, place: &PlaceId, payload_bytes: usize) -> PersistedEvent {
+        let blob = "s".repeat(payload_bytes);
+        PersistedEvent::new(
+            seq,
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Data(serde_json::json!({ "blob": blob }))),
+                place_id: place.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: Some("exec-42".to_string()),
+                dedup_id: None,
+            },
+            Some("prev".to_string()),
+        )
+    }
+
+    /// Regression for the streaming-dedup memory leak: a high-volume stream of
+    /// EPHEMERAL `TokenCreated` events (unique-per-fire, `dedup_id = None`) must
+    /// leave `base_dedup`/`dedup_seed` BOUNDED (≈0), even though every event is
+    /// evicted into the base. The eviction fold in `push_tail` only retains
+    /// `Some(dedup_id)`, so `None`-keyed streaming emits never accumulate — the
+    /// permanent dedup footprint stays O(1) regardless of stream length, while
+    /// the tokens themselves still park correctly (sink/marking unaffected).
+    #[tokio::test]
+    async fn ephemeral_streaming_tokens_keep_dedup_seed_bounded() {
+        use crate::MarkingProjection;
+        use petri_application::StateProjection;
+
+        let place = PlaceId::named("metric_log");
+        // Tight cap so essentially every event is evicted into the base.
+        let store = MemoryEventStore::with_tail_cap(64 * 1024);
+
+        // One deterministic ONE-SHOT dedup-bearing event up front: it MUST
+        // survive eviction in the seed (contrast — proves we only suppress the
+        // ephemeral ones, not all dedup).
+        store.load_existing_event(PersistedEvent::new(
+            0,
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Unit),
+                place_id: place.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: Some("exec-42-output-result".to_string()),
+            },
+            None,
+        ));
+
+        // N=1000 ephemeral streaming emits, each ~2 KiB, forcing eviction.
+        let n: u64 = 1000;
+        for i in 1..=n {
+            store.load_existing_event(streaming_token(i, &place, 2 * 1024));
+        }
+
+        // len() still reports every event (cursor contract intact).
+        assert_eq!(
+            store.len().await as u64,
+            n + 1,
+            "len() must report all N+1 events"
+        );
+
+        // ---- The bound: the dedup seed holds ONLY the one-shot key. ----
+        let seed = store.dedup_seed().await;
+        assert!(
+            seed.contains_key(&(place.clone(), "exec-42-output-result".to_string())),
+            "the one-shot deterministic dedup key must survive eviction"
+        );
+        assert_eq!(
+            seed.len(),
+            1,
+            "dedup seed must stay O(1): {n} ephemeral streaming emits must NOT \
+             accumulate permanent dedup entries (got {} entries)",
+            seed.len()
+        );
+
+        // ---- Sink/marking behavior is unaffected: all N+1 tokens parked. ----
+        let (base, tail) = store.base_and_tail();
+        let folded = MarkingProjection::new().project_onto(&base, &tail);
+        assert_eq!(
+            folded.token_count(&place),
+            (n + 1) as usize,
+            "every streaming token must still be produced/parked at the sink place"
+        );
+    }
+
     /// PART C invariant (1)+(3): a snapshot captured from a live store, then
     /// seeded into a fresh store, reproduces the exact marking and chain tip —
     /// and a `TokenCreated` dedup key survives the round-trip (invariant 2).

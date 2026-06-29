@@ -393,18 +393,23 @@ impl PrincipalResolver for DbPrincipalResolver {
         )
         .await?;
 
-        // Active-workspace pick: choose among ALL memberships (any explicit
-        // grants + the personal workspace just provisioned), preferring real
-        // tenants over system workspaces, then by age. The per-session cookie
-        // override applied downstream in `active_workspace::apply_override` can
-        // swap to any other membership. `membership_workspace` returns `None`
-        // only when the user holds no membership at all (which the
-        // personal-workspace provisioning above prevents for any real
-        // principal), leaving `workspace_id = None` so handlers reject rather
-        // than grant ambient access.
-        user.workspace_id = membership_workspace(&self.db, user_id).await?;
-        if let Some(ws_id) = user.workspace_id {
-            user.workspace_role = lookup_role(&self.db, ws_id, user_id).await?;
+        // Active-workspace pick via the shared resolution ladder (no explicit
+        // scope at login — the per-session `mekhan_active_workspace` cookie is
+        // overlaid downstream in `active_workspace::apply_override`, which is
+        // step 1 of the SAME ladder). Steps: saved default → sole membership →
+        // fail-loud on ambiguity. For the interactive path, both `None` (no
+        // membership) and `Ambiguous` (>1, no default) leave
+        // `workspace_id = None` so the session/UI forces an explicit selection
+        // rather than the resolver silently guessing a tenant.
+        match resolve_active_workspace(&self.db, user_id, None).await? {
+            WorkspaceResolution::Resolved(ws_id, role) => {
+                user.workspace_id = Some(ws_id);
+                user.workspace_role = role;
+            }
+            WorkspaceResolution::None | WorkspaceResolution::Ambiguous => {
+                user.workspace_id = None;
+                user.workspace_role = None;
+            }
         }
         Ok(user)
     }
@@ -631,33 +636,138 @@ pub(crate) async fn lookup_role(
     Ok(row.map(|(r,)| r))
 }
 
-/// Returns the user's default "active" workspace. Preference order:
-///   1. any non-system workspace (a real tenant — the personal workspace, an
-///      org workspace, or a self-serve one), oldest first;
-///   2. the oldest system workspace (worst case: the principal is only in a
-///      system namespace such as the demoted `default`/nil tenant).
+/// Outcome of the shared active-workspace resolution ladder
+/// ([`resolve_active_workspace`]). Total over the three terminal cases so both
+/// the interactive and PAT callers can branch explicitly instead of collapsing
+/// "no workspace" and "too many workspaces" into one silent `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum WorkspaceResolution {
+    /// A single workspace was determined, with the caller's live role in it
+    /// (`Some("viewer")` for a browse-only system workspace entered without a
+    /// membership row).
+    Resolved(Uuid, Option<String>),
+    /// The caller holds no usable workspace at all (zero non-archived
+    /// memberships and no enterable scope/default).
+    None,
+    /// The caller could go several places and gave no scope/default — the
+    /// ladder refuses to guess. The interactive path treats this as "force UI
+    /// selection" (`workspace_id = None`); a non-interactive (PAT) caller maps
+    /// it to a loud [`AuthError::WorkspaceAmbiguous`] via [`Self::require_resolved`].
+    Ambiguous,
+}
+
+impl WorkspaceResolution {
+    /// Collapse to a hard `(workspace_id, role)` binding for callers that
+    /// REQUIRE a resolved workspace and cannot defer to a UI picker. `None`
+    /// and `Ambiguous` become loud errors rather than the interactive path's
+    /// silent fall-through.
+    pub(crate) fn require_resolved(self) -> Result<(Uuid, Option<String>), AuthError> {
+        match self {
+            WorkspaceResolution::Resolved(id, role) => Ok((id, role)),
+            WorkspaceResolution::Ambiguous => Err(AuthError::WorkspaceAmbiguous),
+            WorkspaceResolution::None => {
+                Err(AuthError::InvalidToken("no active workspace".to_string()))
+            }
+        }
+    }
+}
+
+/// Shared workspace-access validator — the single source of truth both the
+/// resolution ladder (steps 1-2) and the PAT verifier use to decide whether a
+/// specific workspace is reachable for a user RIGHT NOW.
 ///
-/// The old `slug='default'` preference is gone: `default` is now a system
-/// workspace (migration `20240189`) and real tenants must outrank it. The
-/// workspace picker exposes the full membership list and lets the user override
-/// this default per session via the active-workspace cookie.
-pub(crate) async fn membership_workspace(
+/// Mirrors `active_workspace::apply_override`'s rule: a member's real role
+/// wins; otherwise an `is_system` workspace is enterable read-only (`viewer`);
+/// archived (soft-deleted) workspaces and everything else yield `None`. Routing
+/// every "may this user act in this workspace" question through here keeps the
+/// cookie path, the default-workspace ladder, and the PAT binding from drifting.
+pub(crate) async fn validate_workspace_access(
     db: &PgPool,
     user_id: Uuid,
-) -> Result<Option<Uuid>, AuthError> {
-    let row: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT w.id \
+    workspace_id: Uuid,
+) -> Result<Option<String>, AuthError> {
+    let row: Option<(Option<String>, bool)> = sqlx::query_as(
+        "SELECT m.role, w.is_system FROM workspaces w \
+           LEFT JOIN workspace_members m ON m.workspace_id = w.id AND m.user_id = $2 \
+          WHERE w.id = $1 AND w.archived_at IS NULL",
+    )
+    .bind(workspace_id)
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
+    .map_err(|e| AuthError::Internal(format!("workspace access check: {e}")))?;
+
+    // Member role wins; otherwise a system workspace is enterable as viewer.
+    Ok(row.and_then(|(role, is_system)| role.or_else(|| is_system.then(|| "viewer".to_string()))))
+}
+
+/// The defined active-workspace resolution ladder, shared by the PAT and
+/// interactive paths. Replaces the old silent `ORDER BY is_system, created_at
+/// LIMIT 1` pick. Steps, in order:
+///
+///   1. **Explicit scope** — a PAT's bound `workspace_id` or the interactive
+///      `mekhan_active_workspace` cookie, passed in as `explicit`. Validated
+///      via [`validate_workspace_access`]; a stale/unreachable scope falls
+///      through rather than erroring (the cookie path already degrades softly).
+///   2. **User default** — `users.default_workspace_id`. Validated the same
+///      way; a stale default (membership revoked / workspace archived) falls
+///      through.
+///   3. **Sole membership** — exactly ONE non-archived membership ⇒ use it.
+///   4. **Ambiguous** — more than one membership and no scope/default ⇒
+///      [`WorkspaceResolution::Ambiguous`]. Zero memberships ⇒
+///      [`WorkspaceResolution::None`]. The ladder NEVER silently picks among
+///      several.
+pub(crate) async fn resolve_active_workspace(
+    db: &PgPool,
+    user_id: Uuid,
+    explicit: Option<Uuid>,
+) -> Result<WorkspaceResolution, AuthError> {
+    // Step 1: explicit scope (PAT binding / active-workspace cookie).
+    if let Some(ws) = explicit {
+        if let Some(role) = validate_workspace_access(db, user_id, ws).await? {
+            return Ok(WorkspaceResolution::Resolved(ws, Some(role)));
+        }
+    }
+
+    // Step 2: the user's saved default workspace, if any and still reachable.
+    let default_ws: Option<(Option<Uuid>,)> =
+        sqlx::query_as("SELECT default_workspace_id FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(db)
+            .await
+            .map_err(|e| AuthError::Internal(format!("default workspace lookup: {e}")))?;
+    if let Some((Some(ws),)) = default_ws {
+        if let Some(role) = validate_workspace_access(db, user_id, ws).await? {
+            return Ok(WorkspaceResolution::Resolved(ws, Some(role)));
+        }
+        // Stale default — fall through to membership-based resolution.
+    }
+
+    // Steps 3-4: fetch up to TWO non-archived memberships to distinguish
+    // "exactly one" (resolve) from "more than one" (ambiguous) cheaply. Keeps
+    // the old real-tenant-before-system, oldest-first ordering so the single
+    // surviving row is deterministic.
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT w.id, m.role \
            FROM workspaces w \
            JOIN workspace_members m ON m.workspace_id = w.id \
           WHERE m.user_id = $1 AND w.archived_at IS NULL \
           ORDER BY w.is_system ASC, w.created_at ASC \
-          LIMIT 1",
+          LIMIT 2",
     )
     .bind(user_id)
-    .fetch_optional(db)
+    .fetch_all(db)
     .await
     .map_err(|e| AuthError::Internal(format!("workspace membership lookup: {e}")))?;
-    Ok(row.map(|(id,)| id))
+
+    match rows.len() {
+        0 => Ok(WorkspaceResolution::None),
+        1 => {
+            let (id, role) = rows.into_iter().next().expect("len checked == 1");
+            Ok(WorkspaceResolution::Resolved(id, Some(role)))
+        }
+        _ => Ok(WorkspaceResolution::Ambiguous),
+    }
 }
 
 #[cfg(test)]
@@ -693,6 +803,59 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(user.avatar_url, None);
+    }
+
+    // --- Resolution-ladder branch semantics -----------------------------
+    //
+    // The ladder's DB steps (default lookup, sole-membership query) need a live
+    // pool, and this crate has no `sqlx::test` harness, so the existing tests
+    // here are all pure. These cover the part that does NOT need a DB: how each
+    // terminal `WorkspaceResolution` is consumed — the interactive path's
+    // silent fall-through vs the PAT path's loud reject, which is the whole
+    // reason the result type is a 3-variant enum rather than `Option<Uuid>`.
+
+    #[test]
+    fn require_resolved_maps_resolved_to_binding() {
+        let id = Uuid::new_v4();
+        let r = WorkspaceResolution::Resolved(id, Some("editor".to_string()))
+            .require_resolved()
+            .expect("resolved must yield a binding");
+        assert_eq!(r, (id, Some("editor".to_string())));
+    }
+
+    #[test]
+    fn require_resolved_rejects_ambiguous_loud() {
+        // Step 4: a PAT-style caller with several reachable workspaces and no
+        // scope/default must FAIL LOUD (403), never silently pick one.
+        let err = WorkspaceResolution::Ambiguous
+            .require_resolved()
+            .expect_err("ambiguous must not resolve");
+        assert!(matches!(err, AuthError::WorkspaceAmbiguous));
+    }
+
+    #[test]
+    fn require_resolved_rejects_none() {
+        // Zero memberships ⇒ no workspace at all ⇒ a hard error for callers that
+        // require a binding (the interactive path instead leaves it `None`).
+        let err = WorkspaceResolution::None
+            .require_resolved()
+            .expect_err("none must not resolve");
+        assert!(matches!(err, AuthError::InvalidToken(_)));
+    }
+
+    #[test]
+    fn interactive_path_leaves_none_for_none_and_ambiguous() {
+        // Mirrors the match in `DbPrincipalResolver::resolve`: both non-Resolved
+        // outcomes leave `workspace_id = None` so the UI forces a selection
+        // rather than the resolver guessing a tenant.
+        for res in [WorkspaceResolution::None, WorkspaceResolution::Ambiguous] {
+            let (ws, role): (Option<Uuid>, Option<String>) = match res {
+                WorkspaceResolution::Resolved(id, role) => (Some(id), role),
+                WorkspaceResolution::None | WorkspaceResolution::Ambiguous => (None, None),
+            };
+            assert_eq!(ws, None);
+            assert_eq!(role, None);
+        }
     }
 
     #[tokio::test]

@@ -28,12 +28,17 @@ use chrono::{DateTime, Utc};
 use super::model::{AuthError, AuthUser};
 use crate::models::runner::{parse_token, verify_secret, USER_PAT_TOKEN_PREFIX};
 
-/// One `user_pats` row, in the column order the migration declares.
+/// One `user_pats` row, projected for verification. `workspace_id` is the
+/// MINT-time binding (NOT NULL since migration `20240201`): the token's tenant
+/// is fixed at creation, then re-checked LIVE below so the binding never
+/// outlives the owner's membership. `FromRow` maps by column NAME, so this need
+/// not match the table's physical column order — only the SELECT list below.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct PatAuthRow {
     user_id: uuid::Uuid,
     token_hash: String,
     expires_at: Option<DateTime<Utc>>,
+    workspace_id: uuid::Uuid,
 }
 
 /// The owning human, joined from `users` (+ a representative identity subject).
@@ -81,7 +86,7 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
         parse_token(USER_PAT_TOKEN_PREFIX, bearer).ok_or_else(|| reject("malformed PAT"))?;
 
     let row = sqlx::query_as::<_, PatAuthRow>(
-        "SELECT user_id, token_hash, expires_at \
+        "SELECT user_id, token_hash, expires_at, workspace_id \
            FROM user_pats WHERE id = $1 AND revoked_at IS NULL",
     )
     .bind(pat_id)
@@ -126,11 +131,20 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
         owner.email.as_deref(),
     );
 
-    let workspace_id = crate::auth::resolver::membership_workspace(&state.db, user_id).await?;
-    let workspace_role = match workspace_id {
-        Some(ws) => crate::auth::resolver::lookup_role(&state.db, ws, user_id).await?,
-        None => None,
-    };
+    // Workspace binding is FIXED at mint (`row.workspace_id`, NOT NULL) but
+    // authorization stays LIVE: validate the owner's CURRENT access to that
+    // workspace and fail-closed if it is gone. A revoked membership (and the
+    // workspace is not a browse-only `is_system` one) or an archived workspace
+    // yields `None` here ⇒ reject, so a token's reach can never outlive the
+    // membership it was minted against.
+    let workspace_id = row.workspace_id;
+    let workspace_role =
+        match crate::auth::resolver::validate_workspace_access(&state.db, user_id, workspace_id)
+            .await?
+        {
+            Some(role) => Some(role),
+            None => return Err(reject("workspace membership revoked")),
+        };
 
     // Best-effort, fire-and-forget last-use touch. A failure here must never
     // block the request (mirrors the profile upsert on the cookie path).
@@ -147,7 +161,7 @@ pub async fn verify_user_pat(state: &crate::AppState, bearer: &str) -> Result<Au
         // No runner/worker marker — this principal IS the human.
         roles: vec![],
         is_platform_admin,
-        workspace_id,
+        workspace_id: Some(workspace_id),
         workspace_role,
         avatar_url: owner.avatar_url,
     })

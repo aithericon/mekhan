@@ -3009,4 +3009,62 @@ mod tests {
         assert_eq!(replay.hash, historical.hash);
         assert_eq!(count_token_created(events_repo.as_ref()).await, 1);
     }
+
+    #[tokio::test]
+    async fn test_streaming_emits_skip_index_but_oneshot_still_collides() {
+        // Pins the watcher dedup-split contract at the service boundary:
+        //   * STREAMING/ephemeral emits (executor progress/metric/log) arrive
+        //     with `dedup_id = None` → every emit creates a fresh token and
+        //     NOTHING enters the permanent DedupIndex (bounded memory).
+        //   * A ONE-SHOT deterministic emit (artifact/output/phase) keeps a
+        //     stable `dedup_id` → a redelivery after the 120s NATS window
+        //     collides and returns the existing event (idempotency preserved).
+        let service = create_test_service();
+        let (net, pid) = dedup_net();
+        service.initialize(net).await.unwrap();
+
+        // 1000 streaming emits, all None dedup_id, same signal_key/place.
+        for i in 0..1000 {
+            service
+                .create_token_with_meta(
+                    pid.clone(),
+                    TokenColor::Data(serde_json::json!({ "i": i })),
+                    None,
+                    Some("exec-42".to_string()),
+                    None,
+                )
+                .await
+                .unwrap();
+        }
+
+        // One deterministic one-shot emit, then its apalis redelivery.
+        let first = service
+            .create_token_with_meta(
+                pid.clone(),
+                TokenColor::Unit,
+                None,
+                Some("exec-42".to_string()),
+                Some("exec-42-output-result".to_string()),
+            )
+            .await
+            .unwrap();
+        let redelivered = service
+            .create_token_with_meta(
+                pid.clone(),
+                TokenColor::Unit,
+                None,
+                Some("exec-42".to_string()),
+                Some("exec-42-output-result".to_string()),
+            )
+            .await
+            .unwrap();
+
+        // The one-shot redelivery collided (same event returned, no new token).
+        assert_eq!(first.sequence, redelivered.sequence);
+        assert_eq!(first.hash, redelivered.hash);
+
+        // 1000 streaming + 1 one-shot = 1001 distinct TokenCreated events; the
+        // 1002nd call was deduped away.
+        assert_eq!(count_token_created(service.events.as_ref()).await, 1001);
+    }
 }

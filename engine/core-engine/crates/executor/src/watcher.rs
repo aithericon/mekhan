@@ -504,40 +504,69 @@ impl ExecutorWatcher {
                 "timestamp": event.timestamp.to_rfc3339(),
             });
 
-            // Content-addressable dedup_id for events whose identity is stable
-            // across apalis redeliveries (artifact_id, output name, phase name).
-            // The engine-level DedupIndex keyed on (PlaceId, dedup_id) is time-
-            // unbounded, so the same artifact re-emitted minutes later by a
-            // redelivered job is still recognised as a duplicate. Streaming
-            // events (progress, metric batches, log summaries) keep the
-            // sequence-based id so legitimate multi-fire isn't blocked.
-            let msg_id = match &event.detail {
+            // Two INDEPENDENT dedup layers, deliberately split here:
+            //
+            //   * `nats_msg_id` — the `Nats-Msg-Id` header for JetStream's
+            //     120s publish-dedup window. ALWAYS unique-per-fire so apalis
+            //     redeliveries inside the window are suppressed transport-side.
+            //   * `engine_dedup_id` — the in-payload `ExternalSignal.dedup_id`
+            //     that feeds the engine's PERMANENT, time-unbounded DedupIndex
+            //     (`(PlaceId, dedup_id)`), seeded from the full event log and
+            //     retained in every NetSnapshot.
+            //
+            // Conflating the two is an unbounded memory leak: streaming events
+            // (progress, metric batches, log summaries) fire arbitrarily many
+            // times per execution, so a unique-per-fire `dedup_id` mints a new
+            // permanent index entry on every emit that can never collide. Those
+            // events are routed to Sink places and never need cross-window
+            // idempotency, so they get `engine_dedup_id = None` — the listener
+            // and `create_token_with_meta` both treat `None` as "skip the
+            // permanent index", and `MemoryEventStore::push_tail` only folds
+            // `Some(dedup_id)` into `base_dedup`, so they stay out of the
+            // snapshot/eviction seed entirely (bounded memory).
+            //
+            // Content-addressable one-shot arms (artifact_id, output name,
+            // phase name) keep a deterministic `engine_dedup_id` so the same
+            // artifact re-emitted minutes later by a redelivered job — after
+            // the 120s window has closed — is still recognised as a duplicate.
+            // This matches the documented contract on `ExternalSignal.dedup_id`
+            // ("streaming publishers leave this None").
+            let (nats_msg_id, engine_dedup_id) = match &event.detail {
                 StatusDetail::ArtifactLogged { artifact_id, .. } => {
-                    format!("{}-artifact-{}", event.execution_id, artifact_id)
+                    let id = format!("{}-artifact-{}", event.execution_id, artifact_id);
+                    (id.clone(), Some(id))
                 }
                 StatusDetail::ArtifactConsumed { input_name, .. } => {
-                    format!("{}-artifact_in-{}", event.execution_id, input_name)
+                    let id = format!("{}-artifact_in-{}", event.execution_id, input_name);
+                    (id.clone(), Some(id))
                 }
                 StatusDetail::OutputSet { name, .. } => {
-                    format!("{}-output-{}", event.execution_id, name)
+                    let id = format!("{}-output-{}", event.execution_id, name);
+                    (id.clone(), Some(id))
                 }
                 StatusDetail::PhaseChanged {
                     phase_name, status, ..
                 } => {
-                    format!("{}-phase-{}-{:?}", event.execution_id, phase_name, status)
+                    let id = format!("{}-phase-{}-{:?}", event.execution_id, phase_name, status);
+                    (id.clone(), Some(id))
                 }
-                _ => format!("{}-event-{}", event.execution_id, event.sequence),
+                // Streaming/ephemeral: unique-per-fire transport id, NO engine
+                // dedup id → never enters the permanent DedupIndex / base_dedup.
+                _ => (
+                    format!("{}-event-{}", event.execution_id, event.sequence),
+                    None,
+                ),
             };
             let signal = ExternalSignal {
                 source: "executor".to_string(),
                 signal_key: routing.signal_key.clone(),
                 payload,
                 timestamp: Utc::now(),
-                dedup_id: Some(msg_id.clone()),
+                dedup_id: engine_dedup_id,
             };
 
             self.signal_publisher
-                .publish(&subject, &signal, &msg_id)
+                .publish(&subject, &signal, &nats_msg_id)
                 .await;
         }
 

@@ -44,9 +44,9 @@ use crate::auth::{
 use crate::models::asset::PLATFORM_SCOPE_ID;
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::resource::{
-    CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery, RepairPoolResponse,
-    ResourceAuditEntry, ResourceDetail, ResourceRow, ResourceSummary, ResourceTypeInfo,
-    ResourceVersionRow, RotateResourceRequest, UpdateResourceRequest,
+    ApplyResourceResponse, CreateResourceRequest, ListResourceAuditQuery, ListResourcesQuery,
+    RepairPoolResponse, ResourceAuditEntry, ResourceDetail, ResourceRow, ResourceSummary,
+    ResourceTypeInfo, ResourceVersionRow, RotateResourceRequest, UpdateResourceRequest,
 };
 use crate::models::template::PaginatedResponse;
 use crate::petri::resource_resolver::AuditAction;
@@ -393,6 +393,57 @@ pub fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> St
     format!("aithericon/resources/{workspace_id}/{resource_id}/v{version}")
 }
 
+/// Canonical JSON serialization with object keys sorted recursively. Used as
+/// the pre-image for [`config_hash`] so the change-detection hash is stable
+/// regardless of the key order the caller (or `serde_json`'s map backend) emits
+/// — we deliberately do NOT rely on `serde_json`'s default sorted `Map`, since a
+/// transitive `preserve_order` feature would silently flip it to insertion
+/// order and invalidate every stored hash.
+fn write_canonical_json(v: &Value, out: &mut String) {
+    match v {
+        Value::Object(map) => {
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort_unstable();
+            out.push('{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                // serde_json::to_string on a &str never fails; escapes the key.
+                out.push_str(&serde_json::to_string(k).unwrap_or_default());
+                out.push(':');
+                write_canonical_json(&map[*k], out);
+            }
+            out.push('}');
+        }
+        Value::Array(arr) => {
+            out.push('[');
+            for (i, e) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                write_canonical_json(e, out);
+            }
+            out.push(']');
+        }
+        // Scalars: serde_json's own encoding is already canonical.
+        other => out.push_str(&serde_json::to_string(other).unwrap_or_default()),
+    }
+}
+
+/// SHA-256 (hex) over the canonical JSON of a resource's FULL submitted config
+/// (public ∪ secret, after capacity-preset expansion). This is the apply
+/// path's change oracle: a re-apply whose config hashes identically is a no-op,
+/// a differing hash bumps a new version. Computed over the merged config rather
+/// than just `public_config` so a rotated SECRET (whose value never round-trips
+/// through a read) is still detected as a change.
+pub(crate) fn config_hash(config: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut canonical = String::new();
+    write_canonical_json(config, &mut canonical);
+    format!("{:x}", Sha256::digest(canonical.as_bytes()))
+}
+
 /// Persist one resource version: insert the `resource_versions` row, then
 /// write the secret half to the secret backend. If the Vault write fails the
 /// just-inserted version row is rolled back so the parent's `latest_version`
@@ -402,6 +453,7 @@ pub fn vault_path_for(workspace_id: Uuid, resource_id: Uuid, version: i32) -> St
 /// or Vault write) before the error is returned — `create_resource` uses it to
 /// also delete the freshly-laid `resources` row so a retry with the same path
 /// doesn't 409 against a half-created resource. update/rotate pass a no-op.
+#[allow(clippy::too_many_arguments)]
 async fn write_resource_version<F, Fut>(
     db: &sqlx::PgPool,
     secret_store: &dyn aithericon_resources::ResourceSecretStore,
@@ -410,6 +462,7 @@ async fn write_resource_version<F, Fut>(
     vault_path: &str,
     public: &JsonMap<String, Value>,
     secret: &JsonMap<String, Value>,
+    config_hash: &str,
     principal_id: Uuid,
     extra_rollback: F,
 ) -> Result<(), ApiError>
@@ -432,14 +485,15 @@ where
 
     let insert_version = sqlx::query(
         "INSERT INTO resource_versions \
-            (resource_id, version, vault_path, public_config, created_by) \
-         VALUES ($1, $2, $3, $4, $5)",
+            (resource_id, version, vault_path, public_config, created_by, config_hash) \
+         VALUES ($1, $2, $3, $4, $5, $6)",
     )
     .bind(resource_id)
     .bind(version)
     .bind(vault_path)
     .bind(Value::Object(public_config))
     .bind(principal_id)
+    .bind(config_hash)
     .execute(db)
     .await;
     if let Err(e) = insert_version {
@@ -1030,6 +1084,281 @@ pub async fn create_resource(
     Ok((StatusCode::CREATED, Json(summary)))
 }
 
+/// Authorize the placement of a NEW resource into `(scope_kind, scope_id)` — the
+/// create-path gate, factored out so [`apply_resource`]'s create branch enforces
+/// exactly the same rule [`create_resource`] does: Editor on the target scope
+/// (workspace / folder / template); platform is gated on the admin flag by the
+/// caller before this is reached.
+async fn authorize_resource_placement(
+    state: &AppState,
+    user: &AuthUser,
+    scope_kind: &str,
+    workspace_id: Uuid,
+    scope_id: Option<Uuid>,
+) -> Result<(), ApiError> {
+    match scope_kind {
+        "platform" => {} // admin-flag gated by the caller; ACL bypassed.
+        "workspace" => {
+            require_role(&state.db, user, workspace_id, Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        "folder" => {
+            let fid = scope_id.ok_or_else(|| {
+                ApiError::bad_request("scope_id is required for scope_kind 'folder'")
+            })?;
+            require_object_role(&state.db, user, ObjectRef::folder(fid), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        "template" => {
+            let tid = scope_id.ok_or_else(|| {
+                ApiError::bad_request("scope_id is required for scope_kind 'template'")
+            })?;
+            require_object_role(&state.db, user, ObjectRef::template(tid), Role::Editor)
+                .await
+                .map_err(map_to_api_error)?;
+        }
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "unknown scope_kind '{other}' — expected workspace | folder | template"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// `POST /api/v1/resources/apply` — path-keyed, hash-idempotent upsert.
+///
+/// The GitOps / CI entry point (`mekhan resource apply`). Where `create` is
+/// 409-on-exists and `update`/`rotate` are UUID-keyed and ALWAYS bump a version,
+/// `apply` resolves an existing resource by `(scope, path)` and decides what to
+/// do by hashing the submitted config:
+///
+/// - absent             → create v1            → action `created`
+/// - present, same hash → no write at all      → action `unchanged`
+/// - present, diff hash → new version          → action `updated`
+/// - present, diff type → 409 (type is immutable; delete + re-apply)
+///
+/// This is what makes re-running a CI manifest safe: an unchanged resource
+/// writes nothing — no version churn, no Vault round-trip. Secrets arrive inline
+/// in `config` (the caller — CI — pulls them from Vault and injects them, e.g.
+/// via `${VAR}` interpolation in the CLI); mekhan writes them to its own secret
+/// store exactly as on the create/rotate paths. Auth mirrors create on the
+/// create branch (Editor on the target scope) and update on the bump branch
+/// (Editor on the resource ACL); platform scope is admin-flag gated.
+#[utoipa::path(
+    post,
+    path = "/api/v1/resources/apply",
+    request_body = CreateResourceRequest,
+    responses(
+        (status = 200, description = "Resource upserted (created / updated / unchanged)", body = ApplyResourceResponse),
+        (status = 400, description = "Validation failure", body = ErrorResponse),
+        (status = 403, description = "Editor role (scope or resource) required", body = ErrorResponse),
+        (status = 409, description = "Existing resource has a different type", body = ErrorResponse),
+        (status = 502, description = "Secret backend write failed", body = ErrorResponse),
+    ),
+    tag = "resources",
+)]
+pub async fn apply_resource(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<CreateResourceRequest>,
+) -> Result<Json<ApplyResourceResponse>, ApiError> {
+    let principal_id = user.subject_as_uuid();
+    let scope_kind = req
+        .scope_kind
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("workspace");
+
+    // Resolve the owning workspace (platform → admin-gated sentinel; else the
+    // explicit/implicit caller workspace) and the (scope_kind, scope_id) the
+    // unique constraint keys on. Mirrors create_resource{,_internal}.
+    let workspace_id = if scope_kind == "platform" {
+        if !user.is_platform_admin {
+            return Err(ApiError::forbidden(
+                "platform-scoped resource writes require platform admin",
+            ));
+        }
+        PLATFORM_SCOPE_ID
+    } else {
+        match req.workspace_id {
+            Some(ws) => ws,
+            None => caller_workspace(&user)?,
+        }
+    };
+    let scope_id = match scope_kind {
+        "platform" => PLATFORM_SCOPE_ID,
+        "workspace" => workspace_id,
+        "folder" | "template" => req.scope_id.ok_or_else(|| {
+            ApiError::bad_request(format!(
+                "scope_id is required for scope_kind '{scope_kind}'"
+            ))
+        })?,
+        other => {
+            return Err(ApiError::bad_request(format!(
+                "unknown scope_kind '{other}' — expected workspace | folder | template"
+            )))
+        }
+    };
+
+    // Resolve the existing resource at this (scope, path), if any.
+    let existing = sqlx::query_as::<_, ResourceRow>(
+        "SELECT * FROM resources \
+         WHERE scope_kind = $1 AND scope_id = $2 AND path = $3 AND deleted_at IS NULL",
+    )
+    .bind(scope_kind)
+    .bind(scope_id)
+    .bind(&req.path)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some(row) = existing else {
+        // ── CREATE branch ── placement gate (create_resource's rule), then the
+        // shared v1 flow (validates, writes the config hash, deploys pool nets,
+        // grants + audits).
+        authorize_resource_placement(&state, &user, scope_kind, workspace_id, req.scope_id).await?;
+        let mut summary =
+            create_resource_internal(&state, &req, workspace_id, principal_id).await?;
+        summary.my_effective_role = Some(Role::Owner.as_label().to_string());
+        return Ok(Json(ApplyResourceResponse {
+            action: "created".to_string(),
+            resource: summary,
+        }));
+    };
+
+    // Type is immutable across an apply: a path that flips type is almost always
+    // a manifest mistake. Refuse rather than mint an incompatible version.
+    if row.resource_type != req.resource_type {
+        return Err(ApiError::conflict(format!(
+            "resource '{}' already exists with type '{}'; cannot apply type '{}' \
+             (delete it first to change type)",
+            row.path, row.resource_type, req.resource_type,
+        )));
+    }
+
+    // Update-path auth: Editor on the resource object ACL (platform → admin,
+    // already enforced above).
+    let role = if row.scope_kind == "platform" {
+        Role::Owner
+    } else {
+        require_object_role(&state.db, &user, ObjectRef::resource(row.id), Role::Editor)
+            .await
+            .map_err(map_to_api_error)?
+    };
+
+    // Hash the submitted config (expanded, pre-split) and compare to the latest
+    // stored version's hash. A NULL stored hash (a legacy pre-migration version)
+    // sorts as "changed" → one bump re-stamps it, every apply after is a no-op.
+    let descriptor = descriptor_or_400(&req.resource_type)?;
+    let mut config = req.config.clone();
+    expand_capacity_preset(&req.resource_type, &mut config)?;
+    let incoming_hash = config_hash(&config);
+    let stored_hash: Option<String> = sqlx::query_scalar(
+        "SELECT config_hash FROM resource_versions WHERE resource_id = $1 AND version = $2",
+    )
+    .bind(row.id)
+    .bind(row.latest_version)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten();
+
+    if stored_hash.as_deref() == Some(incoming_hash.as_str()) {
+        // ── UNCHANGED branch ── no write. Return current state.
+        let dynamic_keys = if lookup(&row.resource_type)
+            .map(|d| d.dynamic_fields)
+            .unwrap_or(false)
+        {
+            fetch_dynamic_keys(&state.db, std::slice::from_ref(&row))
+                .await?
+                .remove(&row.id)
+        } else {
+            None
+        };
+        let mut summary = ResourceSummary::from(row);
+        summary.dynamic_keys = dynamic_keys;
+        summary.my_effective_role = Some(role.as_label().to_string());
+        return Ok(Json(ApplyResourceResponse {
+            action: "unchanged".to_string(),
+            resource: summary,
+        }));
+    }
+
+    // ── UPDATED branch ── config differs (or legacy NULL). Bump a new version,
+    // mirroring rotate_resource: validate, write (with the new hash), audit,
+    // re-ensure any backing pool net.
+    let (public, secret) = split_config(descriptor, config)?;
+    validate_datacenter_connection(&req.resource_type, &public, &secret)?;
+    for w in validate_capacity_axes(&req.resource_type, &public)? {
+        tracing::warn!(path = %row.path, "capacity axes warning: {w}");
+    }
+
+    let new_version = row.latest_version + 1;
+    let vault_path = vault_path_for(row.workspace_id, row.id, new_version);
+    write_resource_version(
+        &state.db,
+        state.resource_store.as_ref(),
+        row.id,
+        new_version,
+        &vault_path,
+        &public,
+        &secret,
+        &incoming_hash,
+        principal_id,
+        || async {},
+    )
+    .await?;
+    sqlx::query(
+        "UPDATE resources SET latest_version = $1, updated_at = NOW(), updated_by = $2 \
+         WHERE id = $3",
+    )
+    .bind(new_version)
+    .bind(principal_id)
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+    write_audit(
+        &state.db,
+        row.id,
+        new_version,
+        principal_id,
+        AuditAction::Update,
+    )
+    .await?;
+    ensure_pool_net_for_resource(
+        &state,
+        &row.resource_type,
+        row.workspace_id,
+        row.id,
+        new_version,
+        &public,
+    )
+    .await;
+
+    let dynamic_keys = extract_kv_keys(&public);
+    let summary = ResourceSummary {
+        id: row.id,
+        path: row.path,
+        resource_type: row.resource_type,
+        display_name: row.display_name,
+        latest_version: new_version,
+        created_at: row.created_at,
+        updated_at: Utc::now(),
+        created_by: row.created_by,
+        updated_by: Some(principal_id),
+        dynamic_keys,
+        public_config: None,
+        my_effective_role: Some(role.as_label().to_string()),
+        restricted: row.restricted,
+    };
+    Ok(Json(ApplyResourceResponse {
+        action: "updated".to_string(),
+        resource: summary,
+    }))
+}
+
 /// Core resource-creation flow, callable without an HTTP `AuthUser`. Used by
 /// [`create_resource`] (which derives `workspace_id`/`principal_id` from the
 /// session) and by the demo seeder, which provisions resource fixtures as the
@@ -1077,6 +1406,9 @@ pub(crate) async fn create_resource_internal_with_id(
     // public_config field).
     let mut config = req.config.clone();
     expand_capacity_preset(&req.resource_type, &mut config)?;
+    // Change-detection hash over the expanded config, before the split consumes
+    // it — the apply path compares this against the latest stored hash.
+    let cfg_hash = config_hash(&config);
     let (public, secret) = split_config(descriptor, config)?;
     validate_datacenter_connection(&req.resource_type, &public, &secret)?;
     // Cell validation: reject incoherent capacity axis combinations; log the
@@ -1168,6 +1500,7 @@ pub(crate) async fn create_resource_internal_with_id(
         &vault_path,
         &public,
         &secret,
+        &cfg_hash,
         principal_id,
         || async {
             let _ = sqlx::query("DELETE FROM resources WHERE id = $1")
@@ -1804,6 +2137,7 @@ pub async fn update_resource(
     if let Some(mut config) = req.config {
         let descriptor = descriptor_or_400(&row.resource_type)?;
         expand_capacity_preset(&row.resource_type, &mut config)?;
+        let cfg_hash = config_hash(&config);
         let (public, secret) = split_config(descriptor, config)?;
         for w in validate_capacity_axes(&row.resource_type, &public)? {
             tracing::warn!(path = %row.path, "capacity axes warning: {w}");
@@ -1820,6 +2154,7 @@ pub async fn update_resource(
             &vault_path,
             &public,
             &secret,
+            &cfg_hash,
             principal_id,
             || async {},
         )
@@ -2409,6 +2744,7 @@ pub async fn rotate_resource(
     let descriptor = descriptor_or_400(&row.resource_type)?;
     let mut config = req.config;
     expand_capacity_preset(&row.resource_type, &mut config)?;
+    let cfg_hash = config_hash(&config);
     let (public, secret) = split_config(descriptor, config)?;
     validate_datacenter_connection(&row.resource_type, &public, &secret)?;
     for w in validate_capacity_axes(&row.resource_type, &public)? {
@@ -2427,6 +2763,7 @@ pub async fn rotate_resource(
         &vault_path,
         &public,
         &secret,
+        &cfg_hash,
         principal_id,
         || async {},
     )

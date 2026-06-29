@@ -24,6 +24,13 @@ pub struct SetActiveWorkspaceRequest {
     pub workspace_id: Uuid,
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub struct SetDefaultWorkspaceRequest {
+    /// Target workspace id. The caller must already be a member (or it must be a
+    /// browse-only `is_system` workspace they may enter).
+    pub workspace_id: Uuid,
+}
+
 /// POST /api/v1/me/active-workspace
 ///
 /// Override the resolver's default workspace pick for this session. The
@@ -78,4 +85,44 @@ pub async fn clear_active_workspace(
 ) -> Result<impl IntoResponse, ApiError> {
     let jar = jar.add(clear_cookie(&state));
     Ok((StatusCode::NO_CONTENT, jar))
+}
+
+/// PUT /api/v1/me/default-workspace
+///
+/// Persist the caller's DEFAULT workspace (`users.default_workspace_id`) — step
+/// 2 of the shared resolution ladder. Unlike the active-workspace cookie (a
+/// per-session override), this survives logout and is what a PAT or a fresh
+/// session resolves to when no explicit scope is present. It also disambiguates
+/// a caller who belongs to several workspaces, so the ladder no longer fails
+/// loud / forces a picker for them.
+///
+/// Lives next to the active-workspace switcher for code-locality (both are
+/// `/api/v1/me/*` per-user session/preference state). Refuses workspaces the
+/// caller can't reach — a 403 — using the same `require_workspace_read` rule
+/// (member, OR a browse-only `is_system` workspace) the switcher uses.
+#[utoipa::path(
+    put,
+    path = "/api/v1/me/default-workspace",
+    request_body = SetDefaultWorkspaceRequest,
+    responses(
+        (status = 204, description = "Default workspace set"),
+        (status = 403, description = "Cannot reach the target workspace", body = ErrorResponse),
+    ),
+    tag = "me",
+)]
+pub async fn set_default_workspace(
+    State(state): State<AppState>,
+    CookieAuthUser(user): CookieAuthUser,
+    Json(req): Json<SetDefaultWorkspaceRequest>,
+) -> Result<impl IntoResponse, ApiError> {
+    require_workspace_read(&state.db, &user, req.workspace_id)
+        .await
+        .map_err(map_to_api_error)?;
+    sqlx::query("UPDATE users SET default_workspace_id = $1, updated_at = now() WHERE id = $2")
+        .bind(req.workspace_id)
+        .bind(user.subject_as_uuid())
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::internal(format!("set default workspace: {e}")))?;
+    Ok(StatusCode::NO_CONTENT)
 }
