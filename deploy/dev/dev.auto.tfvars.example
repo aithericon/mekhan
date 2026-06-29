@@ -98,4 +98,4 @@ workspace_owner_user_key = "admin"
 # ── Resources ───────────────────────────────────────────────────────────────
 cpu_mhz   = 500
 
-memory_mb = 1024
+memory_mb = 512
