@@ -36,6 +36,7 @@ use axum::Router;
 use http_body_util::BodyExt;
 use petri_api::net_registry::{ConsumerStarter, StoreFactory, WokenWorkspaceResolver};
 use petri_api::{create_router_with_registry, NetRegistry};
+use petri_application::net_snapshot::{NetSnapshot, SnapshotStore};
 use petri_application::TopologyRepository;
 use petri_domain::{Arc as PetriArc, PetriNet, Place, Port, Transition};
 use petri_test_harness::doubles::{
@@ -155,6 +156,155 @@ fn build(target_ws: Option<&str>) -> (Router, Arc<Reg>) {
     }));
     let router = create_router_with_registry(registry.clone());
     (router, registry)
+}
+
+/// In-memory [`SnapshotStore`] double: stores what `hibernate`'s `write_snapshot`
+/// puts and returns it on the next wake — exactly like the production object
+/// store, minus the network.
+#[derive(Default)]
+struct MockSnapshotStore {
+    inner: std::sync::Mutex<std::collections::HashMap<(String, String), NetSnapshot>>,
+}
+
+#[async_trait::async_trait]
+impl SnapshotStore for MockSnapshotStore {
+    async fn put(&self, ws: &str, net_id: &str, snapshot: &NetSnapshot) {
+        self.inner
+            .lock()
+            .unwrap()
+            .insert((ws.to_string(), net_id.to_string()), snapshot.clone());
+    }
+    async fn get(&self, ws: &str, net_id: &str) -> Option<NetSnapshot> {
+        self.inner
+            .lock()
+            .unwrap()
+            .get(&(ws.to_string(), net_id.to_string()))
+            .cloned()
+    }
+    async fn delete(&self, ws: &str, net_id: &str) {
+        self.inner
+            .lock()
+            .unwrap()
+            .remove(&(ws.to_string(), net_id.to_string()));
+    }
+}
+
+/// Registry with a snapshot store installed. The pool target's consumer starter
+/// models the REAL NATS consumer faithfully: it re-hydrates topology from
+/// `NetInitialized` ONLY on a full replay (resume cell unset). On a snapshot
+/// delta-wake the registry sets the resume cell to `last_stream_seq`, the
+/// consumer starts PAST `NetInitialized`, and the starter does NOT hydrate —
+/// so topology must come from the snapshot itself (the ADR-20 fix).
+fn build_with_snapshot() -> (Arc<Reg>, Arc<MockSnapshotStore>) {
+    let target_id = "pool-target-net";
+    let parent_topo = parent_net(target_id);
+    let pool_topo = pool_net();
+
+    let factory: StoreFactory<MockEventRepository, MockTopologyRepository, MockStateProjection> =
+        Arc::new(move |net_id: &str| {
+            let (_tx, rx) = tokio::sync::watch::channel(0u64);
+            if net_id == target_id {
+                let topo = Arc::new(MockTopologyRepository::new());
+                let resume_cell = Arc::new(parking_lot::RwLock::new(None));
+                let topo_for_starter = topo.clone();
+                let resume_for_starter = resume_cell.clone();
+                let net = pool_topo.clone();
+                let starter: ConsumerStarter = Arc::new(move |_ws: String| {
+                    let topo = topo_for_starter.clone();
+                    let resume = resume_for_starter.clone();
+                    let net = net.clone();
+                    Box::pin(async move {
+                        // Full replay (resume unset) re-hydrates topology from
+                        // NetInitialized; a snapshot delta-wake (resume set)
+                        // starts past it and does NOT — the loss ADR-20 fixes.
+                        if resume.read().is_none() {
+                            topo.set_topology(net);
+                        }
+                    })
+                });
+                (
+                    Arc::new(MockEventRepository::new()),
+                    topo,
+                    Arc::new(MockStateProjection::new()),
+                    rx,
+                    Arc::new(std::sync::RwLock::new(None)),
+                    starter,
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    resume_cell,
+                )
+            } else {
+                let topo = MockTopologyRepository::with_topology(parent_topo.clone());
+                (
+                    Arc::new(MockEventRepository::new()),
+                    Arc::new(topo),
+                    Arc::new(MockStateProjection::new()),
+                    rx,
+                    Arc::new(std::sync::RwLock::new(None)),
+                    Arc::new(|_ws: String| {
+                        Box::pin(async {})
+                            as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                    }),
+                    Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                    Arc::new(parking_lot::RwLock::new(None)),
+                )
+            }
+        });
+
+    let registry = Arc::new(NetRegistry::new(factory));
+    registry.set_woken_workspace_resolver(Arc::new(StubResolver {
+        target_id: target_id.to_string(),
+        target_ws: Some("default".to_string()),
+    }));
+    let snapshot_store = Arc::new(MockSnapshotStore::default());
+    registry.set_snapshot_store(snapshot_store.clone());
+    (registry, snapshot_store)
+}
+
+/// REGRESSION (ADR-20 topology loss): a pool that hibernates with a wake
+/// snapshot and is later woken via the snapshot delta-replay path must still
+/// have its topology. Before the fix, the snapshot carried only the marking;
+/// the delta-wake skipped `NetInitialized`, so the woken pool came back
+/// topology-less and every bridge inject into it returned `NoTopology` forever.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn snapshot_woken_pool_restores_topology() {
+    let (registry, snapshot_store) = build_with_snapshot();
+    let target_id = "pool-target-net";
+
+    // First wake: full replay hydrates topology, then hibernate captures a
+    // snapshot (with topology, post-fix) into the store.
+    registry.get_or_create(target_id);
+    assert!(
+        registry
+            .get(target_id)
+            .and_then(|i| i.service.get_topology())
+            .is_some(),
+        "precondition: fresh pool hydrates topology via full-replay starter"
+    );
+    registry
+        .hibernate(target_id)
+        .await
+        .expect("hibernate pool should succeed");
+    assert!(
+        snapshot_store
+            .get("default", target_id)
+            .await
+            .is_some(),
+        "hibernate must have written a wake snapshot"
+    );
+
+    // Second wake: a snapshot exists, so get_or_create takes the delta-replay
+    // path (resume set) and the consumer does NOT re-hydrate topology. Topology
+    // must be restored from the snapshot itself.
+    registry.get_or_create(target_id);
+    let topo = registry
+        .get(target_id)
+        .and_then(|i| i.service.get_topology());
+    assert!(
+        topo.is_some(),
+        "snapshot-woken pool must restore topology from the snapshot — a \
+         delta-replay wake skips NetInitialized, so without topology in the \
+         snapshot the pool wakes topology-less (ADR-20)"
+    );
 }
 
 async fn put_run_mode(router: Router, net_id: &str, mode: &str) -> (StatusCode, Value) {

@@ -29,7 +29,7 @@
 //! oversized, deserialize error, store unavailable) degrades cleanly to today's
 //! full replay, so correctness never depends on it.
 
-use petri_domain::{Marking, PersistedEvent, PlaceId};
+use petri_domain::{Marking, PersistedEvent, PetriNet, PlaceId};
 use serde::{Deserialize, Serialize};
 
 use crate::ports::DedupSeed;
@@ -73,14 +73,22 @@ pub struct NetSnapshot {
     /// JetStream `stream_sequence` of the last event applied before hibernate.
     /// The wake consumer resumes at `last_stream_seq + 1`.
     pub last_stream_seq: u64,
+    /// The net's topology (structure) at hibernate time. A snapshot wake replays
+    /// only the post-snapshot delta (`ByStartSequence`), so the `NetInitialized`
+    /// event that normally hydrates topology — it lives at the head of the log —
+    /// is never replayed. Carrying the topology here makes the snapshot a
+    /// self-contained wake seed (ADR-20). `None` only on pre-v2 snapshots, which
+    /// the wake path treats as "cannot delta-wake → full replay".
+    #[serde(default)]
+    pub topology: Option<PetriNet>,
     /// Snapshot format version for forward-compat. Bump on shape changes;
     /// readers reject unknown versions (→ full replay).
     #[serde(default)]
     pub version: u32,
 }
 
-/// Current snapshot format version.
-pub const SNAPSHOT_VERSION: u32 = 1;
+/// Current snapshot format version. v2 added `topology` (ADR-20).
+pub const SNAPSHOT_VERSION: u32 = 2;
 
 impl NetSnapshot {
     /// Rebuild a [`DedupSeed`] map from the serialized [`DedupEntry`] list.
@@ -127,6 +135,10 @@ pub struct SnapshotInputs {
     /// JetStream `stream_sequence` of the last applied event, read under the
     /// SAME store lock as `marking`. The wake resumes at `last_stream_seq + 1`.
     pub last_stream_seq: u64,
+    /// The net's topology at hibernate, captured from the topology store (the
+    /// event store that builds these inputs has none, so it leaves this `None`;
+    /// the registry's `write_snapshot` fills it from `service.get_topology()`).
+    pub topology: Option<PetriNet>,
 }
 
 impl SnapshotInputs {
@@ -140,6 +152,7 @@ impl SnapshotInputs {
             event_count: self.event_count,
             next_sequence: self.next_sequence,
             last_stream_seq: self.last_stream_seq,
+            topology: self.topology,
             version: SNAPSHOT_VERSION,
         }
     }

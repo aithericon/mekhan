@@ -819,41 +819,64 @@ where
                         tokio::runtime::Handle::current()
                             .block_on(async { store.get(&ws_owned, &net_id_owned).await })
                     });
-                    if let Some(snap) = snap {
-                        let resume_seq = snap.last_stream_seq;
-                        let seed_event_store = event_store.clone();
-                        let seed_next_sequence = snap.next_sequence;
-                        let seed_last_hash = snap.last_hash.clone();
-                        tokio::task::block_in_place(|| {
-                            tokio::runtime::Handle::current().block_on(async {
-                                seed_event_store.seed_from_snapshot(&snap).await;
-                                // Seed the write authority too (MAJOR 2a): on an
-                                // EMPTY post-snapshot delta the consumer ticks
-                                // `applied_rx` zero times, so the NATS store's
-                                // `WriteState.next_sequence` would stay 0 and the
-                                // first live append would mint `.sequence == 0`,
-                                // colliding with the pre-hibernate prefix and
-                                // breaking SSE broadcast (sequence-based) cursors.
-                                // This is the SNAPSHOT-BASELINE seed; it is correct
-                                // only for an empty post-snapshot delta. For a
-                                // NON-empty delta we re-seed below from the
-                                // POST-replay cache (the delta advances both the
-                                // next sequence and the chain tip past the
-                                // snapshot baseline).
-                                seed_event_store
-                                    .seed_write_state(seed_next_sequence, seed_last_hash)
-                                    .await;
-                            })
-                        });
-                        *resume_from_cell.write() = Some(resume_seq);
-                        snapshot_woke = true;
-                        tracing::info!(
-                            net_id = %net_id,
-                            workspace = %ws,
-                            resume_from = resume_seq,
-                            event_count = snap.event_count,
-                            "Waking from snapshot — replaying only post-snapshot delta"
-                        );
+                    // ADR-20: a snapshot can only drive a delta-wake if it carries
+                    // the topology. A snapshot wake resumes the consumer at
+                    // `ByStartSequence(last_stream_seq + 1)`, starting PAST the
+                    // head-of-log `NetInitialized` that normally hydrates topology
+                    // — so the snapshot is the ONLY source of topology on wake.
+                    // Without it the woken net has marking but no topology, and
+                    // every bridge inject into it returns `NoTopology` forever. A
+                    // pre-v2 snapshot has no topology → skip the fast-path and let
+                    // the consumer full-replay (which re-hydrates topology).
+                    match snap.as_ref().and_then(|s| s.topology.clone()) {
+                        Some(topo) => {
+                            let snap = snap.expect("topology came from snap");
+                            // Restore topology BEFORE the consumer/eval consults it.
+                            topology_store.set_topology(topo);
+
+                            let resume_seq = snap.last_stream_seq;
+                            let seed_event_store = event_store.clone();
+                            let seed_next_sequence = snap.next_sequence;
+                            let seed_last_hash = snap.last_hash.clone();
+                            tokio::task::block_in_place(|| {
+                                tokio::runtime::Handle::current().block_on(async {
+                                    seed_event_store.seed_from_snapshot(&snap).await;
+                                    // Seed the write authority too (MAJOR 2a): on an
+                                    // EMPTY post-snapshot delta the consumer ticks
+                                    // `applied_rx` zero times, so the NATS store's
+                                    // `WriteState.next_sequence` would stay 0 and the
+                                    // first live append would mint `.sequence == 0`,
+                                    // colliding with the pre-hibernate prefix and
+                                    // breaking SSE broadcast (sequence-based) cursors.
+                                    // This is the SNAPSHOT-BASELINE seed; it is correct
+                                    // only for an empty post-snapshot delta. For a
+                                    // NON-empty delta we re-seed below from the
+                                    // POST-replay cache (the delta advances both the
+                                    // next sequence and the chain tip past the
+                                    // snapshot baseline).
+                                    seed_event_store
+                                        .seed_write_state(seed_next_sequence, seed_last_hash)
+                                        .await;
+                                })
+                            });
+                            *resume_from_cell.write() = Some(resume_seq);
+                            snapshot_woke = true;
+                            tracing::info!(
+                                net_id = %net_id,
+                                workspace = %ws,
+                                resume_from = resume_seq,
+                                event_count = snap.event_count,
+                                "Waking from snapshot — replaying only post-snapshot delta"
+                            );
+                        }
+                        None if snap.is_some() => {
+                            tracing::warn!(
+                                net_id = %net_id,
+                                "wake snapshot predates topology capture (pre-v2) — \
+                                 full replay to re-hydrate topology"
+                            );
+                        }
+                        None => {}
                     }
                 }
 
@@ -1631,7 +1654,13 @@ where
         // consumer applied an event between the two reads (the consumer is still
         // live here — `write_snapshot` runs BEFORE `cancel_token.cancel()`).
         // Reading both from the store guarantees coherence.
-        let inputs = inst.service.snapshot_inputs().await;
+        let mut inputs = inst.service.snapshot_inputs().await;
+        // Capture the live topology (ADR-20). The event store that builds
+        // `inputs` has none; without this the wake's delta-replay — which starts
+        // PAST the `NetInitialized` event — would leave the woken net topology-less.
+        // Capturing the LIVE topology (not just `NetInitialized`) also preserves
+        // any mid-life `update_transition_script` patches.
+        inputs.topology = inst.service.get_topology();
         let snapshot = inputs.into_snapshot();
         store.put(&ws, net_id, &snapshot).await;
     }

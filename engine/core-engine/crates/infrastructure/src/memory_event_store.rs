@@ -260,6 +260,9 @@ impl MemoryEventStore {
             // Read under the SAME lock as `marking` above → always coherent with
             // the projected prefix (MAJOR 2b). The wake resumes at this + 1.
             last_stream_seq: g.last_applied_stream_seq,
+            // No topology at this layer; the registry's `write_snapshot` fills it
+            // from `service.get_topology()` before persisting.
+            topology: None,
         }
     }
 
