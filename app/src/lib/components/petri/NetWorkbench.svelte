@@ -338,6 +338,7 @@
 			<EventLog
 				events={petriStore.events ?? []}
 				currentIndex={petriStore.replayIndex}
+				evictedCount={petriStore.evictedCount}
 				onSelectEvent={(idx) => petriStore.setReplayIndex(idx)}
 				onInspectEvent={(seq) => petriStore.selectEvent(seq)}
 				getTransitionName={petriStore.getTransitionName}

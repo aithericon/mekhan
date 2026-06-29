@@ -27,9 +27,12 @@
 		onInspectEvent?: (sequence: number) => void;
 		getTransitionName?: (id: string) => string;
 		getPlaceName?: (id: string) => string;
+		/** Oldest events dropped from the in-memory buffer (history no longer
+		 *  scrubbable). Surfaced so a long live stream reads as truncated, not lost. */
+		evictedCount?: number;
 	}
 
-	let { events, currentIndex, onSelectEvent, onInspectEvent, getTransitionName, getPlaceName }: Props = $props();
+	let { events, currentIndex, onSelectEvent, onInspectEvent, getTransitionName, getPlaceName, evictedCount = 0 }: Props = $props();
 
 	const ITEM_HEIGHT = 52;
 	let containerHeight = $state(0);
@@ -288,6 +291,14 @@
 					{events.length}
 				{/if}
 			</span>
+			{#if evictedCount > 0}
+				<span
+					class="text-sm text-muted-foreground/60 tabular-nums"
+					title={`${evictedCount.toLocaleString()} older events trimmed from the in-memory buffer — they remain in the engine log but are no longer scrubbable here`}
+				>
+					+{evictedCount.toLocaleString()} earlier
+				</span>
+			{/if}
 			<Button
 				variant="ghost"
 				size="icon-xs"

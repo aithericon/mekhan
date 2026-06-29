@@ -9,10 +9,9 @@ import { connectSse, type SseConnection } from '$lib/net/sse';
 import { createPetriApi, PetriApiError, type NetMemory } from '$lib/stores/petri-api';
 import {
 	computeEventSpotlight,
-	computeMarkingDiff,
-	projectBridgedOut,
-	projectMarking
+	computeMarkingDiff
 } from '$lib/stores/petri-projection';
+import { createMarkingBuffer } from '$lib/stores/petri-marking-buffer';
 import {
 	getSelectedEventDetails as getSelectedEventDetails_,
 	getSelectedGroupDetails as getSelectedGroupDetails_,
@@ -27,6 +26,7 @@ import type {
 	ScenarioGroup,
 	SelectedElement,
 	MarkingDiff,
+	Token,
 	TokenColor
 } from '$lib/types/petri';
 
@@ -59,7 +59,19 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	let selectedElement: SelectedElement = $state(null);
 	let transitionStatuses: Record<string, TransitionStatus> = $state({});
 	let currentGroups: ScenarioGroup[] = $state([]);
-	let lastFetchedSequence = 0;
+
+	// ── Bounded event buffer + incremental marking ──────────────────────
+	// The engine streams an unbounded event log; holding every event AND
+	// re-folding the whole marking on each append is O(n)-per-event with n
+	// growing without bound — which froze the tab and grew browser memory
+	// linearly on a busy net. The pure `MarkingBuffer` owns a bounded tail +
+	// folded base + incremental live marking (mirroring the engine's base+tail
+	// design); this store is a thin reactive mirror of its snapshot. See
+	// `petri-marking-buffer.ts`.
+	const buffer = createMarkingBuffer();
+	// Events trimmed from the front of the buffer (folded into the base).
+	// Surfaced so the UI can flag that earlier history is no longer scrubbable.
+	let evictedCount: number = $state(0);
 
 	// ── Run mode ────────────────────────────────────────────────────────
 	let runMode: string = $state('stopped');
@@ -128,9 +140,22 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	}
 
 	// ── Projected marking ───────────────────────────────────────────────
-	const projectedMarking = $derived.by(() => projectMarking(events, replayIndex));
+	// Reactive mirror of the pure `buffer`'s snapshot. After every buffer
+	// mutation, `syncFromBuffer()` copies its current events/cursor/marking into
+	// these `$state` cells, which the canvas/timeline/log read via the getters.
+	let projectedMarking: Map<string, Token[]> = $state(new Map());
+	let bridgedOutTokens: Map<string, Token[]> = $state(new Map());
 
-	const bridgedOutTokens = $derived.by(() => projectBridgedOut(events, replayIndex));
+	/** Mirror the buffer's current snapshot into reactive `$state`. Call after
+	 *  every buffer mutation (append / reset / scrub). */
+	function syncFromBuffer() {
+		events = buffer.events;
+		replayIndex = buffer.replayIndex;
+		evictedCount = buffer.evictedCount;
+		const v = buffer.view();
+		projectedMarking = v.marking;
+		bridgedOutTokens = v.bridgedOut;
+	}
 
 	// ── Event spotlight ─────────────────────────────────────────────────
 	const eventSpotlight = $derived.by(() => {
@@ -168,20 +193,12 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	async function fetchEvents() {
 		try {
 			const raw = await api.fetchEvents();
-			// Deduplicate by sequence (backend may emit duplicates)
-			const seen = new Set<number>();
-			events = raw.filter((e) => {
-				if (seen.has(e.sequence)) return false;
-				seen.add(e.sequence);
-				return true;
-			});
-			if (events.length > 0) {
-				// Only jump to end on initial load (replayIndex not yet set)
-				if (replayIndex < 0) {
-					replayIndex = events.length - 1;
-				}
-				lastFetchedSequence = events[events.length - 1].sequence;
-			}
+			// Full (re)load: rebuild marking state from scratch, then fold the
+			// batch through the incremental/bounded buffer (which dedups, trims
+			// to the cap, and jumps to the live tail).
+			buffer.reset();
+			buffer.append(raw);
+			syncFromBuffer();
 			await fetchState();
 		} catch (e: any) {
 			error = `Failed to fetch events: ${e.message}`;
@@ -190,21 +207,10 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 
 	async function fetchNewEvents() {
 		try {
-			const newEvents = await api.fetchEvents(lastFetchedSequence + 1);
-			if (newEvents.length > 0) {
-				// Deduplicate by sequence
-				const existingSeqs = new Set(events.map((e) => e.sequence));
-				const unique = newEvents.filter((e) => !existingSeqs.has(e.sequence));
-				if (unique.length > 0) {
-					// Only auto-advance if the user is following the live tail
-					const wasAtEnd = replayIndex >= events.length - 1;
-					events = [...events, ...unique];
-					if (wasAtEnd) {
-						replayIndex = events.length - 1;
-					}
-					lastFetchedSequence = events[events.length - 1].sequence;
-					await fetchState();
-				}
+			const newEvents = await api.fetchEvents(buffer.lastSequence + 1);
+			if (buffer.append(newEvents)) {
+				syncFromBuffer();
+				await fetchState();
 			}
 		} catch {
 			// Silently retry on next poll
@@ -267,9 +273,8 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	async function reset() {
 		try {
 			await api.reset();
-			events = [];
-			replayIndex = -1;
-			lastFetchedSequence = 0;
+			buffer.reset();
+			syncFromBuffer();
 			transitionStatuses = {};
 			selectedElement = null;
 			await fetchTopology();
@@ -366,7 +371,8 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			markingDiff = null;
 		}
 
-		replayIndex = index;
+		buffer.setReplayIndex(index);
+		syncFromBuffer();
 	}
 
 	function selectPlace(id: string) { selectedElement = { type: 'place', id }; }
@@ -420,7 +426,7 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 	function connectSSE() {
 		sseConnection?.close();
 		sseConnection = connectSse(
-			() => `${apiBase}/events/stream?from_sequence=${lastFetchedSequence + 1}`,
+			() => `${apiBase}/events/stream?from_sequence=${buffer.lastSequence + 1}`,
 			{
 				maxRetries: SSE_MAX_RETRIES,
 				initialRetryMs: SSE_INITIAL_RETRY_MS,
@@ -445,22 +451,13 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 			if (type === 'update') {
 				const parsed = JSON.parse(data);
 				const newEvents: PersistedEvent[] = Array.isArray(parsed) ? parsed : [parsed];
-				const existingSeqs = new Set(events.map((e) => e.sequence));
-				const unique = newEvents.filter((e) => !existingSeqs.has(e.sequence));
-				if (unique.length > 0) {
-					// Only auto-advance if the user is following the live tail
-					const wasAtEnd = replayIndex >= events.length - 1;
-					events = [...events, ...unique];
-					if (wasAtEnd) {
-						replayIndex = events.length - 1;
-					}
-					lastFetchedSequence = events[events.length - 1].sequence;
+				if (buffer.append(newEvents)) {
+					syncFromBuffer();
 					fetchState();
 				}
 			} else if (type === 'reset') {
-				events = [];
-				replayIndex = -1;
-				lastFetchedSequence = 0;
+				buffer.reset();
+				syncFromBuffer();
 				fetchTopology();
 				fetchEvents();
 			}
@@ -524,6 +521,9 @@ export function createPetriStore(netId: string, baseUrl: string = PETRI_BASE) {
 		get topology() { return topology; },
 		get events() { return events; },
 		get replayIndex() { return replayIndex; },
+		/** Number of oldest events dropped from the in-memory buffer (history
+		 *  beyond this is no longer scrubbable; folded into the base marking). */
+		get evictedCount() { return evictedCount; },
 		get projectedMarking() { return projectedMarking; },
 		get bridgedOutTokens() { return bridgedOutTokens; },
 		get eventSpotlight() { return eventSpotlight; },
