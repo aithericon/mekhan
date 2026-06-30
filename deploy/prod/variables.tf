@@ -394,7 +394,7 @@ variable "engine_cpu_mhz" {
 variable "engine_memory_mb" {
   description = "Engine memory reservation."
   type        = number
-  default     = 1024
+  default     = 512
 }
 
 variable "service_port" {
