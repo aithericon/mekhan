@@ -16,6 +16,7 @@ pub mod resource;
 pub mod responses;
 pub mod roster;
 pub mod runner;
+pub mod service_account;
 pub mod template;
 pub mod template_test;
 pub mod worker;

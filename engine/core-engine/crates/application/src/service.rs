@@ -75,7 +75,7 @@ where
     /// Effect handlers keyed by handler ID.
     effect_handlers: RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
     /// Cached marking state: (sequence_number, marking).
-    cached_state: RwLock<Option<(u64, Marking)>>,
+    cached_state: RwLock<Option<(u64, Arc<Marking>)>>,
     /// Negative-binding memo: transitions proven to have no valid binding at
     /// the current marking, so the eval loop can skip re-running their
     /// (possibly `m^k`) binding search until one of their input places changes.
@@ -417,6 +417,12 @@ where
     /// Get the current topology.
     pub fn get_topology(&self) -> Option<PetriNet> {
         self.topology.get_topology()
+    }
+
+    /// Approximate in-memory footprint of this net's event store, in serialized
+    /// bytes. Powers the engine's per-net memory accounting endpoint.
+    pub async fn memory_report(&self) -> crate::ports::EventStoreMemory {
+        self.events.memory_report().await
     }
 
     /// Capture the inputs for a hibernation snapshot (full marking, dedup seed,
@@ -869,6 +875,23 @@ where
         self.events.all_events().await
     }
 
+    /// Storage-order count of in-memory events (`base_count + tail.len()`).
+    /// The correct cursor seed for incremental delta reads — see
+    /// [`Self::events_from`].
+    pub async fn event_count(&self) -> usize {
+        self.events.len().await
+    }
+
+    /// Events at storage positions `[idx, len)` — the incremental delta since a
+    /// positional cursor. Unlike [`Self::get_events`] (which deep-clones the
+    /// ENTIRE tail on every call), this clones only the new suffix, so a hot
+    /// loop polling for fresh events is O(delta) per tick, not O(n). Uses the
+    /// store's storage-order index (NOT `.sequence`, which restarts across
+    /// hydration sessions), so it is cursor-safe across snapshot wakes.
+    pub async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        self.events.events_from(idx).await
+    }
+
     /// Append a raw domain event to the event log.
     ///
     /// Use sparingly — most events should be emitted through higher-level
@@ -900,7 +923,9 @@ where
         )
         .await;
         evaluation::reconcile_binding_memo(&self.binding_memo, self.topology.as_ref(), &delta);
-        marking
+        // Cold path (API state queries): clone the shared inner once to keep the
+        // owned-`Marking` contract. The eval loop never reaches here.
+        (*marking).clone()
     }
 
     /// Invalidate the cached marking state.

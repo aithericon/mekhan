@@ -5763,6 +5763,86 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/workspaces/{workspace_id}/service-accounts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/workspaces/{workspace_id}/service-accounts — human-Admin-gated
+         *     list of ALL service accounts in the workspace (they are workspace-owned).
+         */
+        get: operations["list_service_accounts"];
+        put?: never;
+        /** POST /api/v1/workspaces/{workspace_id}/service-accounts — human-Admin-gated. */
+        post: operations["create_service_account"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** DELETE .../service-accounts/{sa_id} — hard delete (CASCADE drops its tokens). */
+        delete: operations["delete_service_account"];
+        options?: never;
+        head?: never;
+        /** PATCH .../service-accounts/{sa_id} — rename and/or toggle the disabled state. */
+        patch: operations["patch_service_account"];
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}/tokens": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** GET .../service-accounts/{sa_id}/tokens — metadata only; NEVER the secret. */
+        get: operations["list_sa_tokens"];
+        put?: never;
+        /**
+         * POST .../service-accounts/{sa_id}/tokens — mint a `sat_` token; the secret is
+         *     returned ONCE.
+         */
+        post: operations["create_sa_token"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/workspaces/{workspace_id}/service-accounts/{sa_id}/tokens/{token_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * DELETE .../service-accounts/{sa_id}/tokens/{token_id} — revoke a token. The
+         *     JOIN to `service_accounts` re-asserts the token's SA is in `workspace_id`.
+         */
+        delete: operations["revoke_sa_token"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/healthz": {
         parameters: {
             query?: never;
@@ -7770,6 +7850,22 @@ export interface components {
              */
             workspace_id?: string | null;
         };
+        /** @description Request body for `POST /api/v1/workspaces/{workspace_id}/service-accounts`. */
+        CreateServiceAccountRequest: {
+            description?: string | null;
+            name: string;
+            /** @description One of `viewer` | `editor` | `admin`. `owner` is rejected with 400. */
+            role: string;
+        };
+        /** @description Request body for `POST .../service-accounts/{sa_id}/tokens`. */
+        CreateServiceAccountTokenRequest: {
+            /**
+             * Format: date-time
+             * @description Optional RFC 3339 expiry. `None` = never expires.
+             */
+            expires_at?: string | null;
+            name: string;
+        };
         CreateTemplateRequest: {
             description?: string | null;
             /**
@@ -7874,6 +7970,19 @@ export interface components {
             max_uses?: number | null;
             reusable: boolean;
             token: string;
+        };
+        /**
+         * @description Response for a freshly-minted service-account token. `secret` is the full
+         *     `sat_{id}.{secret}` credential, returned ONCE and never stored in plaintext.
+         */
+        CreatedServiceAccountToken: {
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description The full `sat_{id}.{secret}` token — shown exactly once. */
+            secret: string;
         };
         /**
          * @description Response of `POST /api/v1/auth/tokens`. Identical to [`TokenSummary`] plus the
@@ -11678,6 +11787,15 @@ export interface components {
             /** Format: int64 */
             total_pages: number;
         };
+        /**
+         * @description Request body for `PATCH .../service-accounts/{sa_id}`. Both fields optional —
+         *     rename and/or toggle the disabled state.
+         */
+        PatchServiceAccountRequest: {
+            /** @description `true` ⇒ set `disabled_at = now()`; `false` ⇒ clear it (re-enable). */
+            disabled?: boolean | null;
+            name?: string | null;
+        };
         PdfSettings: {
             /** @description Passwords for encrypted PDFs (tried in order). */
             passwords?: string[] | null;
@@ -13194,6 +13312,39 @@ export interface components {
         SelectOption: {
             label: string;
             value: string;
+        };
+        /** @description Service-account list/summary row. MUST NOT carry any secret material. */
+        ServiceAccountSummary: {
+            /** Format: date-time */
+            created_at: string;
+            /**
+             * Format: uuid
+             * @description The human admin who created the SA, or `None` if that account was deleted.
+             */
+            created_by?: string | null;
+            description?: string | null;
+            /**
+             * Format: date-time
+             * @description Non-NULL ⇒ disabled; every token of a disabled SA is rejected.
+             */
+            disabled_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            name: string;
+            /** @description Fixed workspace role: `viewer` | `editor` | `admin` (never `owner`). */
+            role: string;
+        };
+        /** @description Token metadata row. NEVER carries `token_hash` or the secret. */
+        ServiceAccountTokenSummary: {
+            /** Format: date-time */
+            created_at: string;
+            /** Format: date-time */
+            expires_at?: string | null;
+            /** Format: uuid */
+            id: string;
+            /** Format: date-time */
+            last_used_at?: string | null;
+            name: string;
         };
         SetActiveWorkspaceRequest: {
             /**
@@ -28253,6 +28404,340 @@ export interface operations {
                 };
             };
             /** @description Folder not found or not in workspace */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_service_accounts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Service accounts for the workspace */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountSummary"][];
+                };
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_service_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Service account created */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountSummary"];
+                };
+            };
+            /** @description Invalid name/role */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    delete_service_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Service account id */
+                sa_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service account not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    patch_service_account: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Service account id */
+                sa_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PatchServiceAccountRequest"];
+            };
+        };
+        responses: {
+            /** @description Updated service account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountSummary"];
+                };
+            };
+            /** @description Invalid name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service account not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Name already in use */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    list_sa_tokens: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Service account id */
+                sa_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Tokens for the service account */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ServiceAccountTokenSummary"][];
+                };
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service account not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    create_sa_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Service account id */
+                sa_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateServiceAccountTokenRequest"];
+            };
+        };
+        responses: {
+            /** @description Token created (secret shown once) */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CreatedServiceAccountToken"];
+                };
+            };
+            /** @description Invalid name */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Service account not found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    revoke_sa_token: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Workspace id */
+                workspace_id: string;
+                /** @description Service account id */
+                sa_id: string;
+                /** @description Token id */
+                token_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Revoked */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Admin role required / machine principal */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Token not found */
             404: {
                 headers: {
                     [name: string]: unknown;

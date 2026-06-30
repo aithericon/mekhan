@@ -2,7 +2,9 @@ use std::collections::VecDeque;
 use std::sync::RwLock;
 
 use petri_application::net_snapshot::NetSnapshot;
-use petri_application::{DedupSeed, EventRepository, EventStoreError, SnapshotInputs};
+use petri_application::{
+    dedup_seed_bytes, DedupSeed, EventRepository, EventStoreError, EventStoreMemory, SnapshotInputs,
+};
 use petri_domain::{apply_event_to_marking, DomainEvent, Marking, PersistedEvent};
 
 /// Default in-memory tail budget for the per-net event cache. The durable NATS
@@ -39,6 +41,11 @@ pub struct MemoryEventStore {
     /// Eviction threshold in serialized bytes. The tail is trimmed (oldest
     /// folded into base) until `tail_bytes <= cap` OR `tail.len() == 1`.
     tail_cap_bytes: usize,
+    /// Max distinct one-shot `(place,dedup_id)` entries the `base_dedup` ring
+    /// retains before FIFO-evicting the oldest (see
+    /// [`petri_application::DEFAULT_MAX_DEDUP_ENTRIES`]). Carried so `reset` /
+    /// `seed_from_snapshot` rebuild the ring at the same cap.
+    dedup_cap: usize,
 }
 
 struct Inner {
@@ -72,11 +79,11 @@ struct Inner {
 }
 
 impl Inner {
-    fn empty() -> Self {
+    fn empty(dedup_cap: usize) -> Self {
         Self {
             base_count: 0,
             base_marking: Marking::new(),
-            base_dedup: DedupSeed::new(),
+            base_dedup: DedupSeed::with_cap(dedup_cap),
             base_last_hash: None,
             tail: VecDeque::new(),
             tail_bytes: 0,
@@ -139,21 +146,31 @@ fn push_tail(g: &mut Inner, e: PersistedEvent, cap: usize) {
 
 impl MemoryEventStore {
     /// Construct with the tail cap read from `PETRI_MAX_EVENT_TAIL_BYTES`
-    /// (default [`DEFAULT_MAX_EVENT_TAIL_BYTES`]).
+    /// (default [`DEFAULT_MAX_EVENT_TAIL_BYTES`]) and the dedup-ring cap from
+    /// `PETRI_MAX_DEDUP_ENTRIES` (default
+    /// [`petri_application::DEFAULT_MAX_DEDUP_ENTRIES`]).
     pub fn new() -> Self {
         let cap = std::env::var("PETRI_MAX_EVENT_TAIL_BYTES")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(DEFAULT_MAX_EVENT_TAIL_BYTES);
-        Self::with_tail_cap(cap)
+        Self::with_caps(cap, petri_application::default_max_dedup_entries())
     }
 
-    /// Construct with an explicit tail cap in serialized bytes. Useful for
-    /// deterministic tests of the eviction path.
+    /// Construct with an explicit tail cap in serialized bytes, defaulting the
+    /// dedup-ring cap from the env. Useful for deterministic tests of the
+    /// byte-eviction path; ~20 existing callers rely on this signature.
     pub fn with_tail_cap(tail_cap_bytes: usize) -> Self {
+        Self::with_caps(tail_cap_bytes, petri_application::default_max_dedup_entries())
+    }
+
+    /// Construct with explicit tail-byte AND dedup-entry caps. Used for
+    /// deterministic tests of the bounded dedup ring.
+    pub fn with_caps(tail_cap_bytes: usize, dedup_cap: usize) -> Self {
         Self {
-            inner: RwLock::new(Inner::empty()),
+            inner: RwLock::new(Inner::empty(dedup_cap)),
             tail_cap_bytes,
+            dedup_cap,
         }
     }
 
@@ -280,7 +297,7 @@ impl MemoryEventStore {
     pub fn seed_from_snapshot(&self, snapshot: &NetSnapshot) {
         let mut g = self.inner.write().unwrap();
         g.base_marking = snapshot.marking.clone();
-        g.base_dedup = snapshot.dedup_seed();
+        g.base_dedup = snapshot.dedup_seed(self.dedup_cap);
         g.base_last_hash = snapshot.last_hash.clone();
         g.base_count = snapshot.event_count as usize;
         g.next_sequence = snapshot.next_sequence;
@@ -291,6 +308,30 @@ impl MemoryEventStore {
         g.last_applied_stream_seq = snapshot.last_stream_seq;
         g.tail = VecDeque::new();
         g.tail_bytes = 0;
+    }
+
+    /// Approximate in-memory footprint of this store, read directly from the
+    /// folded base + the running `tail_bytes` counter under one read lock.
+    ///
+    /// `tail_bytes` is already maintained on every push/evict, so only the base
+    /// marking and base dedup index are serialized here. `base_dedup_*` reflect
+    /// the PERMANENT (append-only) dedup index — the field to watch for the
+    /// streaming-telemetry leak that historically OOM'd high-volume nets.
+    pub fn memory_report_now(&self) -> EventStoreMemory {
+        let g = self.inner.read().unwrap();
+        EventStoreMemory {
+            tail_bytes: g.tail_bytes,
+            tail_events: g.tail.len(),
+            base_marking_bytes: serde_json::to_vec(&g.base_marking)
+                .map(|b| b.len())
+                .unwrap_or(0),
+            base_dedup_bytes: dedup_seed_bytes(&g.base_dedup),
+            base_dedup_entries: g.base_dedup.len(),
+            base_count: g.base_count,
+            event_count: g.len(),
+            total_bytes: 0,
+        }
+        .finalize()
     }
 }
 
@@ -336,7 +377,7 @@ impl EventRepository for MemoryEventStore {
     }
 
     async fn reset(&self) {
-        *self.inner.write().unwrap() = Inner::empty();
+        *self.inner.write().unwrap() = Inner::empty(self.dedup_cap);
     }
 
     async fn current_sequence(&self) -> u64 {
@@ -446,6 +487,10 @@ impl EventRepository for MemoryEventStore {
 
     async fn seed_from_snapshot(&self, snapshot: &NetSnapshot) {
         self.seed_from_snapshot(snapshot)
+    }
+
+    async fn memory_report(&self) -> EventStoreMemory {
+        self.memory_report_now()
     }
 }
 
@@ -707,7 +752,7 @@ mod tests {
         // 64 KiB tail cap vs 256 KiB fat events → aggressive eviction.
         let store = MemoryEventStore::with_tail_cap(64 * 1024);
         let proj = MarkingProjection::new();
-        let cache: RwLock<Option<(u64, petri_domain::Marking)>> = RwLock::new(None);
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> = RwLock::new(None);
 
         // -- Track the canonical full-replay history independently.
         let mut control: Vec<PersistedEvent> = Vec::new();
@@ -835,8 +880,8 @@ mod tests {
         };
 
         // Prime the cache at cursor 0 so the call takes the Stale → Applied branch.
-        let cache: RwLock<Option<(u64, petri_domain::Marking)>> =
-            RwLock::new(Some((0, petri_domain::Marking::new())));
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> =
+            RwLock::new(Some((0, std::sync::Arc::new(petri_domain::Marking::new()))));
         let proj = MarkingProjection::new();
 
         let (marking, delta) = advance_marking(&store, &proj, &cache).await;
@@ -854,6 +899,40 @@ mod tests {
             cursor, 5,
             "Applied branch must store the folded extent (cached_idx + new_events.len()), \
              not the stale events.len() read at call entry"
+        );
+    }
+
+    /// Regression: an UNCHANGED (Hit) `advance_marking` must hand back the SAME
+    /// shared `Arc<Marking>` — O(1), no rebuild and no deep clone of the parked
+    /// token `Value`s. Deep-cloning the whole marking on every eval-loop tick
+    /// (even when nothing changed) was a dominant allocation source on nets with
+    /// a large token backlog at a place (the metric-storm `sig_metric` pile-up).
+    #[tokio::test]
+    async fn advance_marking_hit_returns_same_arc_no_reclone() {
+        use crate::MarkingProjection;
+        use petri_application::{advance_marking, MarkingDelta};
+        use std::sync::RwLock;
+
+        let place = PlaceId::named("p");
+        let store = MemoryEventStore::with_tail_cap(usize::MAX);
+        for i in 0..4u64 {
+            store.load_existing_event(token_created(i, &place));
+        }
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> = RwLock::new(None);
+        let proj = MarkingProjection::new();
+
+        // First call primes the cache (Miss → Rebuilt).
+        let (first, d0) = advance_marking(&store, &proj, &cache).await;
+        assert!(matches!(d0, MarkingDelta::Rebuilt));
+        assert_eq!(first.token_count(&place), 4);
+
+        // Second call with NO new events is a Hit: it must return the exact same
+        // Arc allocation, not a rebuilt/cloned marking.
+        let (second, d1) = advance_marking(&store, &proj, &cache).await;
+        assert!(matches!(d1, MarkingDelta::Unchanged), "no new events ⇒ Hit");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "Hit must hand back the cached Arc (O(1)), not a fresh clone"
         );
     }
 
@@ -1126,6 +1205,59 @@ mod tests {
         );
     }
 
+    /// (d) Bounded dedup ring: a snapshot captured from a store with dedup cap
+    /// `K` holds at most `K` dedup entries, and seeding a fresh `K`-capped store
+    /// from it recognizes a recent (within-window) id while an evicted-oldest id
+    /// stays absent. Pins the retention-only fix: the snapshot `dedup` set is now
+    /// bounded by `K` (was unbounded/append-only).
+    #[tokio::test]
+    async fn snapshot_roundtrip_bounds_dedup_and_restores_recent() {
+        let place = PlaceId::named("p");
+        const K: usize = 4;
+        // Large tail cap (events stay in the tail; the bound is enforced purely
+        // by the dedup ring's K, exercised via the clone in dedup_seed_full).
+        let src = MemoryEventStore::with_caps(64 * 1024, K);
+
+        // 6 distinct one-shot TokenCreated events → ring must cap to K=4,
+        // evicting the two oldest (id-0, id-1) and keeping id-2..=id-5.
+        for i in 0..6u64 {
+            let id = format!("id-{i}");
+            src.load_existing_event(PersistedEvent::new(
+                i,
+                DomainEvent::TokenCreated {
+                    token: Token::new(TokenColor::Unit),
+                    place_id: place.clone(),
+                    place_name: None,
+                    workflow_id: None,
+                    signal_key: None,
+                    dedup_id: Some(id),
+                },
+                None,
+            ));
+        }
+
+        let snapshot = src.snapshot_inputs_now().into_snapshot();
+        assert!(
+            snapshot.dedup.len() <= K,
+            "snapshot dedup set must be bounded by K={K}, got {}",
+            snapshot.dedup.len()
+        );
+
+        // Seed a fresh K-capped store from the snapshot.
+        let woken = MemoryEventStore::with_caps(64 * 1024, K);
+        woken.seed_from_snapshot(&snapshot);
+        let seed = woken.dedup_seed().await;
+        assert!(seed.len() <= K, "restored ring must stay bounded by K");
+        assert!(
+            seed.contains_key(&(place.clone(), "id-5".to_string())),
+            "a recent within-window id must be recognized after wake"
+        );
+        assert!(
+            !seed.contains_key(&(place.clone(), "id-0".to_string())),
+            "an evicted-oldest id must NOT reappear after wake"
+        );
+    }
+
     /// HEADLINE OOM-fix proof. Hydrates a synthetic high-volume log — N=5000
     /// fat parked producers, each carrying a ~10 KB payload (the crawl shape
     /// that OOM'd a 1 GB engine) — through the store's `load_existing_event`
@@ -1265,5 +1397,68 @@ mod tests {
         );
         // The new event is now the chain tip.
         assert_eq!(woken.last_hash(), Some(appended.hash.clone()));
+    }
+
+    /// `memory_report` accounts the three growing regions and stays a faithful
+    /// leak detector: under a high-volume stream of EPHEMERAL (no-dedup) fat
+    /// tokens the tail stays bounded by the cap and the permanent dedup index
+    /// stays O(1), while the folded base marking is where the parked-token bytes
+    /// accumulate. This is exactly the signal an operator needs to tell "marking
+    /// growth" from "the dedup leak" before an OOM.
+    #[tokio::test]
+    async fn memory_report_accounts_regions_and_flags_dedup_bound() {
+        let place = PlaceId::named("metric_log");
+        let cap = 64 * 1024;
+        let store = MemoryEventStore::with_tail_cap(cap);
+
+        // One one-shot dedup-bearing event (must persist in the permanent index).
+        store.load_existing_event(PersistedEvent::new(
+            0,
+            DomainEvent::TokenCreated {
+                token: Token::new(TokenColor::Unit),
+                place_id: place.clone(),
+                place_name: None,
+                workflow_id: None,
+                signal_key: None,
+                dedup_id: Some("one-shot".to_string()),
+            },
+            None,
+        ));
+
+        // N ephemeral fat streaming emits (dedup_id = None) → evicted into base.
+        let n: u64 = 500;
+        for i in 1..=n {
+            store.load_existing_event(streaming_token(i, &place, 2 * 1024));
+        }
+
+        let report = store.memory_report_now();
+
+        // Cursor contract: every event is counted.
+        assert_eq!(report.event_count as u64, n + 1);
+        // Tail is bounded by the cap (+ at most one event of slack).
+        assert!(
+            report.tail_bytes <= cap + 4 * 1024,
+            "tail_bytes {} must stay near the cap {cap}",
+            report.tail_bytes
+        );
+        // The permanent dedup index holds ONLY the one-shot key — not the N
+        // ephemerals. This is the leak-detection signal.
+        assert_eq!(
+            report.base_dedup_entries, 1,
+            "ephemeral streaming emits must not accumulate in the dedup index"
+        );
+        assert!(report.base_dedup_bytes > 0, "the one-shot entry has bytes");
+        // The parked fat tokens live in the folded base marking.
+        assert!(
+            report.base_marking_bytes > report.base_dedup_bytes,
+            "base marking ({}) should dominate the dedup index ({}) here",
+            report.base_marking_bytes,
+            report.base_dedup_bytes
+        );
+        // total_bytes is the sum of the three serialized regions.
+        assert_eq!(
+            report.total_bytes,
+            report.tail_bytes + report.base_marking_bytes + report.base_dedup_bytes
+        );
     }
 }

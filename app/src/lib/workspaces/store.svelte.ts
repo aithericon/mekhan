@@ -92,10 +92,18 @@ class WorkspaceStore {
 	 */
 	async switchTo(workspaceId: string): Promise<void> {
 		await setActiveWorkspaceApi(workspaceId);
-		// Hard reload to flush every in-memory store keyed by workspace_id.
-		// Cheaper than wiring a workspace-aware invalidator into each one.
 		if (typeof window !== 'undefined') {
-			window.location.reload();
+			// The workspace-detail (manage) page lives at `/workspaces/<id>`, keyed
+			// by the workspace id *in the URL* — a plain reload there would re-show
+			// the workspace we just switched away from. Redirect to the new active
+			// workspace's page instead. Everywhere else a hard reload flushes every
+			// in-memory store keyed by workspace_id (cheaper than wiring a
+			// workspace-aware invalidator into each one).
+			if (/^\/workspaces\/[^/]+/.test(window.location.pathname)) {
+				window.location.href = `/workspaces/${workspaceId}`;
+			} else {
+				window.location.reload();
+			}
 		}
 	}
 }

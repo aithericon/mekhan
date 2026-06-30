@@ -34,6 +34,40 @@ export interface ScenarioLoadResult {
 	tokens_count?: number;
 }
 
+/**
+ * Event-store footprint breakdown (mirrors the engine's `EventStoreMemory`).
+ * All sizes are serialized (JSON) bytes — a faithful proxy for heap footprint.
+ */
+export interface EventStoreMemory {
+	/** Resident event tail, bounded by `PETRI_MAX_EVENT_TAIL_BYTES`. */
+	tail_bytes: number;
+	tail_events: number;
+	/** Folded marking of all evicted/parked tokens. */
+	base_marking_bytes: number;
+	/** Permanent `(place, dedup_id)` idempotency index — watch for unbounded growth. */
+	base_dedup_bytes: number;
+	base_dedup_entries: number;
+	/** Events folded into the base (evicted from the tail). */
+	base_count: number;
+	/** Total storage-order event count (`base_count + tail_events`). */
+	event_count: number;
+	/** Sum of the byte fields above. */
+	total_bytes: number;
+}
+
+/** Per-net memory footprint (mirrors the engine's `NetMemoryResponse`). */
+export interface NetMemory {
+	net_id: string;
+	/** Whether the net is resident in the engine (not hibernated). */
+	resident: boolean;
+	workspace: string | null;
+	topology_bytes: number;
+	/** Approximate total = event store + topology. */
+	total_bytes: number;
+	/** Breakdown, or `null` when the net is not resident. */
+	store: EventStoreMemory | null;
+}
+
 async function request(
 	url: string,
 	init?: RequestInit
@@ -93,6 +127,12 @@ export function createPetriApi(apiBase: string) {
 
 	async function fetchServices<T>(): Promise<T> {
 		return requestJson<T>(`${apiBase}/services`);
+	}
+
+	/** This net's in-memory footprint. Hot-only on the engine: a non-resident
+	 *  (hibernated) net returns `resident: false` with no `store`. */
+	async function fetchMemory(): Promise<NetMemory> {
+		return requestJson<NetMemory>(`${apiBase}/memory`);
 	}
 
 	async function fireTransition(transitionId: string): Promise<void> {
@@ -165,6 +205,7 @@ export function createPetriApi(apiBase: string) {
 		fetchRunMode,
 		fetchAnalysis,
 		fetchServices,
+		fetchMemory,
 		fireTransition,
 		createToken,
 		evaluate,

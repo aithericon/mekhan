@@ -1183,6 +1183,102 @@ where
     Json(petri_application::validate_all_bridges(registry.as_ref()))
 }
 
+/// Per-net memory footprint, as reported by `GET /api/debug/memory`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetMemory {
+    pub net_id: String,
+    /// The net's workspace (tenant), if stamped.
+    pub workspace: Option<String>,
+    /// Serialized bytes of the net's topology (places/transitions/arcs).
+    pub topology_bytes: usize,
+    /// Approximate total footprint of this net = event store + topology.
+    pub total_bytes: usize,
+    /// Event-store footprint breakdown (tail, base marking, base dedup).
+    pub store: petri_application::EventStoreMemory,
+}
+
+/// Engine-wide per-net memory accounting, sorted by descending footprint.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegistryMemory {
+    /// Number of live (non-hibernated) nets in the registry.
+    pub net_count: usize,
+    /// Sum of every live net's `total_bytes`.
+    pub total_bytes: usize,
+    /// Sum of every live net's permanent base-dedup index — the historic OOM
+    /// driver. A large or growing value here points at a dedup leak.
+    pub total_base_dedup_bytes: usize,
+    /// Per-net reports, largest footprint first.
+    pub nets: Vec<NetMemory>,
+}
+
+/// One net's memory footprint, as reported by `GET /api/nets/{net_id}/memory`.
+///
+/// Unlike the registry-wide report this is **hot-only**: it never wakes a
+/// hibernated net just to weigh it (a passive metrics poll must not fight the
+/// idle-hibernation lifecycle). A non-resident net reports `resident: false`
+/// with no `store` — its state lives on the durable NATS log / snapshot store,
+/// not in memory.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct NetMemoryResponse {
+    pub net_id: String,
+    /// Whether the net is currently resident in the engine (not hibernated).
+    pub resident: bool,
+    /// The net's workspace (tenant), if resident and stamped.
+    pub workspace: Option<String>,
+    /// Serialized bytes of the net's topology (0 when not resident).
+    pub topology_bytes: usize,
+    /// Approximate total footprint = event store + topology (0 when not resident).
+    pub total_bytes: usize,
+    /// Event-store footprint breakdown, or `None` when not resident.
+    pub store: Option<petri_application::EventStoreMemory>,
+}
+
+/// GET /api/debug/memory — approximate in-memory footprint of every live net.
+///
+/// Aggregates each net's bounded event store (tail + folded base marking +
+/// permanent dedup index) plus its topology, so an operator can see which net
+/// is consuming RAM and whether the dedup index is growing unboundedly, before
+/// it manifests as an engine OOM. Hibernated nets are not resident and so are
+/// not counted (their state lives on the durable NATS log / snapshot store).
+pub async fn registry_memory<E, T, S>(
+    State(registry): State<Arc<crate::net_registry::NetRegistry<E, T, S>>>,
+) -> Json<RegistryMemory>
+where
+    E: EventRepository + 'static,
+    T: TopologyRepository + 'static,
+    S: StateProjection + 'static,
+{
+    let mut nets = Vec::new();
+    for (net_id, inst) in registry.instances() {
+        let store = inst.service.memory_report().await;
+        let workspace = inst.service.workspace();
+        let topology_bytes = inst
+            .service
+            .get_topology()
+            .as_ref()
+            .map(|t| serde_json::to_vec(t).map(|b| b.len()).unwrap_or(0))
+            .unwrap_or(0);
+        let total_bytes = store.total_bytes + topology_bytes;
+        nets.push(NetMemory {
+            net_id,
+            workspace,
+            topology_bytes,
+            total_bytes,
+            store,
+        });
+    }
+    nets.sort_by_key(|n| std::cmp::Reverse(n.total_bytes));
+
+    let total_bytes = nets.iter().map(|n| n.total_bytes).sum();
+    let total_base_dedup_bytes = nets.iter().map(|n| n.store.base_dedup_bytes).sum();
+    Json(RegistryMemory {
+        net_count: nets.len(),
+        total_bytes,
+        total_base_dedup_bytes,
+        nets,
+    })
+}
+
 pub mod net_scoped {
     use std::sync::Arc;
 
@@ -1336,6 +1432,52 @@ pub mod net_scoped {
     {
         let instance = get_instance(&registry, &net_id).await?;
         Ok(super::get_state(State(instance.as_app_state())).await)
+    }
+
+    /// GET /api/nets/{net_id}/memory — this net's in-memory footprint.
+    ///
+    /// Hot-only on purpose: it reads `registry.get` (resident nets) rather than
+    /// `get_instance` (which rehydrates), so polling a memory panel never wakes a
+    /// hibernated net. A non-resident net returns `resident: false` with no
+    /// breakdown — there is no in-memory footprint to report.
+    pub async fn net_memory<E, T, S>(
+        State(registry): State<Arc<NetRegistry<E, T, S>>>,
+        Path(net_id): Path<String>,
+    ) -> Json<super::NetMemoryResponse>
+    where
+        E: EventRepository + 'static,
+        T: TopologyRepository + 'static,
+        S: StateProjection + 'static,
+    {
+        match registry.get(&net_id) {
+            Some(instance) => {
+                let store = instance.service.memory_report().await;
+                let workspace = instance.service.workspace();
+                let topology_bytes = instance
+                    .service
+                    .get_topology()
+                    .as_ref()
+                    .map(|t| serde_json::to_vec(t).map(|b| b.len()).unwrap_or(0))
+                    .unwrap_or(0);
+                let total_bytes = store.total_bytes + topology_bytes;
+                Json(super::NetMemoryResponse {
+                    net_id,
+                    resident: true,
+                    workspace,
+                    topology_bytes,
+                    total_bytes,
+                    store: Some(store),
+                })
+            }
+            None => Json(super::NetMemoryResponse {
+                net_id,
+                resident: false,
+                workspace: None,
+                topology_bytes: 0,
+                total_bytes: 0,
+                store: None,
+            }),
+        }
     }
 
     /// POST /api/nets/{net_id}/command/fire/{transition_id}

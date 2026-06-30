@@ -25,6 +25,7 @@
 		TransitionScriptSheet,
 		AnalysisPanel,
 		ServicesPanel,
+		MemoryPanel,
 		NetTreeSidebar,
 		ScenarioEditor
 	} from '$lib/components/petri';
@@ -53,7 +54,7 @@
 	// Seed the open/closed default from the prop, then own it locally.
 	// svelte-ignore state_referenced_locally
 	let netTreeOpen = $state(showNetTree);
-	let rightTab = $state<'inspector' | 'services' | 'analysis'>('inspector');
+	let rightTab = $state<'inspector' | 'services' | 'analysis' | 'memory'>('inspector');
 	let showScenarioEditor = $state(false);
 	let showScriptSheet = $state(false);
 	let showTokenSheet = $state(false);
@@ -274,6 +275,15 @@
 				>
 					Analysis
 				</button>
+				<button
+					class="flex-1 px-2 py-1.5 text-sm font-medium transition-colors border-b-2
+						{rightTab === 'memory'
+						? 'border-primary text-foreground'
+						: 'border-transparent text-muted-foreground hover:text-foreground'}"
+					onclick={() => (rightTab = 'memory')}
+				>
+					Memory
+				</button>
 			</div>
 
 			<div class="flex-1 min-h-0 overflow-hidden">
@@ -314,6 +324,11 @@
 							else if (nodeType === 'transition') petriStore.selectTransition(nodeId);
 						}}
 					/>
+				{:else if rightTab === 'memory'}
+					<MemoryPanel
+						memory={petriStore.memory}
+						onRefresh={() => petriStore.fetchMemory()}
+					/>
 				{/if}
 			</div>
 		</div>
@@ -323,6 +338,7 @@
 			<EventLog
 				events={petriStore.events ?? []}
 				currentIndex={petriStore.replayIndex}
+				evictedCount={petriStore.evictedCount}
 				onSelectEvent={(idx) => petriStore.setReplayIndex(idx)}
 				onInspectEvent={(seq) => petriStore.selectEvent(seq)}
 				getTransitionName={petriStore.getTransitionName}

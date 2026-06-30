@@ -110,6 +110,35 @@ pub async fn require_member(
     require_role(db, user, workspace_id, Role::Viewer).await
 }
 
+/// Hard-gate a workspace ADMIN operation: must be a member with `Admin` or
+/// `Owner`. Thin alias over [`require_role`] so admin-only management endpoints
+/// (service accounts, invites) share one auditable gate; an insufficient role
+/// surfaces as `InsufficientRole` → 403 via [`map_to_api_error`].
+pub async fn require_workspace_admin(
+    db: &PgPool,
+    user: &AuthUser,
+    workspace_id: Uuid,
+) -> Result<Role, MembershipError> {
+    require_role(db, user, workspace_id, Role::Admin).await
+}
+
+/// Whether a principal is a NON-human MACHINE credential — identified purely by
+/// its `subject` prefix: `runner:` (runner token), `worker:` (worker token), or
+/// `service-account:` (SA token). A human (cookie session or `uat_` PAT) carries
+/// an OIDC `sub` (or `user:{uuid}`), which never matches.
+///
+/// Used as an explicit, intentional privilege-escalation guard at SA-management
+/// call sites: only HUMAN admins may create/rotate service accounts, so a
+/// service account can never mint more service accounts (lateral movement). This
+/// is defense-in-depth — machine principals also have no `workspace_members` row,
+/// so [`require_role`] already 403s them — but the explicit check states the
+/// guarantee at the call site (the `auth_tokens.rs` `CookieAuthUser` precedent).
+pub fn is_machine_principal(user: &AuthUser) -> bool {
+    user.subject.starts_with("runner:")
+        || user.subject.starts_with("worker:")
+        || user.subject.starts_with("service-account:")
+}
+
 /// Read-gate a workspace that may be **world-readable**: pass with the caller's
 /// real role when they're a member, OR with `Viewer` when the workspace is a
 /// `is_system` one (e.g. the curated `demos` workspace). System workspaces are
@@ -314,5 +343,41 @@ mod tests {
         assert!(Role::Editor >= Role::Viewer);
         assert!(Role::Viewer < Role::Editor);
         assert!(Role::Owner >= Role::Owner);
+    }
+
+    fn user_with_subject(subject: &str) -> AuthUser {
+        AuthUser {
+            subject: subject.to_string(),
+            user_id: AuthUser::legacy_subject_uuid(subject),
+            email: None,
+            display_name: None,
+            roles: Vec::new(),
+            is_platform_admin: false,
+            workspace_id: None,
+            workspace_role: None,
+            avatar_url: None,
+        }
+    }
+
+    #[test]
+    fn machine_principal_detects_every_machine_prefix() {
+        assert!(is_machine_principal(&user_with_subject(
+            "runner:11111111-1111-1111-1111-111111111111"
+        )));
+        assert!(is_machine_principal(&user_with_subject(
+            "worker:22222222-2222-2222-2222-222222222222"
+        )));
+        assert!(is_machine_principal(&user_with_subject(
+            "service-account:33333333-3333-3333-3333-333333333333"
+        )));
+    }
+
+    #[test]
+    fn machine_principal_false_for_humans() {
+        // A real OIDC sub and the `user:{uuid}` fallback are both human.
+        assert!(!is_machine_principal(&user_with_subject("zitadel|abc-123")));
+        assert!(!is_machine_principal(&user_with_subject(
+            "user:44444444-4444-4444-4444-444444444444"
+        )));
     }
 }
