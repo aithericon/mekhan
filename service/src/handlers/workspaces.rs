@@ -16,7 +16,9 @@ use uuid::Uuid;
 
 use crate::auth::model::SUBJECT_UUID_NAMESPACE;
 use crate::auth::resolver::ZITADEL_PROVIDER;
-use crate::auth::{map_to_api_error, require_member, require_role, AuthUser, Role};
+use crate::auth::{
+    deny_machine_principal, map_to_api_error, require_member, require_role, AuthUser, Role,
+};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
     AddMemberRequest, CreateWorkspaceRequest, UpdateMemberRoleRequest, WorkspaceMember,
@@ -78,6 +80,9 @@ pub async fn create_workspace(
     user: AuthUser,
     Json(req): Json<CreateWorkspaceRequest>,
 ) -> Result<(StatusCode, Json<WorkspaceSummary>), ApiError> {
+    // Workspace lifecycle is a governance op — a machine principal (which is
+    // itself owned by an existing workspace) may not spin up new ones.
+    deny_machine_principal(&user)?;
     let display_name = req.display_name.trim().to_string();
     if display_name.is_empty() {
         return Err(ApiError::bad_request("display_name must not be empty"));
@@ -241,6 +246,7 @@ pub async fn delete_workspace(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, id, Role::Owner)
         .await
         .map_err(map_to_api_error)?;
@@ -350,6 +356,7 @@ pub async fn add_member(
     Path(id): Path<Uuid>,
     Json(req): Json<AddMemberRequest>,
 ) -> Result<(StatusCode, Json<WorkspaceMember>), ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -455,6 +462,7 @@ pub async fn remove_member(
     user: AuthUser,
     Path((id, target_user_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -520,6 +528,7 @@ pub async fn update_member_role(
     Path((id, target_user_id)): Path<(Uuid, Uuid)>,
     Json(req): Json<UpdateMemberRoleRequest>,
 ) -> Result<Json<WorkspaceMember>, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;

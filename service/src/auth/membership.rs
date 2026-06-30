@@ -65,12 +65,55 @@ pub enum MembershipError {
     Db(#[from] sqlx::Error),
 }
 
+/// Resolve a MACHINE principal's role for `workspace_id` WITHOUT a DB hit.
+///
+/// A service-account token carries its workspace + role on the principal itself
+/// — its authoritative source is the `service_accounts` row, NOT
+/// `workspace_members` (a machine deliberately has no member row). So for the
+/// SA's OWN fixed workspace we resolve the carried role; this is what makes
+/// every data-plane gate (single-object reads AND mutations, via `member_role`
+/// → `require_role` / `require_object_role`) consistent with the list endpoints,
+/// which already scope by the carried `workspace_id`. Before this, a SA could
+/// LIST its workspace's objects but 403'd opening or mutating any of them.
+///
+/// Returns:
+///   - `Some(Ok(role))` — machine acting in its own workspace; the carried role.
+///   - `Some(Err(NotMember))` — machine asking about a DIFFERENT workspace, or a
+///     control-plane token (runner/worker) that carries no role at all.
+///   - `None` — not a machine principal; the caller falls back to the
+///     `workspace_members` table (the human path).
+///
+/// Note this resolves only the DATA-PLANE role. Identity/governance endpoints
+/// (member/invite/role/ownership/lifecycle/credential-mint) refuse machine
+/// principals outright via [`deny_machine_principal`], regardless of this role.
+fn machine_member_role(
+    user: &AuthUser,
+    workspace_id: Uuid,
+) -> Option<Result<Role, MembershipError>> {
+    if !is_machine_principal(user) {
+        return None;
+    }
+    if user.workspace_id == Some(workspace_id) {
+        if let Some(role) = user.workspace_role.as_deref().and_then(Role::from_db) {
+            return Some(Ok(role));
+        }
+    }
+    Some(Err(MembershipError::NotMember(workspace_id)))
+}
+
 /// Return the user's role in the given workspace, or `NotMember` if absent.
 pub async fn member_role(
     db: &PgPool,
     user: &AuthUser,
     workspace_id: Uuid,
 ) -> Result<Role, MembershipError> {
+    // Machine principals (service accounts) resolve their role from the
+    // principal itself, never from `workspace_members`. Runner/worker
+    // control-plane tokens carry no role and fall out as `NotMember`.
+    if let Some(resolved) = machine_member_role(user, workspace_id) {
+        return resolved;
+    }
+
     let user_id = user.subject_as_uuid();
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT role FROM workspace_members WHERE workspace_id = $1 AND user_id = $2",
@@ -137,6 +180,28 @@ pub fn is_machine_principal(user: &AuthUser) -> bool {
     user.subject.starts_with("runner:")
         || user.subject.starts_with("worker:")
         || user.subject.starts_with("service-account:")
+}
+
+/// Refuse a non-human MACHINE principal from an IDENTITY / GOVERNANCE operation:
+/// workspace member & invite management, role changes, ownership transfer,
+/// workspace lifecycle (create/delete), and credential minting. A service
+/// account is a DATA-PLANE principal — it carries a workspace role for OBJECTS
+/// (templates/instances/resources/folders/assets/grants/…) but may never
+/// administer the workspace's humans, its lifecycle, or credential families,
+/// REGARDLESS of that role. This generalises the explicit guard that already
+/// fronts SA-management (`service_accounts.rs::gate_human_admin`).
+///
+/// Call it FIRST in a governance handler (before the `require_role` admin gate)
+/// so a machine principal gets a uniform 403 independent of its stored role —
+/// otherwise an `admin`-role SA would now pass `require_role(.., Admin)` on
+/// these endpoints (the very gates the carried-role fix above newly satisfies).
+pub fn deny_machine_principal(user: &AuthUser) -> Result<(), ApiError> {
+    if is_machine_principal(user) {
+        return Err(ApiError::forbidden(
+            "machine principals cannot perform workspace governance operations",
+        ));
+    }
+    Ok(())
 }
 
 /// Read-gate a workspace that may be **world-readable**: pass with the caller's
@@ -379,5 +444,86 @@ mod tests {
         assert!(!is_machine_principal(&user_with_subject(
             "user:44444444-4444-4444-4444-444444444444"
         )));
+    }
+
+    fn sa_user(workspace: Uuid, role: Option<&str>) -> AuthUser {
+        let mut u = user_with_subject("service-account:55555555-5555-5555-5555-555555555555");
+        u.workspace_id = Some(workspace);
+        u.workspace_role = role.map(str::to_string);
+        u
+    }
+
+    #[test]
+    fn machine_member_role_honors_carried_role_in_own_workspace() {
+        // The core fix: an SA resolves its fixed role for its own workspace
+        // without a `workspace_members` row — so detail reads + mutations gate
+        // consistently with the list endpoints.
+        let ws = Uuid::from_u128(0xabc);
+        for (label, want) in [
+            ("viewer", Role::Viewer),
+            ("editor", Role::Editor),
+            ("admin", Role::Admin),
+        ] {
+            let u = sa_user(ws, Some(label));
+            assert_eq!(machine_member_role(&u, ws).unwrap().unwrap(), want);
+        }
+    }
+
+    #[test]
+    fn machine_member_role_not_member_for_other_workspace() {
+        // An SA is pinned to ONE workspace; it is never a member elsewhere.
+        let ws = Uuid::from_u128(0xabc);
+        let other = Uuid::from_u128(0xdef);
+        let u = sa_user(ws, Some("admin"));
+        assert!(matches!(
+            machine_member_role(&u, other),
+            Some(Err(MembershipError::NotMember(_)))
+        ));
+    }
+
+    #[test]
+    fn machine_member_role_not_member_when_no_carried_role() {
+        // Runner/worker control-plane tokens carry a workspace but no role —
+        // they must NOT be silently elevated, so they resolve to NotMember.
+        let ws = Uuid::from_u128(0xabc);
+        let mut u = user_with_subject("runner:11111111-1111-1111-1111-111111111111");
+        u.workspace_id = Some(ws);
+        u.workspace_role = None;
+        assert!(matches!(
+            machine_member_role(&u, ws),
+            Some(Err(MembershipError::NotMember(_)))
+        ));
+    }
+
+    #[test]
+    fn machine_member_role_none_for_humans() {
+        // Humans always fall through to the `workspace_members` table, even
+        // when a carried role is present (it's only an advisory cache for them).
+        let ws = Uuid::from_u128(0xabc);
+        let mut u = user_with_subject("zitadel|abc-123");
+        u.workspace_id = Some(ws);
+        u.workspace_role = Some("admin".into());
+        assert!(machine_member_role(&u, ws).is_none());
+    }
+
+    #[test]
+    fn deny_machine_principal_blocks_machines_allows_humans() {
+        assert!(deny_machine_principal(&user_with_subject(
+            "service-account:33333333-3333-3333-3333-333333333333"
+        ))
+        .is_err());
+        assert!(deny_machine_principal(&user_with_subject(
+            "runner:11111111-1111-1111-1111-111111111111"
+        ))
+        .is_err());
+        assert!(deny_machine_principal(&user_with_subject(
+            "worker:22222222-2222-2222-2222-222222222222"
+        ))
+        .is_err());
+        assert!(deny_machine_principal(&user_with_subject("zitadel|abc-123")).is_ok());
+        assert!(deny_machine_principal(&user_with_subject(
+            "user:44444444-4444-4444-4444-444444444444"
+        ))
+        .is_ok());
     }
 }
