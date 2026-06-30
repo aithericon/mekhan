@@ -2034,7 +2034,14 @@ fn spawn_net_evaluation_loop<E, T, S>(
         // broadcast, but the inverse failure (a stale large cursor skipping
         // small post-wake sequences) is closed by anchoring on the seeded
         // `current_sequence()` rather than on whatever happens to be in the tail.
-        let mut last_broadcast_seq: u64 = service.current_sequence().await.saturating_sub(1);
+        // Positional cursor into the event store's storage order (NOT a
+        // `.sequence` value — sequences restart across hydration sessions). It
+        // marks how many events we have already broadcast; each tick we fetch
+        // ONLY the delta `[broadcast_cursor, len)` via `events_from`, never the
+        // whole tail. Seeded to the current count so we broadcast only events
+        // appended after the loop starts (matching the old
+        // `current_sequence - 1` seed, without the O(n) re-clone-every-tick).
+        let mut broadcast_cursor: usize = service.event_count().await;
 
         loop {
             tokio::select! {
@@ -2098,13 +2105,12 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                 );
                             }
 
-                            // Broadcast the NetCompleted event to SSE before exiting
-                            let all_events = service.get_events().await;
-                            for event in &all_events {
-                                if event.sequence > last_broadcast_seq {
-                                    let _ =
-                                        event_tx.send(SseSignal::Event(Box::new(event.clone())));
-                                }
+                            // Broadcast the NetCompleted event (and any other
+                            // pending delta) to SSE before exiting. The loop
+                            // returns right after, so the cursor is not advanced.
+                            let new_events = service.events_from(broadcast_cursor).await;
+                            for event in new_events {
+                                let _ = event_tx.send(SseSignal::Event(Box::new(event)));
                             }
 
                             tracing::info!(
@@ -2140,18 +2146,15 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                 );
                             }
 
-                            // Broadcast the NetFailed event to SSE before exiting
-                            let all_events = service.get_events().await;
-                            for event in &all_events {
-                                if event.sequence > last_broadcast_seq {
-                                    let _ =
-                                        event_tx.send(SseSignal::Event(Box::new(event.clone())));
-                                }
-                            }
-                            // Advance the cursor so the failure-bridge
-                            // re-broadcast below doesn't re-send NetFailed.
-                            if let Some(last) = all_events.last() {
-                                last_broadcast_seq = last.sequence;
+                            // Broadcast the NetFailed event (and any other
+                            // pending delta) to SSE before exiting. Advancing
+                            // `broadcast_cursor` here also stops the
+                            // failure-bridge re-broadcast below from re-sending
+                            // these events.
+                            let new_events = service.events_from(broadcast_cursor).await;
+                            broadcast_cursor += new_events.len();
+                            for event in new_events {
+                                let _ = event_tx.send(SseSignal::Event(Box::new(event)));
                             }
 
                             tracing::warn!(
@@ -2208,14 +2211,14 @@ fn spawn_net_evaluation_loop<E, T, S>(
                                             "Failed to emit failure bridge to parent"
                                         );
                                     } else {
-                                        // Broadcast the bridge event to SSE too.
-                                        let all_events = service.get_events().await;
-                                        for event in &all_events {
-                                            if event.sequence > last_broadcast_seq {
-                                                let _ = event_tx.send(SseSignal::Event(Box::new(
-                                                    event.clone(),
-                                                )));
-                                            }
+                                        // Broadcast the bridge event (delta) to SSE
+                                        // too. The loop returns right after, so the
+                                        // cursor is not advanced.
+                                        let new_events =
+                                            service.events_from(broadcast_cursor).await;
+                                        for event in new_events {
+                                            let _ = event_tx
+                                                .send(SseSignal::Event(Box::new(event)));
                                         }
                                     }
                                 }
@@ -2234,15 +2237,14 @@ fn spawn_net_evaluation_loop<E, T, S>(
 
             // Always broadcast new events to SSE clients regardless of run mode.
             // This catches events from any source: NATS signal injection,
-            // HTTP handlers, adapter callbacks, eval results, etc.
-            let all_events = service.get_events().await;
-            for event in &all_events {
-                if event.sequence > last_broadcast_seq {
-                    let _ = event_tx.send(SseSignal::Event(Box::new(event.clone())));
-                }
-            }
-            if let Some(last) = all_events.last() {
-                last_broadcast_seq = last.sequence;
+            // HTTP handlers, adapter callbacks, eval results, etc. Fetch ONLY
+            // the delta since our cursor (O(delta)); re-cloning the whole tail
+            // here on every notify was an O(n²)-over-the-net's-life allocation
+            // firehose that high-water-marked the allocator on high-volume nets.
+            let new_events = service.events_from(broadcast_cursor).await;
+            broadcast_cursor += new_events.len();
+            for event in new_events {
+                let _ = event_tx.send(SseSignal::Event(Box::new(event)));
             }
         }
     });
@@ -2579,6 +2581,94 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Regression: the eval loop must broadcast every persisted event to SSE
+    /// EXACTLY ONCE, in storage order, using a positional delta cursor — not by
+    /// re-fetching+filtering the whole event log every tick (the former
+    /// `get_events()` call, an O(n²)-over-the-net's-life deep clone that
+    /// high-water-marked the allocator on high-volume nets). This pins the
+    /// cursor's correctness: no event dropped, no event re-sent.
+    #[tokio::test]
+    async fn test_eval_loop_broadcasts_each_event_exactly_once() {
+        use petri_test_harness::fixtures::TestScenario;
+
+        let registry = new_registry();
+        let inst = registry.get_or_create("net-once");
+        // Subscribe BEFORE any events are produced (the eval loop blocks on the
+        // first `eval_notify` and won't broadcast until we notify below), so the
+        // broadcast channel delivers the full stream to this receiver.
+        let mut rx = inst.event_tx.subscribe();
+
+        let scenario = TestScenario::with_terminal(Some(serde_json::json!(7)));
+        inst.service
+            .initialize(scenario.net)
+            .await
+            .expect("initialize");
+        for (place_id, token) in &scenario.initial_tokens {
+            inst.service
+                .create_token(place_id.clone(), token.color.clone())
+                .await
+                .expect("create token");
+        }
+
+        *inst.run_mode.write() = RunMode::Running;
+        inst.eval_notify.notify_one();
+
+        // Wait until the net completes (NetCompleted appears in the log).
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            let done = inst
+                .service
+                .get_events()
+                .await
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. }));
+            if done {
+                break;
+            }
+            if tokio::time::Instant::now() > deadline {
+                panic!("Timed out waiting for NetCompleted");
+            }
+        }
+        // Let the final broadcast flush.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Drain everything the broadcast delivered.
+        let mut broadcast: Vec<petri_domain::PersistedEvent> = Vec::new();
+        while let Ok(sig) = rx.try_recv() {
+            if let SseSignal::Event(ev) = sig {
+                broadcast.push(*ev);
+            }
+        }
+        let seqs: Vec<u64> = broadcast.iter().map(|e| e.sequence).collect();
+
+        // (1) No event broadcast more than once — the cursor must advance past
+        // what it sent and never re-emit (the regression: the old whole-log
+        // re-fetch was guarded by a `.sequence >` filter; the cursor must
+        // preserve that exactly-once property).
+        let unique: std::collections::HashSet<u64> = seqs.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            seqs.len(),
+            "no event may be broadcast more than once; got {seqs:?}"
+        );
+
+        // (2) Delivered in strictly increasing storage order (the cursor reads a
+        // monotonic suffix each tick).
+        assert!(
+            seqs.windows(2).all(|w| w[0] < w[1]),
+            "events must be broadcast in increasing order; got {seqs:?}"
+        );
+
+        // (3) The terminal NetCompleted event is flushed before the loop exits.
+        assert!(
+            broadcast
+                .iter()
+                .any(|e| matches!(&e.event, petri_domain::DomainEvent::NetCompleted { .. })),
+            "the NetCompleted event must be broadcast (terminal flush)"
+        );
     }
 
     /// A net spawned as a child (net_parameters carry `parent_net_id` +
