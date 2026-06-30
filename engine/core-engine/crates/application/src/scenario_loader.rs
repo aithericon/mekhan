@@ -128,6 +128,9 @@ pub struct ScenarioArcInput {
     /// Output arc only: emit the produced token routing-less (don't inherit the
     /// firing's consumed reply-routing). See domain `Arc::reset_reply_routing`.
     pub reset_reply_routing: bool,
+    /// Greedy batch drain: consume up to `n` tokens per firing (fire on ≥1).
+    /// `None` = today's per-`weight` consumption. See domain `Arc::drain_max`.
+    pub drain_max: Option<usize>,
 }
 
 /// Input for a scenario transition.
@@ -361,6 +364,9 @@ impl ScenarioParser {
                 }
                 if let Some(correlate_on) = &input_arc.correlate_on {
                     arc = arc.with_correlate_on(correlate_on.clone());
+                }
+                if let Some(n) = input_arc.drain_max {
+                    arc = arc.with_drain_max(n);
                 }
                 arcs.push(arc);
             }

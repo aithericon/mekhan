@@ -290,6 +290,13 @@ pub struct ScenarioArc {
     /// re-grantable (see engine `Arc::reset_reply_routing`).
     #[serde(default, skip_serializing_if = "is_false_arc")]
     pub reset_reply_routing: bool,
+    /// Greedy batch drain: when `Some(n)` on a consuming input arc, the
+    /// transition fires on ≥1 token and consumes up to `n` tokens per firing
+    /// (`min(n, available)`), handing the script/effect a JSON array of exactly
+    /// those tokens. `None` (the default) preserves today's per-`weight`
+    /// consumption and round-trips byte-identically. See engine `Arc::drain_max`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_max: Option<usize>,
 }
 
 fn is_false_arc(b: &bool) -> bool {

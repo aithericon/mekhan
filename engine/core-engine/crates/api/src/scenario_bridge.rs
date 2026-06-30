@@ -87,6 +87,7 @@ impl ScenarioBridge {
             count_from: arc.count_from.clone(),
             correlate_on: arc.correlate_on.clone(),
             reset_reply_routing: arc.reset_reply_routing,
+            drain_max: arc.drain_max,
         }
     }
 

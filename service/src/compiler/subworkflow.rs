@@ -64,6 +64,7 @@ fn arc(place: &str, port: &str) -> ScenarioArc {
         count_from: None,
         correlate_on: None,
         reset_reply_routing: false,
+        drain_max: None,
     }
 }
 

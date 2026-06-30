@@ -939,12 +939,12 @@ struct ProcessLogMetric;
 #[async_trait]
 impl Projector for ProcessLogMetric {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        record_metric_event(
+        record_metric_events(
             ctx.db,
             ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
-            ctx.effect_result,
+            &telemetry_records(ctx.effect_result),
             ctx.ts,
             ctx.live,
         )
@@ -956,14 +956,14 @@ struct ProcessPhase;
 #[async_trait]
 impl Projector for ProcessPhase {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        // effect_result IS the verbatim serialized StatusDetail. Deserialize
-        // the whole typed value and project the PhaseChanged variant.
+        // effect_result is the verbatim serialized StatusDetail (a single
+        // record) OR a JSON array of them (a batch drain). Project each.
         project_phase_status_detail(
             ctx.db,
             ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
-            ctx.effect_result,
+            &telemetry_records(ctx.effect_result),
             ctx.ts,
         )
         .await
@@ -974,14 +974,14 @@ struct ProcessProgress;
 #[async_trait]
 impl Projector for ProcessProgress {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        // effect_result IS the verbatim serialized StatusDetail. Deserialize
-        // the whole typed value and project the ProgressUpdated variant.
+        // effect_result is the verbatim serialized StatusDetail (a single
+        // record) OR a JSON array of them (a batch drain). Project each.
         project_progress_status_detail(
             ctx.db,
             ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
-            ctx.effect_result,
+            &telemetry_records(ctx.effect_result),
             ctx.ts,
         )
         .await
@@ -992,12 +992,12 @@ struct ProcessLogMessage;
 #[async_trait]
 impl Projector for ProcessLogMessage {
     async fn project(&self, ctx: &ProjectorCtx<'_>) -> Result<(), sqlx::Error> {
-        record_log_event(
+        record_log_events(
             ctx.db,
             ctx.net_id,
             ctx.consumed_ids,
             ctx.read_ids,
-            ctx.effect_result,
+            &telemetry_records(ctx.effect_result),
             ctx.ts,
             ctx.live,
         )
@@ -1678,9 +1678,7 @@ async fn write_progress(
 /// is no field-by-field reconstruction or magic-string detection here.
 async fn record_phase_event(
     db: &PgPool,
-    net_id: &str,
-    consumed_ids: &[String],
-    read_ids: &[String],
+    process_ids: &[String],
     phase_name: &str,
     status: PhaseStatus,
     message: Option<&str>,
@@ -1695,9 +1693,7 @@ async fn record_phase_event(
         PhaseStatus::Completed | PhaseStatus::Failed | PhaseStatus::Skipped
     );
 
-    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
-
-    for pid in &process_ids {
+    for pid in process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
         match progress.phases.iter_mut().find(|p| p.name == phase_name) {
             Some(ph) => {
@@ -1738,9 +1734,7 @@ async fn record_phase_event(
 /// reconstruction here.
 async fn record_progress_event(
     db: &PgPool,
-    net_id: &str,
-    consumed_ids: &[String],
-    read_ids: &[String],
+    process_ids: &[String],
     fraction: f64,
     message: Option<&str>,
     current_step: u64,
@@ -1749,9 +1743,7 @@ async fn record_progress_event(
 ) -> Result<(), sqlx::Error> {
     let message = message.map(str::to_string);
 
-    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
-
-    for pid in &process_ids {
+    for pid in process_ids {
         let mut progress = load_progress(db, pid, ts).await?;
         progress.fraction = fraction;
         if message.is_some() {
@@ -1773,26 +1765,30 @@ async fn project_phase_status_detail(
     net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    records: &[&serde_json::Value],
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    if let Ok(StatusDetail::PhaseChanged {
-        phase_name,
-        status,
-        message,
-    }) = serde_json::from_value::<StatusDetail>(effect_result.clone())
-    {
-        record_phase_event(
-            db,
-            net_id,
-            consumed_ids,
-            read_ids,
-            &phase_name,
-            status,
-            message.as_deref(),
-            ts,
-        )
-        .await?;
+    // Parse the batch first; only the PhaseChanged variant projects (any other
+    // variant or malformed payload is a structural no-op — no stringly
+    // fallback). Resolve the owning process(es) ONCE for the whole batch.
+    let changes: Vec<(String, PhaseStatus, Option<String>)> = records
+        .iter()
+        .filter_map(|r| match serde_json::from_value::<StatusDetail>((*r).clone()) {
+            Ok(StatusDetail::PhaseChanged {
+                phase_name,
+                status,
+                message,
+            }) => Some((phase_name, status, message)),
+            _ => None,
+        })
+        .collect();
+    if changes.is_empty() {
+        return Ok(());
+    }
+
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
+    for (phase_name, status, message) in &changes {
+        record_phase_event(db, &process_ids, phase_name, *status, message.as_deref(), ts).await?;
     }
     Ok(())
 }
@@ -1805,25 +1801,37 @@ async fn project_progress_status_detail(
     net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    records: &[&serde_json::Value],
     ts: chrono::DateTime<chrono::Utc>,
 ) -> Result<(), sqlx::Error> {
-    if let Ok(StatusDetail::ProgressUpdated {
-        fraction,
-        message,
-        current_step,
-        total_steps,
-    }) = serde_json::from_value::<StatusDetail>(effect_result.clone())
-    {
+    // Parse the batch first; only the ProgressUpdated variant projects. Resolve
+    // the owning process(es) ONCE, then apply each update in array order (the
+    // last one wins for `config.progress`, which is the intended latest-state).
+    let updates: Vec<(f64, Option<String>, u64, u64)> = records
+        .iter()
+        .filter_map(|r| match serde_json::from_value::<StatusDetail>((*r).clone()) {
+            Ok(StatusDetail::ProgressUpdated {
+                fraction,
+                message,
+                current_step,
+                total_steps,
+            }) => Some((fraction, message, current_step, total_steps)),
+            _ => None,
+        })
+        .collect();
+    if updates.is_empty() {
+        return Ok(());
+    }
+
+    let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
+    for (fraction, message, current_step, total_steps) in &updates {
         record_progress_event(
             db,
-            net_id,
-            consumed_ids,
-            read_ids,
-            fraction,
+            &process_ids,
+            *fraction,
             message.as_deref(),
-            current_step,
-            total_steps,
+            *current_step,
+            *total_steps,
             ts,
         )
         .await?;
@@ -1846,6 +1854,39 @@ async fn project_progress_status_detail(
 ///
 /// Returns `None` for metrics/logs whose upstream chain has no signal (e.g.
 /// internally-generated seeds, scenario bootstraps).
+/// Normalize a telemetry `effect_result` into a slice of per-record values.
+///
+/// A greedy batch-drain firing (the `log_*` sink transitions) journals an
+/// **array** of records in one `EffectCompleted` — one element per drained
+/// token. A non-array result is a single record (the historical one-token-per-
+/// firing shape). Either way the projector resolves the owning process(es) and
+/// signal key ONCE (they are batch-invariant — all drained tokens share the
+/// same consumed set) and then writes every record, so no telemetry is lost.
+fn telemetry_records(effect_result: &serde_json::Value) -> Vec<&serde_json::Value> {
+    match effect_result.as_array() {
+        Some(arr) => arr.iter().collect(),
+        None => vec![effect_result],
+    }
+}
+
+/// Resolve the timestamp to record a telemetry breadcrumb at: the record's own
+/// client emit time (`ts`, RFC3339, stamped by the executor when the event was
+/// emitted) when present, else `fallback` (the EffectCompleted ingest time, for
+/// Rhai-built tokens that carry no client timestamp). Recording at emit time —
+/// not drain/ingest time — keeps a batched series' points on their real
+/// timeline instead of collapsing them onto the single drain-firing instant.
+fn record_ts(
+    record: &serde_json::Value,
+    fallback: chrono::DateTime<chrono::Utc>,
+) -> chrono::DateTime<chrono::Utc> {
+    record
+        .get("ts")
+        .and_then(|v| v.as_str())
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .unwrap_or(fallback)
+}
+
 async fn resolve_signal_key_from_consumed(
     db: &PgPool,
     consumed_ids: &[String],
@@ -1866,43 +1907,59 @@ async fn resolve_signal_key_from_consumed(
     .await
 }
 
-async fn record_metric_event(
+/// Project one-or-more metric breadcrumbs into hpi_metrics.
+///
+/// `records` is a batch from a single `process_log_metric` EffectCompleted —
+/// one element for the historical single-token firing, N for a greedy batch
+/// drain. Process resolution and signal-key lookup are batch-invariant (all
+/// drained tokens share the consumed set), so they run ONCE and every
+/// (key,value) point is written per resolved process.
+async fn record_metric_events(
     db: &PgPool,
     net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    records: &[&serde_json::Value],
     ts: chrono::DateTime<chrono::Utc>,
     live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
-    let key = effect_result
-        .get("key")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let value = effect_result
-        .get("value")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.0);
-    if key.is_empty() {
+    // Extract (key, value, emit-ts) per record, dropping empty-key records (e.g.
+    // the executor's end-of-run `metrics_logged` summary carries no name/value).
+    // Each point is stamped at its client emit time (falling back to the firing
+    // ts) so a batched series keeps its real timeline.
+    let points: Vec<(String, f64, chrono::DateTime<chrono::Utc>)> = records
+        .iter()
+        .filter_map(|r| {
+            let key = r.get("key").and_then(|v| v.as_str()).unwrap_or("");
+            if key.is_empty() {
+                return None;
+            }
+            let value = r.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
+            Some((key.to_string(), value, record_ts(r, ts)))
+        })
+        .collect();
+    if points.is_empty() {
         return Ok(());
     }
 
     let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
-        sqlx::query(
-            "INSERT INTO hpi_metrics (process_id, key, value, timestamp, signal_key) \
-             VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(pid)
-        .bind(key)
-        .bind(value)
-        .bind(ts)
-        .bind(&signal_key)
-        .execute(db)
-        .await?;
+        for (key, value, row_ts) in &points {
+            sqlx::query(
+                "INSERT INTO hpi_metrics (process_id, key, value, timestamp, signal_key) \
+                 VALUES ($1, $2, $3, $4, $5)",
+            )
+            .bind(pid)
+            .bind(key)
+            .bind(value)
+            .bind(row_ts)
+            .bind(&signal_key)
+            .execute(db)
+            .await?;
 
-        live.emit_metric(pid.clone(), signal_key.clone(), key.to_string(), value, ts);
+            live.emit_metric(pid.clone(), signal_key.clone(), key.clone(), *value, *row_ts);
+        }
     }
     Ok(())
 }
@@ -1912,55 +1969,85 @@ async fn record_metric_event(
 /// Extracts level/source/message/detail from the effect_result of a
 /// `process_log_message` EffectCompleted event and writes a row per
 /// matching process.
-async fn record_log_event(
+/// Project one-or-more log breadcrumbs into hpi_logs.
+///
+/// `records` is a batch from a single `process_log_message` EffectCompleted —
+/// one element for a single-token firing, N for a greedy batch drain. Process
+/// resolution and signal-key lookup run ONCE (batch-invariant), then every log
+/// line is written per resolved process.
+async fn record_log_events(
     db: &PgPool,
     net_id: &str,
     consumed_ids: &[String],
     read_ids: &[String],
-    effect_result: &serde_json::Value,
+    records: &[&serde_json::Value],
     ts: chrono::DateTime<chrono::Utc>,
     live: &LiveBroadcasts,
 ) -> Result<(), sqlx::Error> {
-    let level = effect_result
-        .get("level")
-        .and_then(|v| v.as_str())
-        .unwrap_or("info");
-    let source = effect_result.get("source").and_then(|v| v.as_str());
-    let message = effect_result
-        .get("message")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let detail = effect_result
-        .get("detail")
-        .cloned()
-        .unwrap_or(serde_json::json!({}));
+    struct LogLine {
+        level: String,
+        source: Option<String>,
+        message: String,
+        detail: serde_json::Value,
+        ts: chrono::DateTime<chrono::Utc>,
+    }
+    let lines: Vec<LogLine> = records
+        .iter()
+        .map(|r| LogLine {
+            level: r
+                .get("level")
+                .and_then(|v| v.as_str())
+                .unwrap_or("info")
+                .to_string(),
+            source: r
+                .get("source")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            message: r
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            detail: r
+                .get("detail")
+                .cloned()
+                .unwrap_or(serde_json::json!({})),
+            // Client emit time (falls back to the firing ts for Rhai tokens).
+            ts: record_ts(r, ts),
+        })
+        .collect();
+    if lines.is_empty() {
+        return Ok(());
+    }
 
     let process_ids = resolved_or_done!(db, net_id, consumed_ids, read_ids);
     let signal_key = resolve_signal_key_from_consumed(db, consumed_ids).await?;
     for pid in &process_ids {
-        sqlx::query(
-            "INSERT INTO hpi_logs (process_id, level, source, message, detail, timestamp, signal_key) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
-        )
-        .bind(pid)
-        .bind(level)
-        .bind(source)
-        .bind(message)
-        .bind(&detail)
-        .bind(ts)
-        .bind(&signal_key)
-        .execute(db)
-        .await?;
+        for line in &lines {
+            sqlx::query(
+                "INSERT INTO hpi_logs (process_id, level, source, message, detail, timestamp, signal_key) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            )
+            .bind(pid)
+            .bind(&line.level)
+            .bind(&line.source)
+            .bind(&line.message)
+            .bind(&line.detail)
+            .bind(line.ts)
+            .bind(&signal_key)
+            .execute(db)
+            .await?;
 
-        live.emit_log(
-            pid.clone(),
-            signal_key.clone(),
-            level.to_string(),
-            source.map(|s| s.to_string()),
-            message.to_string(),
-            detail.clone(),
-            ts,
-        );
+            live.emit_log(
+                pid.clone(),
+                signal_key.clone(),
+                line.level.clone(),
+                line.source.clone(),
+                line.message.clone(),
+                line.detail.clone(),
+                line.ts,
+            );
+        }
     }
     Ok(())
 }
@@ -2607,8 +2694,54 @@ async fn register_catalogue_entry(
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_spawn_node_id, subworkflow_child_ref};
+    use super::{parse_spawn_node_id, record_ts, subworkflow_child_ref, telemetry_records};
     use crate::models::template::{VersionPin, WorkflowGraph};
+
+    #[test]
+    fn record_ts_prefers_client_ts_else_falls_back() {
+        let fallback = chrono::DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        // Client ts present → used.
+        let with_ts = serde_json::json!({ "key": "a", "ts": "2026-06-30T12:00:00Z" });
+        assert_eq!(record_ts(&with_ts, fallback).to_rfc3339(), "2026-06-30T12:00:00+00:00");
+
+        // Absent → fallback (the firing/ingest ts).
+        let without = serde_json::json!({ "key": "a" });
+        assert_eq!(record_ts(&without, fallback), fallback);
+
+        // Unparseable → fallback (never panics).
+        let bad = serde_json::json!({ "ts": "not-a-timestamp" });
+        assert_eq!(record_ts(&bad, fallback), fallback);
+    }
+
+    #[test]
+    fn telemetry_records_single_object_is_one_record() {
+        let single = serde_json::json!({ "key": "loss", "value": 0.5 });
+        let recs = telemetry_records(&single);
+        assert_eq!(recs.len(), 1);
+        assert_eq!(recs[0]["key"], "loss");
+    }
+
+    #[test]
+    fn telemetry_records_array_is_n_records_in_order() {
+        let batch = serde_json::json!([
+            { "key": "a", "value": 1 },
+            { "key": "b", "value": 2 },
+            { "key": "c", "value": 3 },
+        ]);
+        let recs = telemetry_records(&batch);
+        assert_eq!(recs.len(), 3);
+        assert_eq!(recs[0]["key"], "a");
+        assert_eq!(recs[2]["key"], "c");
+    }
+
+    #[test]
+    fn telemetry_records_empty_array_is_no_records() {
+        let empty = serde_json::json!([]);
+        assert!(telemetry_records(&empty).is_empty());
+    }
 
     /// A minimal graph carrying one SubWorkflow node, built from the on-wire
     /// JSON shape (so the test also pins the serde field names the production

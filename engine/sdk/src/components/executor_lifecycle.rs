@@ -14,6 +14,18 @@
 use crate::effects;
 use crate::prelude::*;
 
+/// Max tokens a telemetry-sink drain consumes per firing.
+///
+/// The `log_*` sink transitions are record-and-discard drains: a streaming job
+/// can flood `sig_metric` / `sig_log` / `sig_phase` / `sig_progress` / `sig_output`
+/// with thousands of events. Firing one-token-per-event makes the eval loop
+/// re-fold the marking O(B²) to drain a backlog of B tokens. Draining up to
+/// `TELEMETRY_DRAIN_MAX` per firing collapses that to ~O(B²/N) firings while
+/// keeping each batched `EffectCompleted` (and the causality message it
+/// produces) bounded. The effect handlers and Mekhan's causality ingest both
+/// accept an N-record batch, so no telemetry record is lost.
+const TELEMETRY_DRAIN_MAX: usize = 256;
+
 /// Bridge/output configuration for the executor lifecycle.
 pub struct ExecutorBridges {
     /// Place where incoming job tokens arrive (either a seeded state place,
@@ -426,12 +438,12 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             // signal token verbatim (no lossy downgrade) and the handler
             // echoes `detail` into effect_result for typed projection.
             ctx.transition("log_progress", "Log Progress")
-                .auto_input("progress", &sig_progress)
+                .auto_input_drain("progress", &sig_progress, TELEMETRY_DRAIN_MAX)
                 .auto_output("recorded", &progress_log)
                 .builtin_effect(&effects::PROCESS_PROGRESS);
         } else {
             ctx.transition("log_progress", "Log Progress")
-                .auto_input("evt", &sig_progress)
+                .auto_input_drain("evt", &sig_progress, TELEMETRY_DRAIN_MAX)
                 .auto_output("log", &progress_log)
                 .logic(r#"#{ log: evt }"#);
         }
@@ -450,12 +462,12 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
 
         if bridges.process {
             ctx.transition("log_metric", "Log Metric")
-                .auto_input("metric", &sig_metric)
+                .auto_input_drain("metric", &sig_metric, TELEMETRY_DRAIN_MAX)
                 .auto_output("logged", &metric_log)
                 .builtin_effect(&effects::PROCESS_LOG_METRIC);
         } else {
             ctx.transition("log_metric", "Log Metric")
-                .auto_input("evt", &sig_metric)
+                .auto_input_drain("evt", &sig_metric, TELEMETRY_DRAIN_MAX)
                 .auto_output("log", &metric_log)
                 .logic(r#"#{ log: evt }"#);
         }
@@ -467,29 +479,33 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
             // token verbatim keeps phase_name/status/message (and the typed
             // Skipped/Failed variants) intact for typed projection.
             ctx.transition("log_phase", "Log Phase")
-                .auto_input("phase", &sig_phase)
+                .auto_input_drain("phase", &sig_phase, TELEMETRY_DRAIN_MAX)
                 .auto_output("recorded", &phase_log)
                 .builtin_effect(&effects::PROCESS_PHASE);
         } else {
             ctx.transition("log_phase", "Log Phase")
-                .auto_input("evt", &sig_phase)
+                .auto_input_drain("evt", &sig_phase, TELEMETRY_DRAIN_MAX)
                 .auto_output("log", &phase_log)
                 .logic(r#"#{ log: evt }"#);
         }
 
+        // Output (stdout/stderr) lines are pure record-and-discard — no causality
+        // projection — but can be the highest-volume stream of all, so drain them
+        // in batches too. The Rhai passthrough sees `evt` as a JSON array; routing
+        // it onto the Single sink port deposits one (immediately dropped) token.
         ctx.transition("log_output", "Log Output")
-            .auto_input("evt", &sig_output)
+            .auto_input_drain("evt", &sig_output, TELEMETRY_DRAIN_MAX)
             .auto_output("log", &output_log)
             .logic(r#"#{ log: evt }"#);
 
         if bridges.process {
             ctx.transition("log_message", "Log Message")
-                .auto_input("message", &sig_log)
+                .auto_input_drain("message", &sig_log, TELEMETRY_DRAIN_MAX)
                 .auto_output("logged", &message_log)
                 .builtin_effect(&effects::PROCESS_LOG_MESSAGE);
         } else {
             ctx.transition("log_message", "Log Message")
-                .auto_input("evt", &sig_log)
+                .auto_input_drain("evt", &sig_log, TELEMETRY_DRAIN_MAX)
                 .auto_output("log", &message_log)
                 .logic(r#"#{ log: evt }"#);
         }
@@ -510,5 +526,89 @@ pub fn executor_lifecycle(ctx: &mut Context, bridges: ExecutorBridges) -> Execut
         effect_errors,
         failed,
         timed_out,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build_lifecycle(process: bool) -> crate::scenario::ScenarioDefinition {
+        let mut ctx = Context::new("drain-test");
+        let inbox = ctx.state::<ExecutorSubmitInput>("exec_queue", "Queue");
+        executor_lifecycle(
+            &mut ctx,
+            ExecutorBridges {
+                inbox,
+                result_out: None,
+                failure_out: None,
+                process_id: None,
+                process_step: None,
+                catalogue: false,
+                process,
+                control_in: None,
+            },
+        );
+        ctx.build()
+    }
+
+    /// The high-volume telemetry sink drains must be emitted as greedy batch
+    /// drains (Batch port + `drain_max`), in BOTH process and non-process
+    /// compiles, so the eval loop never re-folds the marking O(B²) under a
+    /// telemetry flood. Pins the full wiring end-to-end (SDK builder → AIR).
+    fn assert_drains(process: bool) {
+        let def = build_lifecycle(process);
+        // log_metric / log_message / log_phase / log_progress / log_output.
+        for id in [
+            "log_metric",
+            "log_message",
+            "log_phase",
+            "log_progress",
+            "log_output",
+        ] {
+            let t = def
+                .transitions
+                .iter()
+                .find(|t| t.id.ends_with(id))
+                .unwrap_or_else(|| panic!("transition {id} present (process={process})"));
+            let arc = &t.inputs[0];
+            assert_eq!(
+                arc.drain_max,
+                Some(TELEMETRY_DRAIN_MAX),
+                "{id} input arc must be a greedy drain (process={process})"
+            );
+            let port = t
+                .input_ports
+                .iter()
+                .find(|p| p.name == arc.port)
+                .expect("input port for the drain arc");
+            assert_eq!(
+                port.cardinality, "batch",
+                "{id} drain port must be Batch so the effect sees an array (process={process})"
+            );
+        }
+    }
+
+    #[test]
+    fn telemetry_drains_are_greedy_batch_drains_process_mode() {
+        assert_drains(true);
+    }
+
+    #[test]
+    fn telemetry_drains_are_greedy_batch_drains_non_process_mode() {
+        assert_drains(false);
+    }
+
+    /// The artifact sink is a real catalogue-register effect (out of scope for
+    /// batching) and must stay a single-token consume.
+    #[test]
+    fn artifact_sink_is_not_a_drain() {
+        let def = build_lifecycle(true);
+        let t = def
+            .transitions
+            .iter()
+            .find(|t| t.id.ends_with("log_artifact"))
+            .expect("log_artifact present");
+        assert_eq!(t.inputs[0].drain_max, None);
     }
 }
