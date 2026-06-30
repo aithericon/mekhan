@@ -752,7 +752,7 @@ mod tests {
         // 64 KiB tail cap vs 256 KiB fat events → aggressive eviction.
         let store = MemoryEventStore::with_tail_cap(64 * 1024);
         let proj = MarkingProjection::new();
-        let cache: RwLock<Option<(u64, petri_domain::Marking)>> = RwLock::new(None);
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> = RwLock::new(None);
 
         // -- Track the canonical full-replay history independently.
         let mut control: Vec<PersistedEvent> = Vec::new();
@@ -880,8 +880,8 @@ mod tests {
         };
 
         // Prime the cache at cursor 0 so the call takes the Stale → Applied branch.
-        let cache: RwLock<Option<(u64, petri_domain::Marking)>> =
-            RwLock::new(Some((0, petri_domain::Marking::new())));
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> =
+            RwLock::new(Some((0, std::sync::Arc::new(petri_domain::Marking::new()))));
         let proj = MarkingProjection::new();
 
         let (marking, delta) = advance_marking(&store, &proj, &cache).await;
@@ -899,6 +899,40 @@ mod tests {
             cursor, 5,
             "Applied branch must store the folded extent (cached_idx + new_events.len()), \
              not the stale events.len() read at call entry"
+        );
+    }
+
+    /// Regression: an UNCHANGED (Hit) `advance_marking` must hand back the SAME
+    /// shared `Arc<Marking>` — O(1), no rebuild and no deep clone of the parked
+    /// token `Value`s. Deep-cloning the whole marking on every eval-loop tick
+    /// (even when nothing changed) was a dominant allocation source on nets with
+    /// a large token backlog at a place (the metric-storm `sig_metric` pile-up).
+    #[tokio::test]
+    async fn advance_marking_hit_returns_same_arc_no_reclone() {
+        use crate::MarkingProjection;
+        use petri_application::{advance_marking, MarkingDelta};
+        use std::sync::RwLock;
+
+        let place = PlaceId::named("p");
+        let store = MemoryEventStore::with_tail_cap(usize::MAX);
+        for i in 0..4u64 {
+            store.load_existing_event(token_created(i, &place));
+        }
+        let cache: RwLock<Option<(u64, std::sync::Arc<petri_domain::Marking>)>> = RwLock::new(None);
+        let proj = MarkingProjection::new();
+
+        // First call primes the cache (Miss → Rebuilt).
+        let (first, d0) = advance_marking(&store, &proj, &cache).await;
+        assert!(matches!(d0, MarkingDelta::Rebuilt));
+        assert_eq!(first.token_count(&place), 4);
+
+        // Second call with NO new events is a Hit: it must return the exact same
+        // Arc allocation, not a rebuilt/cloned marking.
+        let (second, d1) = advance_marking(&store, &proj, &cache).await;
+        assert!(matches!(d1, MarkingDelta::Unchanged), "no new events ⇒ Hit");
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &second),
+            "Hit must hand back the cached Arc (O(1)), not a fresh clone"
         );
     }
 

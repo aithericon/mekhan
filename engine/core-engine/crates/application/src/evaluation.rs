@@ -416,7 +416,7 @@ pub(crate) async fn evaluate_until_quiescent<
     execution_mode: &RwLock<ExecutionMode>,
     replay_cursor: &RwLock<usize>,
     workflow_id_lock: &RwLock<Option<uuid::Uuid>>,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
+    cached_state: &RwLock<Option<(u64, Arc<Marking>)>>,
     binding_memo: &RwLock<crate::binding_memo::BindingMemo>,
     max_steps: usize,
     schema_registry: Option<&SchemaRegistry>,
@@ -683,7 +683,7 @@ pub(crate) async fn drain_finalizers<E: EventRepository, T: TopologyRepository, 
     execution_mode: &RwLock<ExecutionMode>,
     replay_cursor: &RwLock<usize>,
     wf_id: Option<uuid::Uuid>,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
+    cached_state: &RwLock<Option<(u64, Arc<Marking>)>>,
     binding_memo: &RwLock<crate::binding_memo::BindingMemo>,
     schema_registry: Option<&SchemaRegistry>,
     secret_store: Option<&dyn SecretStore>,
@@ -799,9 +799,12 @@ pub fn check_terminal_state(
 pub(crate) async fn get_marking_cached<E: EventRepository, S: StateProjection>(
     events: &E,
     projection: &S,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
+    cached_state: &RwLock<Option<(u64, Arc<Marking>)>>,
 ) -> Marking {
-    advance_marking(events, projection, cached_state).await.0
+    // Cold path (API state queries / tests): hand back an owned `Marking`, so
+    // clone the shared inner once here. The hot eval loop uses the `Arc` form
+    // directly via `advance_marking` and never pays this clone.
+    (*advance_marking(events, projection, cached_state).await.0).clone()
 }
 
 /// How the marking cache advanced on a call to [`advance_marking`]. The eval
@@ -839,15 +842,22 @@ pub enum MarkingDelta {
 pub async fn advance_marking<E: EventRepository, S: StateProjection>(
     events: &E,
     projection: &S,
-    cached_state: &RwLock<Option<(u64, Marking)>>,
-) -> (Marking, MarkingDelta) {
+    cached_state: &RwLock<Option<(u64, Arc<Marking>)>>,
+) -> (Arc<Marking>, MarkingDelta) {
     let current_idx = events.len().await as u64;
 
+    // The marking is shared by `Arc`: callers only ever READ it (`&Marking` via
+    // deref coercion), never mutate it, so a Hit hands back an `Arc::clone`
+    // (O(1)) instead of deep-cloning every parked token `Value`. Deep-cloning
+    // the whole marking on EVERY eval-loop tick — even an unchanged Hit — was a
+    // dominant allocation source on nets with a large token backlog at any
+    // place (the metric-storm `sig_metric` pile-up). The Stale path makes a
+    // single copy-on-write clone to fold its delta without disturbing readers.
     enum CacheState {
-        Hit(Marking),
+        Hit(Arc<Marking>),
         Stale {
             cached_idx: u64,
-            cached_marking: Marking,
+            cached_marking: Arc<Marking>,
         },
         Miss,
     }
@@ -856,11 +866,11 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
         let cache = cached_state.read().unwrap();
         match &*cache {
             Some((cached_idx, cached_marking)) if *cached_idx == current_idx => {
-                CacheState::Hit(cached_marking.clone())
+                CacheState::Hit(Arc::clone(cached_marking))
             }
             Some((cached_idx, cached_marking)) => CacheState::Stale {
                 cached_idx: *cached_idx,
-                cached_marking: cached_marking.clone(),
+                cached_marking: Arc::clone(cached_marking),
             },
             None => CacheState::Miss,
         }
@@ -870,7 +880,7 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
         CacheState::Hit(marking) => (marking, MarkingDelta::Unchanged),
         CacheState::Stale {
             cached_idx,
-            mut cached_marking,
+            cached_marking,
         } => {
             // The cursor is a stale `events.len()` snapshot. Between two
             // `advance_marking` calls, external NATS listeners (token injection,
@@ -900,14 +910,21 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
                     // so the cursor matches the marking and the next call won't
                     // re-fold the gap.
                     let (base, tail, extent) = events.marking_base().await;
-                    let marking = projection.project_onto(&base, &tail);
-                    *cached_state.write().unwrap() = Some((extent, marking.clone()));
+                    let marking = Arc::new(projection.project_onto(&base, &tail));
+                    *cached_state.write().unwrap() = Some((extent, Arc::clone(&marking)));
                     (marking, MarkingDelta::Rebuilt)
                 }
                 Some(new_events) => {
+                    // Copy-on-write: clone the inner marking ONCE to fold the
+                    // delta into it, leaving any reader still holding the prior
+                    // `Arc` undisturbed. (`Arc::make_mut` would clone here anyway
+                    // — the cache still holds its own ref — so an explicit clone
+                    // is equivalent and clearer.)
+                    let mut folded = (*cached_marking).clone();
                     for persisted in &new_events {
-                        crate::apply_event_to_marking(&mut cached_marking, &persisted.event);
+                        crate::apply_event_to_marking(&mut folded, &persisted.event);
                     }
+                    let marking = Arc::new(folded);
                     // The new cursor is the EXACT extent folded: `events_from_checked`
                     // returned `[cached_idx .. current_tail_end)`, so the store now
                     // reflects `cached_idx + new_events.len()` events. Using the
@@ -915,8 +932,9 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
                     // concurrent append landed in between, leaving a stale cursor
                     // that re-folds `new_events` on the next Stale call (over-fold).
                     let folded_extent = cached_idx + new_events.len() as u64;
-                    *cached_state.write().unwrap() = Some((folded_extent, cached_marking.clone()));
-                    (cached_marking, MarkingDelta::Applied(new_events))
+                    *cached_state.write().unwrap() =
+                        Some((folded_extent, Arc::clone(&marking)));
+                    (marking, MarkingDelta::Applied(new_events))
                 }
             }
         }
@@ -932,8 +950,8 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
             // if a concurrent append advanced `events.len()` past the
             // call-site `current_idx`.
             let (base, tail, extent) = events.marking_base().await;
-            let marking = projection.project_onto(&base, &tail);
-            *cached_state.write().unwrap() = Some((extent, marking.clone()));
+            let marking = Arc::new(projection.project_onto(&base, &tail));
+            *cached_state.write().unwrap() = Some((extent, Arc::clone(&marking)));
             (marking, MarkingDelta::Rebuilt)
         }
     }

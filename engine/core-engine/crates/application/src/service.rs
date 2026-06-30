@@ -75,7 +75,7 @@ where
     /// Effect handlers keyed by handler ID.
     effect_handlers: RwLock<HashMap<String, Arc<dyn EffectHandler>>>,
     /// Cached marking state: (sequence_number, marking).
-    cached_state: RwLock<Option<(u64, Marking)>>,
+    cached_state: RwLock<Option<(u64, Arc<Marking>)>>,
     /// Negative-binding memo: transitions proven to have no valid binding at
     /// the current marking, so the eval loop can skip re-running their
     /// (possibly `m^k`) binding search until one of their input places changes.
@@ -923,7 +923,9 @@ where
         )
         .await;
         evaluation::reconcile_binding_memo(&self.binding_memo, self.topology.as_ref(), &delta);
-        marking
+        // Cold path (API state queries): clone the shared inner once to keep the
+        // owned-`Marking` contract. The eval loop never reaches here.
+        (*marking).clone()
     }
 
     /// Invalidate the cached marking state.
