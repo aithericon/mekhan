@@ -229,6 +229,10 @@ pub struct InstanceStateResponse {
     pub status: String,
     pub events: Vec<serde_json::Value>,
     pub event_count: usize,
+    /// True when `events` was capped to the most-recent window (the net's log
+    /// exceeded the snapshot cap). `event_count` is still the true total; the
+    /// `marking` is folded over the full history regardless.
+    pub truncated: bool,
     pub marking: serde_json::Value,
     pub engine: EngineStatus,
     pub enabled_transitions: Vec<String>,

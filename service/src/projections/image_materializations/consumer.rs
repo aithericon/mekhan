@@ -65,7 +65,7 @@ impl Projection for ImageMaterializationsProjection {
         _db: &PgPool,
         _net_id: &str,
         _history: &LazyHistory<'_>,
-    ) -> anyhow::Result<Option<()>> {
+    ) -> anyhow::Result<Option<((), u64)>> {
         Ok(None)
     }
 

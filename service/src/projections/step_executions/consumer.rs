@@ -108,7 +108,7 @@ impl Projection for StepExecutionsProjection {
         db: &PgPool,
         net_id: &str,
         history: &LazyHistory<'_>,
-    ) -> anyhow::Result<Option<NetState>> {
+    ) -> anyhow::Result<Option<(NetState, u64)>> {
         // Ownership checks BEFORE touching `history` — foreign nets (pool
         // nets especially) hit this on every event, and the lazy handle is
         // what keeps them from paying the JetStream replay.
@@ -127,13 +127,14 @@ impl Projection for StepExecutionsProjection {
             }
         };
 
+        // STREAM the history (bounded memory): a crawl net's log can be hundreds
+        // of thousands of telemetry events, so fold each in turn rather than
+        // materializing the whole log. The fold itself stays O(authored steps).
         let mut fold = FoldState::new();
-        {
+        let last_applied = {
             let lookups = Lookups::build(&registry);
-            for ev in history.get().await? {
-                fold.absorb(ev, &lookups);
-            }
-        }
+            history.fold(|ev| fold.absorb(ev, &lookups)).await?
+        };
         // Same tail as `project_step_executions`: both passes self-gate on a
         // terminal lifecycle event having been folded.
         fold.close_open_rows();
@@ -143,11 +144,14 @@ impl Projection for StepExecutionsProjection {
         if !rows.is_empty() {
             upsert_rows(db, &ctx, &rows).await?;
         }
-        Ok(Some(NetState {
-            ctx,
-            registry,
-            fold,
-        }))
+        Ok(Some((
+            NetState {
+                ctx,
+                registry,
+                fold,
+            },
+            last_applied,
+        )))
     }
 
     async fn apply(

@@ -82,16 +82,16 @@ impl Projection for AllocationsProjection {
         db: &PgPool,
         net_id: &str,
         history: &LazyHistory<'_>,
-    ) -> anyhow::Result<Option<State>> {
+    ) -> anyhow::Result<Option<(State, u64)>> {
+        // STREAM the history (bounded memory) instead of materializing the full
+        // per-net log — see `HistoryLoader`.
         let mut state = State::default();
-        for ev in history.get().await? {
-            state.absorb(ev, net_id);
-        }
+        let last_applied = history.fold(|ev| state.absorb(ev, net_id)).await?;
         let rows = state.take_dirty_rows();
         if !rows.is_empty() {
             upsert_rows(db, &rows).await?;
         }
-        Ok(Some(state))
+        Ok(Some((state, last_applied)))
     }
 
     async fn apply(
