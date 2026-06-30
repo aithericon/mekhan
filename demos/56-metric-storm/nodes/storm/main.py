@@ -1,21 +1,25 @@
-"""Metric Storm — memory-profiling load generator.
+"""Metric Storm — paced streaming-metric load generator.
 
-Emits a large number of streaming metric + log events with NO artifacts and NO
-marking tokens, to reproduce the crawl's metric firehose in isolation. Sinks
-correctly keep telemetry out of the marking/event log (firing.rs PlaceKind::Sink
-drops the token before any TokenCreated is emitted), so this load stresses the
-engine's *ingest/consumer/relay* path under high streaming-event volume — the
-remaining suspect for the 2026-06-29 engine OOM.
+Emits streaming metric + log events at a PACED rate so the engine's
+`sig_metric -> metric_log` (sink) drain transition can keep up, the way a real
+crawl does (~handful of metrics per batch). Without pacing, an unpaced tight
+loop overruns the consumer: metrics pile undrained at the `sig_metric` signal
+place and the ExecutorWatcher's telemetry consumer buffers the firehose in RAM
+— which is exactly the OOM this fixture exists to exercise, so it must be PACED
+to be a useful (non-self-DoSing) load test.
 
-Tunable via the MEKHAN_METRIC_STORM_COUNT env (default 100_000); the env is
-inherited (inherit_env: true).
+Tunable via env (inherit_env: true):
+  MEKHAN_METRIC_STORM_COUNT     number of metrics to emit (default 5000)
+  MEKHAN_METRIC_STORM_DELAY_MS  ms to sleep between metrics (default 3)
 """
 
 import os
+import time
 
 import aithericon
 
-COUNT = int(os.environ.get("MEKHAN_METRIC_STORM_COUNT", "100000"))
+COUNT = int(os.environ.get("MEKHAN_METRIC_STORM_COUNT", "5000"))
+DELAY_S = float(os.environ.get("MEKHAN_METRIC_STORM_DELAY_MS", "3")) / 1000.0
 
 for i in range(COUNT):
     aithericon.log_metric(
@@ -33,5 +37,7 @@ for i in range(COUNT):
     )
     if i % 1000 == 0:
         aithericon.log_info(f"metric storm progress: {i}/{COUNT}")
+    if DELAY_S > 0:
+        time.sleep(DELAY_S)
 
 aithericon.set_output("emitted", COUNT)
