@@ -28,10 +28,17 @@ use crate::models::responses::{
     AllocationResponse, InstanceChild, InstanceEventsResponse, StepExecutionResponse,
 };
 use crate::models::template::{PaginatedResponse, WorkflowGraph, WorkflowTemplate};
-use crate::petri::events::fetch_events;
+use crate::petri::events::stream_marking_and_recent;
 use crate::petri::launcher::{InstanceLauncher, LaunchError, LaunchSpec};
 use crate::process::publish::{ArtifactKeySpace, CompiledArtifacts, PublishService};
 use crate::AppState;
+
+/// Cap on events returned by the instance state/events snapshot endpoints. The
+/// marking is always folded over the full history; only the returned event LIST
+/// is windowed to the most-recent `MAX_SNAPSHOT_EVENTS`, so a high-volume crawl
+/// net (hundreds of thousands of events) cannot OOM the service or the browser.
+/// Matches the frontend event-log buffer cap.
+const MAX_SNAPSHOT_EVENTS: usize = 5_000;
 
 /// Resolve the effective instance mode for a create-instance POST against the
 /// chosen template version's publication state. Pure decision (mirrors
@@ -717,21 +724,22 @@ pub async fn get_instance_state(
 
     gate_instance(&state, &user, id, Role::Viewer).await?;
 
-    // 1. Fetch events from JetStream (source of truth)
-    let events = fetch_events(&state.nats, &instance.net_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("failed to fetch events from JetStream: {e}");
-            ApiError::internal(format!("event fetch failed: {e}"))
-        })?;
+    // 1. Stream events from JetStream (source of truth) with BOUNDED memory:
+    // fold the full marking, but keep only the most-recent window of events.
+    // A streaming crawl net's log is hundreds of thousands of events —
+    // materializing all of them here OOM'd the service.
+    let (marking, recent_events, event_count) =
+        stream_marking_and_recent(&state.nats, &instance.net_id, MAX_SNAPSHOT_EVENTS)
+            .await
+            .map_err(|e| {
+                tracing::error!("failed to stream events from JetStream: {e}");
+                ApiError::internal(format!("event fetch failed: {e}"))
+            })?;
 
-    // 2. Project marking from events
-    let marking = petri_domain::project_marking(&events);
+    // 2. Marking is folded over the FULL history (exact); events are the window.
     let marking_json = serde_json::to_value(&marking).unwrap_or(json!({}));
-
-    // 3. Serialize events as JSON values
-    let event_count = events.len();
-    let events_json: Vec<serde_json::Value> = events
+    let truncated = event_count > recent_events.len();
+    let events_json: Vec<serde_json::Value> = recent_events
         .iter()
         .filter_map(|e| serde_json::to_value(e).ok())
         .collect();
@@ -767,6 +775,7 @@ pub async fn get_instance_state(
         status: instance.status,
         events: events_json,
         event_count,
+        truncated,
         marking: marking_json,
         engine,
         enabled_transitions,
@@ -802,23 +811,27 @@ pub async fn get_instance_events(
 
     gate_instance(&state, &user, id, Role::Viewer).await?;
 
-    let events = fetch_events(&state.nats, &instance.net_id)
-        .await
-        .map_err(|e| {
-            tracing::error!("failed to fetch events from JetStream: {e}");
-            ApiError::internal(format!("event fetch failed: {e}"))
-        })?;
+    // Bounded stream: keep only the most-recent window of events (the full log
+    // of a high-volume crawl net would OOM the service and the browser alike).
+    let (_marking, recent_events, event_count) =
+        stream_marking_and_recent(&state.nats, &instance.net_id, MAX_SNAPSHOT_EVENTS)
+            .await
+            .map_err(|e| {
+                tracing::error!("failed to stream events from JetStream: {e}");
+                ApiError::internal(format!("event fetch failed: {e}"))
+            })?;
 
-    let events_json: Vec<serde_json::Value> = events
+    let truncated = event_count > recent_events.len();
+    let events_json: Vec<serde_json::Value> = recent_events
         .iter()
         .filter_map(|e| serde_json::to_value(e).ok())
         .collect();
-    let event_count = events_json.len();
 
     Ok(Json(InstanceEventsResponse {
         net_id: instance.net_id,
         events: events_json,
         event_count,
+        truncated,
     }))
 }
 

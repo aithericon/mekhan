@@ -77,6 +77,17 @@ pub struct Arc {
     /// binding is silently skipped (the unit can never be re-granted).
     #[serde(default, skip_serializing_if = "is_false")]
     pub reset_reply_routing: bool,
+
+    /// Greedy batch drain: when `Some(n)` on a consuming PlaceToTransition arc,
+    /// the transition fires on **≥1** token and consumes **up to** `n` tokens in
+    /// a single firing (`min(n, available)`), handing the script/effect a JSON
+    /// array of exactly those consumed tokens. This lets a telemetry-sink drain
+    /// swallow a whole backlog in one firing instead of one-token-per-firing,
+    /// collapsing the eval loop's per-firing O(B²) marking re-fold to ~O(B²/n).
+    /// `None` (the default) preserves today's per-`weight` consumption and
+    /// round-trips byte-identically. Only meaningful on input arcs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drain_max: Option<usize>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -105,6 +116,7 @@ impl Arc {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         }
     }
 
@@ -125,6 +137,7 @@ impl Arc {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         }
     }
 
@@ -136,6 +149,13 @@ impl Arc {
 
     pub fn with_weight(mut self, weight: usize) -> Self {
         self.weight = weight;
+        self
+    }
+
+    /// Mark this input arc as a greedy batch drain: fire on ≥1 token, consume
+    /// up to `n` tokens per firing (`min(n, available)`). See [`Arc::drain_max`].
+    pub fn with_drain_max(mut self, n: usize) -> Self {
+        self.drain_max = Some(n);
         self
     }
 

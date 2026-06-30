@@ -20,6 +20,10 @@ pub struct InstanceEventsResponse {
     pub net_id: String,
     pub events: Vec<serde_json::Value>,
     pub event_count: usize,
+    /// True when `events` was capped to the most-recent window (the net's log
+    /// exceeded the snapshot cap). `event_count` is still the true total.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 /// Response shape for `GET /api/v1/processes/{process_id}/logs/tail`.

@@ -90,5 +90,6 @@ tester_users = {
 workspace_owner_user_key = "admin"
 
 # ── Resources ───────────────────────────────────────────────────────────────
-cpu_mhz   = 1000
-memory_mb = 1024
+cpu_mhz          = 1000
+memory_mb        = 512
+engine_memory_mb = 512

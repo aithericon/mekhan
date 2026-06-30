@@ -41,9 +41,10 @@ pub use grants::{
     ObjectKind, ObjectRef,
 };
 pub use membership::{
-    can_read_template, instance_ref_by_net_id, instance_workspace, is_machine_principal,
-    map_to_api_error, member_role, require_member, require_role, require_workspace_admin,
-    require_workspace_read, resolve_fork_target, template_workspace, MembershipError, Role,
+    can_read_template, deny_machine_principal, instance_ref_by_net_id, instance_workspace,
+    is_machine_principal, map_to_api_error, member_role, require_member, require_role,
+    require_workspace_admin, require_workspace_read, resolve_fork_target, template_workspace,
+    MembershipError, Role,
 };
 pub use model::{AuthError, AuthUser, VerifiedClaims};
 pub use port::{PrincipalResolver, TokenVerifier};

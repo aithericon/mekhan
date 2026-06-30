@@ -101,7 +101,9 @@ pub(crate) fn find_valid_binding(
         // count_from arcs are gather barriers: the required count K depends on a
         // coordinator token that is not yet bound here, so the real count check is
         // deferred to build_binding_for_indices. Skip the weight-based early return.
-        if arc.count_from.is_none() && tokens.len() < arc.weight {
+        // drain_max arcs are greedy: they fire on ≥1 token regardless of weight,
+        // so the weight gate is likewise deferred to build_binding_for_indices.
+        if arc.count_from.is_none() && arc.drain_max.is_none() && tokens.len() < arc.weight {
             return None; // Not enough tokens
         }
         arc_sizes.push(tokens.len());
@@ -230,6 +232,65 @@ fn build_binding_for_indices(
             let cardinality = port
                 .map(|p| &p.cardinality)
                 .unwrap_or(&PortCardinality::Single);
+
+            // ── Greedy batch drain: consume up to `drain_max` tokens at once ──
+            // A drain arc fires on ≥1 token and consumes `min(cap, available)`
+            // tokens in one firing, handing the script/effect a JSON array of
+            // exactly the consumed tokens. The consumed set IS what the script
+            // sees (no see-all-but-consume-one divergence), so the transition
+            // makes monotonic progress and is replay-safe (the EffectCompleted
+            // event records the exact consumed_tokens). Telemetry drains are
+            // fire-and-forget, so consumed reply-routing is intentionally NOT
+            // propagated — the produced token is dropped by a sink place, and
+            // skipping the merge also avoids a routing conflict stalling the
+            // drain.
+            if let Some(cap) = arc.drain_max {
+                let tokens = &arc_tokens[arc_idx];
+                if tokens.is_empty() {
+                    return None; // fire only on ≥1 token
+                }
+                let take_n = tokens.len().min(cap.max(1));
+                // Deterministic marking order → first N tokens (replay-safe).
+                let selected: Vec<&&Token> = tokens.iter().take(take_n).collect();
+                let token_data = JsonValue::Array(
+                    selected
+                        .iter()
+                        .map(|t| token_color_to_json(&t.color))
+                        .collect(),
+                );
+
+                // Validate each element against the port item schema if present.
+                if let Some(registry) = schema_registry {
+                    if let Some(schema_ref) = port.and_then(|p| p.schema_ref.as_ref()) {
+                        for el in selected.iter() {
+                            let ev = token_color_to_json(&el.color);
+                            if registry.validate(schema_ref, &ev).is_err() {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                if arc.read {
+                    // A read drain is not emitted by any producer today, but stay
+                    // safe: borrow (don't consume) the selected tokens.
+                    for t in &selected {
+                        read_tokens.push((arc.place_id.clone(), (***t).clone()));
+                        max_created_at =
+                            Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                    }
+                    read_port_names.push(arc.port_name.clone());
+                } else {
+                    for t in &selected {
+                        consumed_tokens.push((arc.place_id.clone(), t.id.clone()));
+                        max_created_at =
+                            Some(max_created_at.map_or(t.created_at, |m| m.max(t.created_at)));
+                    }
+                }
+
+                port_inputs.insert(arc.port_name.clone(), token_data);
+                continue;
+            }
 
             // ── Gather barrier: count-gated, correlated Batch input ──────────
             if let Some(count_ref) = &arc.count_from {
@@ -553,7 +614,7 @@ impl JoinPlan {
         let indexable: Vec<bool> = input_arcs
             .iter()
             .map(|arc| {
-                if arc.read || arc.count_from.is_some() {
+                if arc.read || arc.count_from.is_some() || arc.drain_max.is_some() {
                     return false;
                 }
                 let card = transition
@@ -635,7 +696,7 @@ impl JoinPlan {
             .iter()
             .enumerate()
             .map(|(i, arc)| {
-                if arc.read || arc.count_from.is_some() {
+                if arc.read || arc.count_from.is_some() || arc.drain_max.is_some() {
                     ArcRole::Pinned
                 } else if !back[i].is_empty() {
                     ArcRole::Joined(std::mem::take(&mut back[i]))
@@ -923,6 +984,105 @@ mod tests {
         let arcs: Vec<&PetriArc> = vec![&arc];
         let binding = find_valid_binding(&executor, &transition, &arcs, &marking, None);
         assert!(binding.is_none(), "should not bind when place is empty");
+    }
+
+    // ── Greedy batch drain ──────────────────────────────────────────────
+
+    /// Build a single-input drain transition over a sink-style place.
+    fn drain_setup(cap: usize) -> (TransitionExecutor, Transition, PlaceId, PetriArc) {
+        let executor = TransitionExecutor::new();
+        let place = PlaceId::named("sig_metric");
+        let t_id = TransitionId::named("log_metric");
+        let transition = transition_with_ports(vec![Port::batch("metric")]);
+        let arc = PetriArc::input(place.clone(), t_id, "metric").with_drain_max(cap);
+        (executor, transition, place, arc)
+    }
+
+    #[test]
+    fn drain_consumes_up_to_cap_first_in_marking_order() {
+        let (executor, transition, place, arc) = drain_setup(3);
+        let mut marking = Marking::new();
+        for i in 0..5 {
+            marking.add_token(place.clone(), data_token(json!({ "key": "loss", "value": i })));
+        }
+        let ids: Vec<_> = marking
+            .tokens_at(&place)
+            .iter()
+            .map(|t| t.id.clone())
+            .collect();
+
+        let arcs: Vec<&PetriArc> = vec![&arc];
+        let b = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("drain binds on ≥1 token");
+
+        // Script/effect sees exactly `cap` tokens, in marking order.
+        let arr = b.port_inputs["metric"].as_array().expect("array payload");
+        assert_eq!(arr.len(), 3, "sees exactly the cap");
+        assert_eq!(arr[0]["value"], 0);
+        assert_eq!(arr[2]["value"], 2);
+
+        // Consumed set == seen set (the first 3 token ids) — replay-safe and
+        // monotonic (no see-all-but-consume-one divergence).
+        assert_eq!(b.consumed_tokens.len(), 3, "consumes exactly the cap");
+        let consumed: Vec<_> = b.consumed_tokens.iter().map(|(_, id)| id.clone()).collect();
+        assert_eq!(consumed, ids[..3].to_vec());
+    }
+
+    #[test]
+    fn drain_fires_on_fewer_than_cap_no_stranding() {
+        // 2 tokens present, cap 5 → fire and consume both (the <cap tail is
+        // never stranded, unlike a fixed weight=5 which would hold).
+        let (executor, transition, place, arc) = drain_setup(5);
+        let mut marking = Marking::new();
+        for i in 0..2 {
+            marking.add_token(place.clone(), data_token(json!({ "key": "loss", "value": i })));
+        }
+        let arcs: Vec<&PetriArc> = vec![&arc];
+        let b = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("drain fires on <cap");
+        assert_eq!(b.port_inputs["metric"].as_array().unwrap().len(), 2);
+        assert_eq!(b.consumed_tokens.len(), 2);
+    }
+
+    #[test]
+    fn drain_empty_place_does_not_bind() {
+        let (executor, transition, _place, arc) = drain_setup(4);
+        let marking = Marking::new();
+        let arcs: Vec<&PetriArc> = vec![&arc];
+        assert!(
+            find_valid_binding(&executor, &transition, &arcs, &marking, None).is_none(),
+            "a drain fires only on ≥1 token"
+        );
+    }
+
+    #[test]
+    fn drain_does_not_propagate_reply_routing() {
+        // Telemetry drains are fire-and-forget: a consumed token's reply-routing
+        // is intentionally NOT merged into the binding (the produced token is
+        // dropped by a sink), so conflicting routings can never stall the drain.
+        let (executor, transition, place, arc) = drain_setup(8);
+        let mut marking = Marking::new();
+        let mut t1 = data_token(json!({ "key": "a", "value": 1 }));
+        t1 = t1.with_reply_routing(ReplyRouting {
+            reply_to: Some(addr("net-a", "inbox")),
+            reply_channels: None,
+        });
+        marking.add_token(place.clone(), t1);
+        let mut t2 = data_token(json!({ "key": "b", "value": 2 }));
+        t2 = t2.with_reply_routing(ReplyRouting {
+            reply_to: Some(addr("net-b", "inbox")), // would CONFLICT if merged
+            reply_channels: None,
+        });
+        marking.add_token(place.clone(), t2);
+
+        let arcs: Vec<&PetriArc> = vec![&arc];
+        let b = find_valid_binding(&executor, &transition, &arcs, &marking, None)
+            .expect("conflicting reply-routing must not stall a drain");
+        assert_eq!(b.consumed_tokens.len(), 2);
+        assert!(
+            b.consumed_reply_routing.is_none(),
+            "drain does not propagate reply-routing"
+        );
     }
 
     // ── Gather barrier: count-gated, correlated Batch input ────────────

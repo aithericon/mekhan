@@ -27,7 +27,7 @@ use axum::{
 use serde::Deserialize;
 use uuid::Uuid;
 
-use crate::auth::{map_to_api_error, require_role, AuthUser, Role};
+use crate::auth::{deny_machine_principal, map_to_api_error, require_role, AuthUser, Role};
 use crate::models::capability::{load_known_capabilities, validate_caps_against_types};
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::roster::{
@@ -94,6 +94,7 @@ pub async fn enroll_member(
     user: AuthUser,
     Json(req): Json<EnrollMemberRequest>,
 ) -> Result<(StatusCode, Json<RosterMemberDetail>), ApiError> {
+    deny_machine_principal(&user)?;
     let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
@@ -338,6 +339,7 @@ pub async fn update_roster_member(
     Path(id): Path<Uuid>,
     Json(req): Json<UpdateRosterMemberRequest>,
 ) -> Result<Json<RosterMemberDetail>, ApiError> {
+    deny_machine_principal(&user)?;
     let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
@@ -399,6 +401,7 @@ pub async fn revoke_roster_member(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    deny_machine_principal(&user)?;
     let workspace_id = caller_workspace(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await

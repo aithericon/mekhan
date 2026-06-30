@@ -9456,6 +9456,11 @@ export interface components {
             event_count: number;
             events: unknown[];
             net_id: string;
+            /**
+             * @description True when `events` was capped to the most-recent window (the net's log
+             *     exceeded the snapshot cap). `event_count` is still the true total.
+             */
+            truncated?: boolean;
         };
         /** @description Instance with template name, returned by list queries (JOIN with workflow_templates). */
         InstanceListItem: {
@@ -9509,6 +9514,12 @@ export interface components {
             marking: unknown;
             net_id: string;
             status: string;
+            /**
+             * @description True when `events` was capped to the most-recent window (the net's log
+             *     exceeded the snapshot cap). `event_count` is still the true total; the
+             *     `marking` is folded over the full history regardless.
+             */
+            truncated: boolean;
         };
         /**
          * @description One advertised interface entry — a ROS topic/service/action `(name, type)`

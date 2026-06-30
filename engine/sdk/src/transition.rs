@@ -147,6 +147,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
         self
     }
@@ -166,6 +167,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
         self
     }
@@ -182,6 +184,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
         self
     }
@@ -201,6 +204,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
         self
     }
@@ -251,6 +255,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -293,6 +298,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -325,6 +331,49 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
+        });
+
+        self
+    }
+
+    /// Fluent greedy-drain input: a Batch port whose arc consumes **up to**
+    /// `max` tokens per firing (firing on **≥1** token). The script/effect sees
+    /// a JSON array of exactly the drained tokens.
+    ///
+    /// Use for high-volume record-and-discard sinks (telemetry drains): instead
+    /// of one firing per token — which makes the eval loop re-fold the marking
+    /// O(B²) to drain a backlog of B tokens — the drain swallows the backlog in
+    /// `ceil(B/max)` firings, so the quadratic never materializes. Unlike a
+    /// fixed `weight`, a drain never strands the `<max` tail (it fires on ≥1)
+    /// and never forces accumulation (it consumes whatever is present, up to
+    /// `max`). See engine `Arc::drain_max`.
+    pub fn auto_input_drain<T: Token>(
+        mut self,
+        port_name: impl Into<String>,
+        place: &PlaceHandle<T>,
+        max: usize,
+    ) -> Self {
+        let name = port_name.into();
+
+        self.ctx.register_schema::<T>();
+        self.input_types.push(T::type_name().to_string());
+
+        self.input_ports.push(ScenarioPort {
+            name: name.clone(),
+            cardinality: Cardinality::Batch.as_str().into(),
+            schema_ref: Some(T::schema_ref()),
+        });
+
+        self.inputs.push(ScenarioArc {
+            place: place.id.clone(),
+            port: name,
+            weight: 1,
+            read: false,
+            count_from: None,
+            correlate_on: None,
+            reset_reply_routing: false,
+            drain_max: Some(max),
         });
 
         self
@@ -369,6 +418,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -415,6 +465,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -473,6 +524,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: Some(count_from.to_string()),
             correlate_on: correlate_on.map(|s| s.to_string()),
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -505,6 +557,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -564,6 +617,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -605,6 +659,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
 
         self
@@ -642,6 +697,7 @@ impl<'ctx> TransitionBuilder<'ctx> {
             count_from: None,
             correlate_on: None,
             reset_reply_routing: false,
+            drain_max: None,
         });
         self
     }

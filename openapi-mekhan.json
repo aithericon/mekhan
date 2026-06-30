@@ -25241,6 +25241,10 @@
           },
           "net_id": {
             "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `events` was capped to the most-recent window (the net's log\nexceeded the snapshot cap). `event_count` is still the true total."
           }
         }
       },
@@ -25350,6 +25354,7 @@
           "status",
           "events",
           "event_count",
+          "truncated",
           "marking",
           "engine",
           "enabled_transitions"
@@ -25388,6 +25393,10 @@
           },
           "status": {
             "type": "string"
+          },
+          "truncated": {
+            "type": "boolean",
+            "description": "True when `events` was capped to the most-recent window (the net's log\nexceeded the snapshot cap). `event_count` is still the true total; the\n`marking` is folded over the full history regardless."
           }
         }
       },

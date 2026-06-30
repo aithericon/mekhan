@@ -32,7 +32,7 @@ use petri_domain::{DomainEvent, PersistedEvent};
 use crate::nats::consumer::ConsumerSpec;
 use crate::nats::MekhanNats;
 use crate::observability::record_silent_drop_with;
-use crate::petri::events::fetch_events;
+use crate::petri::events::stream_events;
 
 /// How a projection (re)builds per-net state on a cache miss.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -105,16 +105,21 @@ pub trait Projection: Send + Sync + 'static {
     /// stay cheap misses instead of holding state.
     ///
     /// `history` is LAZY: run any cheap ownership checks (e.g. an indexed
-    /// instance lookup) BEFORE awaiting `history.get()`. Foreign nets —
+    /// instance lookup) BEFORE awaiting `history.fold(..)`. Foreign nets —
     /// including high-traffic pool nets — deliver here on every event, and
-    /// the JetStream replay behind `get()` is the expensive part the
+    /// the JetStream replay behind `fold` is the expensive part the
     /// pre-framework consumers deliberately avoided for them.
+    ///
+    /// Fold the history by STREAMING (`history.fold(|ev| state.absorb(ev))`),
+    /// never materializing the per-net log — see [`HistoryLoader`]. Return
+    /// `Some((state, last_applied))` where `last_applied` is the last folded
+    /// sequence (the value `history.fold` returns).
     async fn bootstrap(
         &self,
         db: &PgPool,
         net_id: &str,
         history: &LazyHistory<'_>,
-    ) -> anyhow::Result<Option<Self::State>>;
+    ) -> anyhow::Result<Option<(Self::State, u64)>>;
 
     /// Fold one freshly-delivered event into the cached state (incremental
     /// path; the driver guarantees `ev.sequence == last_applied + 1`).
@@ -137,11 +142,26 @@ pub trait Projection: Send + Sync + 'static {
     }
 }
 
-/// Seam over the JetStream full-history fetch so [`step_event`] is
+/// Seam over the JetStream full-history replay so [`step_event`] is
 /// unit-testable without NATS.
+///
+/// Streams the net's events through a fold callback rather than returning a
+/// `Vec`: a high-volume crawl net's log is hundreds of thousands of events
+/// (~hundreds of MB), and materializing it on every bootstrap — which recurs on
+/// every service restart, since the in-memory cache starts empty — OOM-killed
+/// the service. Streaming bounds bootstrap RAM to the (small) fold state plus
+/// one in-flight event.
 #[async_trait]
 pub trait HistoryLoader: Send + Sync {
-    async fn load(&self, net_id: &str) -> anyhow::Result<Vec<PersistedEvent>>;
+    /// Replay the net's full history in sequence order, invoking `f` once per
+    /// event, without ever holding the whole log in memory. Returns the last
+    /// (max) folded sequence — the projection's `last_applied` cursor — or 0 if
+    /// the net has no events.
+    async fn stream(
+        &self,
+        net_id: &str,
+        f: &mut (dyn for<'a> FnMut(&'a PersistedEvent) + Send),
+    ) -> anyhow::Result<u64>;
 }
 
 /// Production loader: ephemeral replay consumer on `petri.events.{net_id}.>`.
@@ -151,34 +171,34 @@ pub struct NatsHistoryLoader {
 
 #[async_trait]
 impl HistoryLoader for NatsHistoryLoader {
-    async fn load(&self, net_id: &str) -> anyhow::Result<Vec<PersistedEvent>> {
-        fetch_events(&self.nats, net_id).await
+    async fn stream(
+        &self,
+        net_id: &str,
+        f: &mut (dyn for<'a> FnMut(&'a PersistedEvent) + Send),
+    ) -> anyhow::Result<u64> {
+        stream_events(&self.nats, net_id, f).await
     }
 }
 
-/// One net's full history, fetched at most once and only on first
-/// [`LazyHistory::get`]. Lets [`Projection::bootstrap`] reject foreign nets
-/// from a cheap DB lookup without paying the JetStream replay.
+/// A net's history, replayed at most once and only when [`LazyHistory::fold`]
+/// is awaited. Lets [`Projection::bootstrap`] reject foreign nets from a cheap
+/// DB lookup BEFORE paying the JetStream replay. Streaming (not materializing)
+/// keeps bootstrap memory bounded regardless of the net's log size.
 pub struct LazyHistory<'a> {
     loader: &'a dyn HistoryLoader,
     net_id: &'a str,
-    cell: tokio::sync::OnceCell<Vec<PersistedEvent>>,
 }
 
 impl<'a> LazyHistory<'a> {
     pub fn new(loader: &'a dyn HistoryLoader, net_id: &'a str) -> Self {
-        Self {
-            loader,
-            net_id,
-            cell: tokio::sync::OnceCell::new(),
-        }
+        Self { loader, net_id }
     }
 
-    pub async fn get(&self) -> anyhow::Result<&[PersistedEvent]> {
-        self.cell
-            .get_or_try_init(|| self.loader.load(self.net_id))
-            .await
-            .map(Vec::as_slice)
+    /// Stream the net's full history, folding each event via `f` (called once
+    /// per event, in sequence order). Returns the last folded sequence (the
+    /// `last_applied` cursor). Call at most once per bootstrap.
+    pub async fn fold(&self, mut f: impl FnMut(&PersistedEvent) + Send) -> anyhow::Result<u64> {
+        self.loader.stream(self.net_id, &mut f).await
     }
 }
 
@@ -341,17 +361,16 @@ pub(crate) async fn step_event<P: Projection>(
         StepAction::Bootstrap => {
             *entry = None;
             let history = LazyHistory::new(loader, net_id);
-            if let Some(state) = projection.bootstrap(db, net_id, &history).await? {
-                // A Some(state) bootstrap has folded the history, so the
-                // fetch is already cached — this get() never re-fetches.
-                let last_applied = history.get().await?.last().map(|e| e.sequence).unwrap_or(0);
+            // bootstrap streams the history (bounded memory) and returns the
+            // last folded sequence as `last_applied` — no second replay.
+            if let Some((state, last_applied)) = projection.bootstrap(db, net_id, &history).await? {
                 *entry = Some(NetEntry {
                     last_applied,
                     state,
                 });
-                // The fresh history normally already contains the delivered
-                // event; if the fetch raced ahead of the stream, fold it now
-                // so it isn't lost.
+                // The streamed history normally already contains the delivered
+                // event; if the replay lagged behind the live stream, fold it
+                // now so it isn't lost.
                 if let Some(e) = entry.as_mut() {
                     if ev.sequence > e.last_applied {
                         projection.apply(db, net_id, &mut e.state, ev).await?;
@@ -597,9 +616,18 @@ mod tests {
 
     #[async_trait]
     impl HistoryLoader for MockLoader {
-        async fn load(&self, _net_id: &str) -> anyhow::Result<Vec<PersistedEvent>> {
+        async fn stream(
+            &self,
+            _net_id: &str,
+            f: &mut (dyn for<'a> FnMut(&'a PersistedEvent) + Send),
+        ) -> anyhow::Result<u64> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Ok(self.history.clone())
+            let mut last = 0;
+            for ev in &self.history {
+                last = last.max(ev.sequence);
+                f(ev);
+            }
+            Ok(last)
         }
     }
 
@@ -644,15 +672,15 @@ mod tests {
             _db: &PgPool,
             _net_id: &str,
             history: &LazyHistory<'_>,
-        ) -> anyhow::Result<Option<()>> {
+        ) -> anyhow::Result<Option<((), u64)>> {
             self.bootstraps.fetch_add(1, Ordering::SeqCst);
             // Mirror the real projections: reject foreign nets BEFORE the
-            // history fetch (the cost the lazy handle exists to avoid).
+            // history replay (the cost the lazy handle exists to avoid).
             if self.bootstrap_none {
                 return Ok(None);
             }
-            history.get().await?;
-            Ok(Some(()))
+            let last_applied = history.fold(|_ev| {}).await?;
+            Ok(Some(((), last_applied)))
         }
 
         async fn apply(

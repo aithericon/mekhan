@@ -24,7 +24,8 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::auth::{
-    apply_grant, effective_object_role, grant_context, map_to_api_error, require_role, AuthUser,
+    apply_grant, deny_machine_principal, effective_object_role, grant_context, map_to_api_error,
+    require_role, AuthUser,
     ObjectKind, ObjectRef, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
@@ -119,6 +120,7 @@ pub async fn create_invite(
     Path(workspace_id): Path<Uuid>,
     Json(req): Json<CreateInviteRequest>,
 ) -> Result<(StatusCode, Json<InviteSummary>), ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -286,6 +288,7 @@ pub async fn list_invites(
     user: AuthUser,
     Path(workspace_id): Path<Uuid>,
 ) -> Result<Json<Vec<InviteSummary>>, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -327,6 +330,7 @@ pub async fn resend_invite(
     user: AuthUser,
     Path((workspace_id, invite_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<InviteSummary>, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -391,6 +395,7 @@ pub async fn revoke_invite(
     user: AuthUser,
     Path((workspace_id, invite_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
+    deny_machine_principal(&user)?;
     require_role(&state.db, &user, workspace_id, Role::Admin)
         .await
         .map_err(map_to_api_error)?;
@@ -479,6 +484,9 @@ pub async fn accept_invite(
     user: AuthUser,
     Path(token): Path<String>,
 ) -> Result<Json<AcceptInviteResponse>, ApiError> {
+    // Only a human identity can join a workspace via an invite — a machine
+    // principal has no email to match and must never be enrolled as a member.
+    deny_machine_principal(&user)?;
     let token_hash = hash_token(&token);
 
     // Read the invite (unlocked) to get the target email. The tx below re-checks
