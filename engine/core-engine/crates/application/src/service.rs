@@ -875,6 +875,23 @@ where
         self.events.all_events().await
     }
 
+    /// Storage-order count of in-memory events (`base_count + tail.len()`).
+    /// The correct cursor seed for incremental delta reads — see
+    /// [`Self::events_from`].
+    pub async fn event_count(&self) -> usize {
+        self.events.len().await
+    }
+
+    /// Events at storage positions `[idx, len)` — the incremental delta since a
+    /// positional cursor. Unlike [`Self::get_events`] (which deep-clones the
+    /// ENTIRE tail on every call), this clones only the new suffix, so a hot
+    /// loop polling for fresh events is O(delta) per tick, not O(n). Uses the
+    /// store's storage-order index (NOT `.sequence`, which restarts across
+    /// hydration sessions), so it is cursor-safe across snapshot wakes.
+    pub async fn events_from(&self, idx: usize) -> Vec<PersistedEvent> {
+        self.events.events_from(idx).await
+    }
+
     /// Append a raw domain event to the event log.
     ///
     /// Use sparingly — most events should be emitted through higher-level

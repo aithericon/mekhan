@@ -17,6 +17,14 @@ use crate::dlq::{DlqEntry, DlqErrorClass, DlqPublisher};
 /// Deliveries allowed for `ProcessError::Internal` before dead-lettering.
 const INTERNAL_MAX_DELIVERIES: i64 = 5;
 
+/// Cap on the pull-consumer prefetch buffer (messages held in client RAM ahead
+/// of the sequential consume loop). Without this, async-nats prefetches a large
+/// default batch and buffers unacked messages faster than the single-threaded
+/// loop drains them — under a high-volume crawl the buffer balloons and OOM-kills
+/// the engine. Mirrors the service-side causality/inventory consumers and lets
+/// JetStream hold the backlog durably instead of in engine memory.
+const MAX_MESSAGES_PER_BATCH: usize = 64;
+
 /// Outcome of pre-processing a raw NATS message before deserialization.
 pub enum PreProcessResult {
     /// Continue to deserialization and processing.
@@ -113,6 +121,7 @@ pub async fn run_message_loop_cancellable<H: MessageHandler>(
     // next batch request.
     let mut messages = consumer
         .stream()
+        .max_messages_per_batch(MAX_MESSAGES_PER_BATCH)
         .heartbeat(Duration::from_secs(15))
         .messages()
         .await

@@ -1,0 +1,6 @@
+{
+  "templateId": "00000000-0000-0000-0000-0000000000f6",
+  "folder": "diagnostics",
+  "name": "56 · Metric Storm",
+  "description": "Memory-profiling load generator. A single AutomatedStep whose Python body emits a large number (default 100k) of streaming metric + log events via aithericon.log_metric / log_info — no artifacts, no marking tokens. Reproduces the crawl's metric firehose in isolation to profile the engine's memory under high streaming-event volume (the 2026-06-29 engine OOM investigation: sinks correctly keep telemetry out of the marking, so this stresses the ingest/consumer/relay path, not the marking). Run live through the executor; profile the engine with `--features dhat-heap` or watch RSS."
+}
