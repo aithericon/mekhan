@@ -17,7 +17,8 @@ use uuid::Uuid;
 use crate::auth::model::SUBJECT_UUID_NAMESPACE;
 use crate::auth::resolver::ZITADEL_PROVIDER;
 use crate::auth::{
-    deny_machine_principal, map_to_api_error, require_member, require_role, AuthUser, Role,
+    deny_machine_principal, is_machine_principal, map_to_api_error, require_member, require_role,
+    AuthUser, Role,
 };
 use crate::models::error::{ApiError, ErrorResponse};
 use crate::models::workspace::{
@@ -154,6 +155,27 @@ pub async fn list_workspaces(
     State(state): State<AppState>,
     user: AuthUser,
 ) -> Result<Json<Vec<WorkspaceSummary>>, ApiError> {
+    // A machine principal (service account) has no `workspace_members` row — it
+    // carries its single workspace + role on the AuthUser, exactly as the
+    // `member_role` chokepoint now honors for object access. The membership join
+    // below would hide that workspace and leave only browse-only system tenants,
+    // so token-driven tooling (CI `apply`/`sync`) could never resolve its own
+    // workspace. Surface precisely the carried workspace here for parity.
+    if is_machine_principal(&user) {
+        let Some(ws) = user.workspace_id else {
+            return Ok(Json(Vec::new()));
+        };
+        let rows: Vec<WorkspaceSummary> = sqlx::query_as(
+            "SELECT id, slug, display_name, is_system, created_at, $2::text AS my_role \
+               FROM workspaces WHERE id = $1 AND archived_at IS NULL",
+        )
+        .bind(ws)
+        .bind(user.workspace_role.clone())
+        .fetch_all(&state.db)
+        .await?;
+        return Ok(Json(rows));
+    }
+
     // The caller's own workspaces (any membership role) PLUS browse-only system
     // workspaces that hold public content — today just `demos`. The latter are
     // surfaced via `is_system AND has-a-public-template` rather than a hardcoded
