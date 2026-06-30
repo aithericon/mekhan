@@ -162,9 +162,13 @@ async fn post_apply(app: &Router, body: Value) -> (StatusCode, Value) {
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 #[tokio::test]
-async fn list_returns_only_the_seeded_default_group_for_fresh_workspace() {
-    // A fresh workspace is not empty: migration 20240144 seeds the per-workspace
-    // `default` worker-group capacity (doc 24 D1). It must be the ONLY item.
+async fn list_is_empty_for_fresh_workspace() {
+    // A fresh workspace lists NO resources. Migration 20240144 once seeded a
+    // per-workspace `default` worker-group capacity, but Phase 2's migration
+    // 20240191 (`retire_legacy_per_workspace_groups`) soft-deletes those rows:
+    // the reserved `default` / `model_serving` aliases now resolve to a single
+    // platform-scoped group via most-specific-wins, so nothing workspace-scoped
+    // remains to list.
     let (app, _db, _store) = resources_test_app().await;
     let resp = app
         .oneshot(
@@ -179,10 +183,8 @@ async fn list_returns_only_the_seeded_default_group_for_fresh_workspace() {
     assert_eq!(resp.status(), StatusCode::OK);
     let body = body_json(resp.into_body()).await;
     let items = body["items"].as_array().unwrap();
-    assert_eq!(items.len(), 1);
-    assert_eq!(body["total"].as_i64(), Some(1));
-    assert_eq!(items[0]["path"], "default");
-    assert_eq!(items[0]["resource_type"], "capacity");
+    assert!(items.is_empty(), "expected no resources, got: {items:?}");
+    assert_eq!(body["total"].as_i64(), Some(0));
 }
 
 #[tokio::test]
