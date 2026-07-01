@@ -397,7 +397,7 @@ fn multipart_schema(port: &Port) -> Value {
 }
 
 /// Build the requestBody `content` map for a Manual trigger. `application/json`
-/// always `$ref`s the registered `Trigger_<safe>_Request` schema (so a
+/// always `$ref`s the registered `<safe>_Request` schema (so a
 /// generated client gets one named request type, with File fields already
 /// rendered as the file-reference object). When the input port has File
 /// field(s) it additionally offers `multipart/form-data` with the file as a
@@ -598,14 +598,14 @@ fn emit_manual(
     // Register the reusable request schema + sync-response envelope. File-kind
     // fields render as the file-reference object (not a bare string) so the
     // typed client carries what the strict `/fire` boundary requires.
-    let request_ref = format!("Trigger_{safe}_Request");
+    let request_ref = format!("{safe}_Request");
     let request_schema = input_port
         .as_ref()
         .map(port_request_json_schema)
         .unwrap_or_else(|| json!({ "type": "object", "additionalProperties": true }));
     schemas.insert(request_ref.clone(), request_schema);
 
-    let envelope_ref = format!("Trigger_{safe}_Response");
+    let envelope_ref = format!("{safe}_Response");
     schemas.insert(
         envelope_ref.clone(),
         json!({
@@ -649,7 +649,7 @@ fn emit_manual(
     let mut fire = json!({
         "tags": tags.clone(),
         "summary": format!("{label} (fire)"),
-        "operationId": format!("trigger_fire_{safe}"),
+        "operationId": format!("fire_{safe}"),
         "security": security.clone(),
         "requestBody": {
             "required": true,
@@ -687,7 +687,7 @@ fn emit_manual(
     let mut invoke = json!({
         "tags": tags,
         "summary": format!("{label} (invoke)"),
-        "operationId": format!("trigger_invoke_{safe}"),
+        "operationId": format!("invoke_{safe}"),
         "security": security,
         "requestBody": {
             "required": true,
@@ -1004,9 +1004,15 @@ mod tests {
         let fire = &paths["/api/v1/triggers/trigger_1/fire"]["post"];
         let invoke = &paths["/api/v1/triggers/trigger_1/invoke"]["post"];
 
+        // Op ids drop the redundant `trigger_` prefix, keeping the fire/invoke
+        // verb (async vs sync).
+        assert_eq!(fire["operationId"], json!("fire_trigger_1"));
+        assert_eq!(invoke["operationId"], json!("invoke_trigger_1"));
+
         // Typed requestBody: the Start.initial port names both fields, and
-        // `required` reflects the port (customer required, amount not).
-        let req = &schemas["Trigger_trigger_1_Request"];
+        // `required` reflects the port (customer required, amount not). The
+        // request schema drops the `Trigger_` prefix too.
+        let req = &schemas["trigger_1_Request"];
         assert_eq!(req["properties"]["customer"]["type"], json!("string"));
         assert_eq!(req["properties"]["amount"]["type"], json!("number"));
         assert_eq!(req["required"], json!(["customer"]));
@@ -1023,9 +1029,9 @@ mod tests {
         // /invoke → 200 success envelope referencing the response schema.
         assert_eq!(
             invoke["responses"]["200"]["content"]["application/json"]["schema"]["$ref"],
-            json!("#/components/schemas/Trigger_trigger_1_Response")
+            json!("#/components/schemas/trigger_1_Response")
         );
-        let env = &schemas["Trigger_trigger_1_Response"];
+        let env = &schemas["trigger_1_Response"];
         assert_eq!(env["properties"]["ok"]["enum"], json!([true]));
         assert!(env["properties"].get("value").is_some());
         // /invoke also has a 202 timeout fallback.
@@ -1162,11 +1168,11 @@ mod tests {
         // application/json — $refs the registered request schema (one named type).
         assert_eq!(
             content["application/json"]["schema"]["$ref"],
-            json!("#/components/schemas/Trigger_t_file_Request")
+            json!("#/components/schemas/t_file_Request")
         );
         // The registered schema renders the File field as the file-reference
         // OBJECT the strict `/fire` boundary requires — NOT a bare string.
-        let req = &schemas["Trigger_t_file_Request"];
+        let req = &schemas["t_file_Request"];
         assert_eq!(req["properties"]["attachment"]["type"], json!("object"));
         assert!(req["properties"]["attachment"]["properties"]
             .get("key")
