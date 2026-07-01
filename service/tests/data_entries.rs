@@ -144,14 +144,7 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
     assert_eq!(copy.server_display_name.as_deref(), Some("Lab NAS"));
     assert_eq!(copy.server_kind.as_deref(), Some("sftp"));
 
-    // The index-only file is uncatalogued — counted + peeked, not in the page.
-    assert!(resp.uncatalogued_count >= 1);
-    assert!(
-        resp.uncatalogued
-            .iter()
-            .any(|u| u.copies.iter().any(|c| c.file_server_id == unreg)),
-        "uncatalogued peek includes the indexed file"
-    );
+    // The index-only file is NOT in the catalogued page.
     assert!(
         !resp
             .page
@@ -159,6 +152,18 @@ async fn entry_has_resolved_copy_and_uncatalogued_is_separate() {
             .iter()
             .any(|e| e.copies.iter().any(|c| c.file_server_id == unreg)),
         "uncatalogued file is not in the catalogued page"
+    );
+
+    // It surfaces on the separate uncatalogued endpoint — counted + peeked.
+    let unc = queries::list_uncatalogued(&pool, ws)
+        .await
+        .expect("uncatalogued list");
+    assert!(unc.uncatalogued_count >= 1);
+    assert!(
+        unc.uncatalogued
+            .iter()
+            .any(|u| u.copies.iter().any(|c| c.file_server_id == unreg)),
+        "uncatalogued peek includes the indexed file"
     );
 
     // Cleanup.

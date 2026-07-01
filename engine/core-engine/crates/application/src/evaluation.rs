@@ -915,26 +915,53 @@ pub async fn advance_marking<E: EventRepository, S: StateProjection>(
                     (marking, MarkingDelta::Rebuilt)
                 }
                 Some(new_events) => {
-                    // Copy-on-write: clone the inner marking ONCE to fold the
-                    // delta into it, leaving any reader still holding the prior
-                    // `Arc` undisturbed. (`Arc::make_mut` would clone here anyway
-                    // — the cache still holds its own ref — so an explicit clone
-                    // is equivalent and clearer.)
-                    let mut folded = (*cached_marking).clone();
-                    for persisted in &new_events {
-                        crate::apply_event_to_marking(&mut folded, &persisted.event);
-                    }
-                    let marking = Arc::new(folded);
-                    // The new cursor is the EXACT extent folded: `events_from_checked`
-                    // returned `[cached_idx .. current_tail_end)`, so the store now
-                    // reflects `cached_idx + new_events.len()` events. Using the
-                    // call-site `current_idx` (read before the slice) would lag if a
-                    // concurrent append landed in between, leaving a stale cursor
-                    // that re-folds `new_events` on the next Stale call (over-fold).
+                    // Fold the delta into the cached marking IN PLACE whenever the
+                    // cache still sits at exactly the cursor we sliced from. Deep-
+                    // cloning the whole marking on every Stale tick is O(marking):
+                    // on a net with a large token backlog at any place (the metric-
+                    // storm `sig_metric` pile-up), the eval loop ticks once per
+                    // streamed event and each tick re-cloned the entire growing
+                    // marking — O(backlog²) allocation churn that dominated the
+                    // heap (dhat: the crawl's engine bled hundreds of MB here).
+                    //
+                    // `Arc::make_mut` gives us copy-on-write for free: it mutates
+                    // the inner marking in place when the cache uniquely owns it
+                    // (the common case — the eval loop drops its `Arc` between
+                    // ticks and there is no concurrent reader), and clones exactly
+                    // once only if a reader (e.g. a racing `get_marking`) still
+                    // holds the prior `Arc`. Folding is then O(delta), not
+                    // O(marking), so the loop keeps up and the backlog drains.
                     let folded_extent = cached_idx + new_events.len() as u64;
-                    *cached_state.write().unwrap() =
-                        Some((folded_extent, Arc::clone(&marking)));
-                    (marking, MarkingDelta::Applied(new_events))
+                    let mut guard = cached_state.write().unwrap();
+                    // Re-validate under the write lock: a concurrent advance_marking
+                    // may have folded past `cached_idx` while we fetched — re-
+                    // applying our slice would double-count. Only fast-path when the
+                    // cursor is still exactly ours.
+                    let in_place = matches!(guard.as_ref(), Some((idx, _)) if *idx == cached_idx);
+                    if in_place {
+                        // Drop our snapshot ref so the cache's `Arc` can be uniquely
+                        // owned; `make_mut` then avoids the clone entirely.
+                        drop(cached_marking);
+                        let (idx, arc) = guard.as_mut().unwrap();
+                        let folded = Arc::make_mut(arc);
+                        for persisted in &new_events {
+                            crate::apply_event_to_marking(folded, &persisted.event);
+                        }
+                        *idx = folded_extent;
+                        let marking = Arc::clone(arc);
+                        (marking, MarkingDelta::Applied(new_events))
+                    } else {
+                        // Rare race (cache advanced/cleared under us): fall back to a
+                        // clone-fold from our own snapshot, last-writer-wins — the
+                        // pre-existing behaviour for this path.
+                        let mut folded = (*cached_marking).clone();
+                        for persisted in &new_events {
+                            crate::apply_event_to_marking(&mut folded, &persisted.event);
+                        }
+                        let marking = Arc::new(folded);
+                        *guard = Some((folded_extent, Arc::clone(&marking)));
+                        (marking, MarkingDelta::Applied(new_events))
+                    }
                 }
             }
         }

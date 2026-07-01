@@ -236,17 +236,56 @@ async fn parse_fire_body(
                 net_parameters: None,
             })
         } else {
-            let req: FireTriggerRequest = serde_json::from_slice(&bytes)
+            let value: Value = serde_json::from_slice(&bytes)
                 .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
-            Ok(ParsedFireBody {
-                payload: req.payload,
-                dispatch_options: petri_api_types::DispatchOptions {
-                    skip_mask: req.skip_mask,
-                    stage_overrides: req.stage_overrides,
-                },
-                net_parameters: req.net_parameters,
-            })
+            // `/fire` accepts two JSON shapes:
+            //  1. The `FireTriggerRequest` wrapper `{ payload, skip_mask,
+            //     stage_overrides, net_parameters }` — the override-bearing form
+            //     the experimentation / research-harness ablation runners use.
+            //  2. The RAW Start scope the per-folder OpenAPI bundle advertises as
+            //     the trigger request body (`openapi_bundle::emit_manual` derives
+            //     it from the target `Start.initial` port), so a typed
+            //     folder-bundle client fires with just the domain payload and no
+            //     override wrapper. This mirrors the `multipart/form-data` path
+            //     above, which already treats the whole body as the scope.
+            if is_fire_wrapper(&value) {
+                let req: FireTriggerRequest = serde_json::from_value(value)
+                    .map_err(|e| ApiError::bad_request(format!("invalid JSON body: {e}")))?;
+                Ok(ParsedFireBody {
+                    payload: req.payload,
+                    dispatch_options: petri_api_types::DispatchOptions {
+                        skip_mask: req.skip_mask,
+                        stage_overrides: req.stage_overrides,
+                    },
+                    net_parameters: req.net_parameters,
+                })
+            } else {
+                // Raw Start scope — the whole object is the payload.
+                Ok(ParsedFireBody {
+                    payload: value,
+                    dispatch_options: petri_api_types::DispatchOptions::default(),
+                    net_parameters: None,
+                })
+            }
         }
+    }
+}
+
+/// Does this JSON value look like a `FireTriggerRequest` wrapper (vs. a raw
+/// Start scope)? True only when it is an object that carries a `payload` key
+/// and *every* top-level key is one of the reserved wrapper keys. A raw domain
+/// scope (e.g. `{ document_file, document_id }`) has non-reserved keys and is
+/// therefore treated as the payload itself. Edge case: a Start contract whose
+/// own fields are all reserved wrapper names (and includes `payload`) must use
+/// the explicit wrapper form — an acceptable, documented ambiguity that no real
+/// Start scope hits.
+fn is_fire_wrapper(v: &Value) -> bool {
+    const RESERVED: [&str; 4] = ["payload", "skip_mask", "stage_overrides", "net_parameters"];
+    match v.as_object() {
+        Some(obj) => {
+            obj.contains_key("payload") && obj.keys().all(|k| RESERVED.contains(&k.as_str()))
+        }
+        None => false,
     }
 }
 
@@ -861,5 +900,39 @@ fn methods_match(declared: HttpMethod, actual: &Method) -> bool {
         HttpMethod::Put => actual == Method::PUT,
         HttpMethod::Patch => actual == Method::PATCH,
         HttpMethod::Delete => actual == Method::DELETE,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn fire_wrapper_detected_only_for_reserved_key_shape() {
+        // The FireTriggerRequest wrapper — payload present, all keys reserved.
+        assert!(is_fire_wrapper(&json!({ "payload": { "x": 1 } })));
+        assert!(is_fire_wrapper(&json!({
+            "payload": { "x": 1 },
+            "skip_mask": ["t1"],
+            "stage_overrides": {},
+            "net_parameters": { "correlation_id": "c" }
+        })));
+    }
+
+    #[test]
+    fn raw_start_scope_is_not_a_wrapper() {
+        // The typed folder-bundle body: a raw Start scope with domain fields.
+        assert!(!is_fire_wrapper(&json!({
+            "document_file": { "key": "k", "filename": "d.pdf" },
+            "document_id": "abc"
+        })));
+        // A scope carrying a `payload` field but ALSO non-reserved keys is raw.
+        assert!(!is_fire_wrapper(&json!({ "payload": 1, "document_id": "abc" })));
+        // Non-objects are never wrappers.
+        assert!(!is_fire_wrapper(&json!("x")));
+        assert!(!is_fire_wrapper(&json!(null)));
+        // An empty object has no `payload` key → raw (empty) scope.
+        assert!(!is_fire_wrapper(&json!({})));
     }
 }

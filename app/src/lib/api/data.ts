@@ -13,6 +13,7 @@ export type DataCopy = components['schemas']['DataCopy'];
 export type DataEntry = components['schemas']['DataEntry'];
 export type UncataloguedFile = components['schemas']['UncataloguedFile'];
 export type DataEntriesResponse = components['schemas']['DataEntriesResponse'];
+export type UncataloguedResponse = components['schemas']['UncataloguedResponse'];
 export type FacetBucket = components['schemas']['FacetBucket'];
 export type FacetsResponse = components['schemas']['FacetsResponse'];
 export type QueryFieldDesc = components['schemas']['QueryFieldDesc'];
@@ -75,6 +76,18 @@ export async function listDataEntries(params?: {
 	if (params?.page_size) qs.set('page_size', String(params.page_size));
 	const query = qs.toString();
 	return rawJson(`/data/entries${query ? `?${query}` : ''}`);
+}
+
+/**
+ * Uncatalogued (index-only) peek + total count for the active workspace.
+ *
+ * Split off `listDataEntries`: the server-side anti-join scans the whole
+ * workspace inventory against the whole catalogue (seconds at corpus scale) and
+ * is independent of the list's filter/sort/page. The browser loads it lazily so
+ * the entries list stays fast and doesn't recompute this on every query change.
+ */
+export async function listUncatalogued(): Promise<UncataloguedResponse> {
+	return rawJson('/data/uncatalogued');
 }
 
 // ── Facets ──────────────────────────────────────────────────────────────────

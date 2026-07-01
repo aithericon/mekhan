@@ -1272,6 +1272,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/data/uncatalogued": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * GET /api/v1/data/uncatalogued
+         * @description The uncatalogued (index-only) peek + total count for the workspace: inventory
+         *     files with no matching catalogue entry yet. Split off `/data/entries` because
+         *     the underlying anti-join scans the whole workspace inventory against the whole
+         *     catalogue — seconds at corpus scale — and is independent of any list
+         *     filter/sort/page, so the browser loads it lazily (short-TTL cached server-side).
+         */
+        get: operations["data_uncatalogued"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/dev/identities": {
         parameters: {
             query?: never;
@@ -8101,18 +8125,15 @@ export interface components {
         };
         /**
          * @description Response of `GET /api/v1/data/entries`: a page of catalogued entries (each
-         *     with copies), plus a capped peek at uncatalogued (index-only) files and the
-         *     total uncatalogued count.
+         *     with copies).
+         *
+         *     The uncatalogued peek is deliberately NOT part of this response — it's a
+         *     workspace-wide anti-join (whole inventory vs. whole catalogue) that costs
+         *     seconds at corpus scale and is independent of the page's filter/sort/page.
+         *     It lives on its own lazy endpoint (`GET /api/v1/data/uncatalogued`) so the
+         *     hot list path stays fast and doesn't recompute it on every query change.
          */
-        DataEntriesResponse: components["schemas"]["Paginated_DataEntry"] & {
-            /** @description Index-only files with no logical catalogue identity yet (capped peek). */
-            uncatalogued: components["schemas"]["UncataloguedFile"][];
-            /**
-             * Format: int64
-             * @description Total number of uncatalogued physical copies (not just the peek).
-             */
-            uncatalogued_count: number;
-        };
+        DataEntriesResponse: components["schemas"]["Paginated_DataEntry"];
         /**
          * @description A unified Data-browser row: the full catalogue entry (so the browser can
          *     render the same rich artifact card, lineage/provenance/download, schema and
@@ -14543,6 +14564,20 @@ export interface components {
             name: string;
         };
         /**
+         * @description Response of `GET /api/v1/data/uncatalogued`: a capped peek at uncatalogued
+         *     (index-only) files + the total uncatalogued count. Split off the entries
+         *     list so the expensive anti-join loads lazily, off the hot list path.
+         */
+        UncataloguedResponse: {
+            /** @description Index-only files with no logical catalogue identity yet (capped peek). */
+            uncatalogued: components["schemas"]["UncataloguedFile"][];
+            /**
+             * Format: int64
+             * @description Total number of uncatalogued physical copies (not just the peek).
+             */
+            uncatalogued_count: number;
+        };
+        /**
          * @description An inventory `file_server_id` string observed in `file_inventory` that has
          *     NO backing `file_servers` row yet — a candidate for `adopt`.
          */
@@ -18781,6 +18816,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+        };
+    };
+    data_uncatalogued: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Uncatalogued peek + total count */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UncataloguedResponse"];
                 };
             };
         };

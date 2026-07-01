@@ -5,12 +5,13 @@
 	import EntriesTab from '$lib/components/data/EntriesTab.svelte';
 	import EntriesRail from '$lib/components/data/EntriesRail.svelte';
 	import CopiesTab from '$lib/components/data/CopiesTab.svelte';
+	import UncataloguedTab from '$lib/components/data/UncataloguedTab.svelte';
 	import ServersTab from '$lib/components/data/ServersTab.svelte';
 	import AnalyticsTab from '$lib/components/data/AnalyticsTab.svelte';
 	import { EntriesQueryState } from '$lib/components/data/entries-query.svelte';
 	import { DataTypesState } from '$lib/components/data/data-types.svelte';
 
-	const TABS = ['entries', 'copies', 'servers', 'analytics'];
+	const TABS = ['entries', 'copies', 'uncatalogued', 'servers', 'analytics'];
 
 	// Deep-link the active tab via ?tab= so a server link can jump straight to
 	// the Servers view (and bookmarks survive). /catalogue + /inventory redirect
@@ -77,6 +78,9 @@
 				<Tabs.Trigger variant="underline" value="copies" data-testid="data-tab-copies">
 					Copies
 				</Tabs.Trigger>
+				<Tabs.Trigger variant="underline" value="uncatalogued" data-testid="data-tab-uncatalogued">
+					Uncatalogued
+				</Tabs.Trigger>
 				<Tabs.Trigger variant="underline" value="servers" data-testid="data-tab-servers">
 					Servers
 				</Tabs.Trigger>
@@ -96,6 +100,9 @@
 		</Tabs.Content>
 		<Tabs.Content value="copies">
 			<CopiesTab onViewServer={viewServer} />
+		</Tabs.Content>
+		<Tabs.Content value="uncatalogued">
+			<UncataloguedTab onViewServer={viewServer} />
 		</Tabs.Content>
 		<Tabs.Content value="servers">
 			<ServersTab focusKey={focusServer} />

@@ -388,6 +388,7 @@ use utoipa::OpenApi;
             crate::data::model::DataEntry,
             crate::data::model::UncataloguedFile,
             crate::data::model::DataEntriesResponse,
+            crate::data::model::UncataloguedResponse,
             // File analytics (docs/32 Cuts 1+2) — breakdown buckets appear only
             // inside `BreakdownResponse.buckets: Vec<_>` and the timeseries rows
             // only inside `Vec<SnapshotPoint>`, which utoipa's auto-discovery

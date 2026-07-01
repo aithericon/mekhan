@@ -52,12 +52,24 @@ pub struct UncataloguedFile {
 }
 
 /// Response of `GET /api/v1/data/entries`: a page of catalogued entries (each
-/// with copies), plus a capped peek at uncatalogued (index-only) files and the
-/// total uncatalogued count.
+/// with copies).
+///
+/// The uncatalogued peek is deliberately NOT part of this response — it's a
+/// workspace-wide anti-join (whole inventory vs. whole catalogue) that costs
+/// seconds at corpus scale and is independent of the page's filter/sort/page.
+/// It lives on its own lazy endpoint (`GET /api/v1/data/uncatalogued`) so the
+/// hot list path stays fast and doesn't recompute it on every query change.
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DataEntriesResponse {
     #[serde(flatten)]
     pub page: Paginated<DataEntry>,
+}
+
+/// Response of `GET /api/v1/data/uncatalogued`: a capped peek at uncatalogued
+/// (index-only) files + the total uncatalogued count. Split off the entries
+/// list so the expensive anti-join loads lazily, off the hot list path.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct UncataloguedResponse {
     /// Index-only files with no logical catalogue identity yet (capped peek).
     pub uncatalogued: Vec<UncataloguedFile>,
     /// Total number of uncatalogued physical copies (not just the peek).

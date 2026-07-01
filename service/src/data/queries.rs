@@ -113,7 +113,11 @@ fn to_copy(
     }
 }
 
-/// Page of catalogued entries (each with physical copies) + an uncatalogued peek.
+/// Page of catalogued entries (each with physical copies).
+///
+/// The uncatalogued peek is served separately by [`list_uncatalogued`] — it's a
+/// whole-workspace anti-join independent of this page's params, so keeping it off
+/// this path is what makes the list fast.
 pub async fn list_entries(
     pool: &PgPool,
     workspace_id: Uuid,
@@ -175,11 +179,24 @@ pub async fn list_entries(
         has_previous: page.has_previous,
     };
 
-    // 4. Uncatalogued (index-only) files: inventory rows whose content_hash
-    //    matches no catalogue row (NULL hash, or hashed-but-not-registered).
-    //    Served through the short-TTL cache; per-request server resolution
-    //    (display name / servable) still happens below, so a server rename or
-    //    endpoint verify shows up immediately even on a cached peek.
+    Ok(DataEntriesResponse { page: page_out })
+}
+
+/// Uncatalogued (index-only) files for a workspace: inventory rows whose
+/// content_hash matches no catalogue row (NULL hash, or hashed-but-not-
+/// registered). Served through the short-TTL [`UNCATALOGUED_CACHE`]; per-request
+/// server resolution (display name / servable) still happens here, so a server
+/// rename or endpoint verify shows up immediately even on a cached peek.
+///
+/// Split off [`list_entries`] onto its own endpoint: the underlying anti-join
+/// scans the WHOLE workspace inventory against the WHOLE catalogue (seconds at
+/// corpus scale) and is independent of any list filter/sort/page, so the browser
+/// loads it lazily instead of paying it on every list request.
+pub async fn list_uncatalogued(
+    pool: &PgPool,
+    workspace_id: Uuid,
+) -> Result<UncataloguedResponse, QueryError> {
+    let servers = server_lookup(pool, workspace_id).await?;
     let (uncatalogued_count, peek_rows) = uncatalogued_cached(pool, workspace_id).await?;
     let uncatalogued = peek_rows
         .into_iter()
@@ -196,8 +213,7 @@ pub async fn list_entries(
         })
         .collect();
 
-    Ok(DataEntriesResponse {
-        page: page_out,
+    Ok(UncataloguedResponse {
         uncatalogued,
         uncatalogued_count,
     })
