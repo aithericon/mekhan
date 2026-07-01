@@ -496,6 +496,9 @@ fn build_protected_openapi_router() -> OpenApiRouter<AppState> {
         // Unified Data browser read-model — catalogued entries + nested physical
         // copies (server names resolved) + uncatalogued peek.
         .routes(routes!(data::handlers::entries))
+        // Uncatalogued (index-only) peek — split off `entries` so the expensive
+        // whole-workspace anti-join loads lazily, off the hot list path.
+        .routes(routes!(data::handlers::uncatalogued))
         // Serve bridge — stream an entry's bytes by resolving it to a physical
         // copy + endpoint (local_mount NATS relay / s3 presign-or-proxy / sftp).
         .routes(routes!(data::handlers::entry_content))

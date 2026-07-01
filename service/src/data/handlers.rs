@@ -15,7 +15,7 @@ use serde::Deserialize;
 
 use crate::auth::AuthUser;
 use crate::catalogue::handlers::{apply_query_dsl, CatalogueQ};
-use crate::data::model::DataEntriesResponse;
+use crate::data::model::{DataEntriesResponse, UncataloguedResponse};
 use crate::data::queries;
 use crate::data::serve;
 use crate::data::serve::ServeMiss;
@@ -58,6 +58,34 @@ pub async fn entries(
             tracing::warn!("data entries: {e}");
             ApiError::bad_request(e.to_string())
         })?;
+    Ok(Json(resp))
+}
+
+/// GET /api/v1/data/uncatalogued
+///
+/// The uncatalogued (index-only) peek + total count for the workspace: inventory
+/// files with no matching catalogue entry yet. Split off `/data/entries` because
+/// the underlying anti-join scans the whole workspace inventory against the whole
+/// catalogue — seconds at corpus scale — and is independent of any list
+/// filter/sort/page, so the browser loads it lazily (short-TTL cached server-side).
+#[utoipa::path(
+    get,
+    path = "/api/v1/data/uncatalogued",
+    operation_id = "data_uncatalogued",
+    responses(
+        (status = 200, description = "Uncatalogued peek + total count", body = UncataloguedResponse),
+    ),
+    tag = "data",
+)]
+pub async fn uncatalogued(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> Result<Json<UncataloguedResponse>, ApiError> {
+    let ws = user.require_workspace()?;
+    let resp = queries::list_uncatalogued(&state.db, ws).await.map_err(|e| {
+        tracing::warn!("data uncatalogued: {e}");
+        ApiError::bad_request(e.to_string())
+    })?;
     Ok(Json(resp))
 }
 

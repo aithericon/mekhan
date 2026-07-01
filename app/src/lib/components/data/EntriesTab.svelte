@@ -13,8 +13,6 @@
 	import type { EntriesQueryState } from './entries-query.svelte';
 	import type { DataTypesState } from './data-types.svelte';
 	import QueryBar from './QueryBar.svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import { StatusBadge } from '$lib/components/status';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 	import FileBox from '@lucide/svelte/icons/file-box';
@@ -22,9 +20,6 @@
 	import ArrowUpDown from '@lucide/svelte/icons/arrow-up-down';
 	import ChevronLeft from '@lucide/svelte/icons/chevron-left';
 	import ChevronRight from '@lucide/svelte/icons/chevron-right';
-	import ChevronDown from '@lucide/svelte/icons/chevron-down';
-	import FileQuestion from '@lucide/svelte/icons/file-question';
-	import Server from '@lucide/svelte/icons/server';
 	import Database from '@lucide/svelte/icons/database';
 
 	let {
@@ -60,7 +55,6 @@
 	let inspectId = $state<string | null>(
 		browser ? new URLSearchParams(window.location.search).get('inspect') : null
 	);
-	let showUncatalogued = $state(false);
 
 	const sortOptions = [
 		{ value: '-created_at', label: 'Newest first' },
@@ -170,7 +164,7 @@
 
 {#if loading && !resp}
 	<div class="flex items-center justify-center py-16 text-sm text-muted-foreground">Loading…</div>
-{:else if resp && resp.items.length === 0 && resp.uncatalogued.length === 0}
+{:else if resp && resp.items.length === 0}
 	<div class="flex flex-col items-center justify-center rounded-xl border border-dashed border-border py-16">
 		<Database class="size-10 text-muted-foreground/40" />
 		<p class="mt-3 text-sm text-muted-foreground">No catalogued content</p>
@@ -208,38 +202,5 @@
 		</div>
 	{:else if resp.total > 0}
 		<p class="mt-4 text-center text-sm text-muted-foreground">{resp.total.toLocaleString()} {resp.total === 1 ? 'entry' : 'entries'}</p>
-	{/if}
-
-	<!-- Uncatalogued (index-only) files -->
-	{#if resp.uncatalogued_count > 0}
-		<div class="mt-6 rounded-lg border border-dashed border-border">
-			<button class="flex w-full items-center gap-2 px-4 py-2.5 text-left" onclick={() => (showUncatalogued = !showUncatalogued)}>
-				{#if showUncatalogued}<ChevronDown class="size-3.5 text-muted-foreground" />{:else}<ChevronRight class="size-3.5 text-muted-foreground" />{/if}
-				<FileQuestion class="size-4 text-muted-foreground" />
-				<span class="text-sm font-medium text-foreground">Uncatalogued files</span>
-				<Badge variant="secondary">{resp.uncatalogued_count.toLocaleString()}</Badge>
-				<span class="text-sm text-muted-foreground">— observed on disk, not yet hashed/registered</span>
-			</button>
-			{#if showUncatalogued}
-				<div class="space-y-1 border-t border-border px-4 py-2.5">
-					{#each resp.uncatalogued as u}
-						{@const c = u.copies[0]}
-						<div class="flex items-center gap-2 text-sm">
-							<span class="truncate font-medium text-foreground">{u.name}</span>
-							{#if c}
-								<button class="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground" onclick={() => onViewServer(c.file_server_id)}>
-									<Server class="size-3" /><span>{c.server_display_name ?? c.file_server_id}</span>
-								</button>
-								<span class="truncate font-mono text-muted-foreground" title={c.path}>{c.path}</span>
-								<StatusBadge domain="copy" status={c.status} />
-							{/if}
-						</div>
-					{/each}
-					{#if resp.uncatalogued_count > resp.uncatalogued.length}
-						<p class="pt-1 text-sm text-muted-foreground">…and {(resp.uncatalogued_count - resp.uncatalogued.length).toLocaleString()} more</p>
-					{/if}
-				</div>
-			{/if}
-		</div>
 	{/if}
 {/if}

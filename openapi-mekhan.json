@@ -3951,6 +3951,28 @@
         }
       }
     },
+    "/api/v1/data/uncatalogued": {
+      "get": {
+        "tags": [
+          "data"
+        ],
+        "summary": "GET /api/v1/data/uncatalogued",
+        "description": "The uncatalogued (index-only) peek + total count for the workspace: inventory\nfiles with no matching catalogue entry yet. Split off `/data/entries` because\nthe underlying anti-join scans the whole workspace inventory against the whole\ncatalogue — seconds at corpus scale — and is independent of any list\nfilter/sort/page, so the browser loads it lazily (short-TTL cached server-side).",
+        "operationId": "data_uncatalogued",
+        "responses": {
+          "200": {
+            "description": "Uncatalogued peek + total count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UncataloguedResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dev/identities": {
       "get": {
         "tags": [
@@ -22040,30 +22062,9 @@
         "allOf": [
           {
             "$ref": "#/components/schemas/Paginated_DataEntry"
-          },
-          {
-            "type": "object",
-            "required": [
-              "uncatalogued",
-              "uncatalogued_count"
-            ],
-            "properties": {
-              "uncatalogued": {
-                "type": "array",
-                "items": {
-                  "$ref": "#/components/schemas/UncataloguedFile"
-                },
-                "description": "Index-only files with no logical catalogue identity yet (capped peek)."
-              },
-              "uncatalogued_count": {
-                "type": "integer",
-                "format": "int64",
-                "description": "Total number of uncatalogued physical copies (not just the peek)."
-              }
-            }
           }
         ],
-        "description": "Response of `GET /api/v1/data/entries`: a page of catalogued entries (each\nwith copies), plus a capped peek at uncatalogued (index-only) files and the\ntotal uncatalogued count."
+        "description": "Response of `GET /api/v1/data/entries`: a page of catalogued entries (each\nwith copies).\n\nThe uncatalogued peek is deliberately NOT part of this response — it's a\nworkspace-wide anti-join (whole inventory vs. whole catalogue) that costs\nseconds at corpus scale and is independent of the page's filter/sort/page.\nIt lives on its own lazy endpoint (`GET /api/v1/data/uncatalogued`) so the\nhot list path stays fast and doesn't recompute it on every query change."
       },
       "DataEntry": {
         "allOf": [
@@ -35429,6 +35430,28 @@
           },
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "UncataloguedResponse": {
+        "type": "object",
+        "description": "Response of `GET /api/v1/data/uncatalogued`: a capped peek at uncatalogued\n(index-only) files + the total uncatalogued count. Split off the entries\nlist so the expensive anti-join loads lazily, off the hot list path.",
+        "required": [
+          "uncatalogued",
+          "uncatalogued_count"
+        ],
+        "properties": {
+          "uncatalogued": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UncataloguedFile"
+            },
+            "description": "Index-only files with no logical catalogue identity yet (capped peek)."
+          },
+          "uncatalogued_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Total number of uncatalogued physical copies (not just the peek)."
           }
         }
       },
