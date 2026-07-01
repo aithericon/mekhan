@@ -300,48 +300,119 @@ fn port_has_file(port: &Port) -> bool {
         .any(|f| matches!(f.kind, FieldKind::File))
 }
 
-/// Build the requestBody `content` map for a typed input `Port`.
+/// JSON Schema for the file-reference OBJECT a `file`-kind Start field carries
+/// on the wire — the shape the strict Start-contract validator actually
+/// enforces at the `/fire` boundary (`validate_token_against_port` maps a File
+/// field to an object, so a bare string is rejected with a
+/// `StartContractViolation`). The bundle MUST emit this object, not the
+/// storage-path `{type:string}` that `FieldKind::base_schema` returns for the
+/// scalar handle — otherwise a generated typed client would type the field
+/// `String` and every fire would 4xx at the boundary.
 ///
-/// Always offers `application/json` with the typed port schema (File field =
-/// storage-path string). When the port contains any `File` field it
-/// additionally offers `multipart/form-data` where the File field(s) become
-/// `{type:string, format:binary}` and every other field mirrors the json
-/// shape — the server's `build_multipart_payload` auto-converts uploads into
-/// file-reference objects, so both content types reach the same handler.
-fn request_content(port: &Port) -> Value {
-    let json_schema = port.json_schema();
-    let mut content = json!({
-        "application/json": { "schema": json_schema },
-    });
+/// `key` is the storage/catalogue handle used to resolve + download the blob;
+/// the rest is upload-time metadata (mirrors `FileUploadResponse` + a derived
+/// `url`). Every field is optional and `additionalProperties: true`, matching
+/// the validator's leniency (it only requires object-ness) and letting probed
+/// metadata ride along on the same token without a schema bump.
+fn file_ref_schema() -> Value {
+    json!({
+        "type": "object",
+        "description": "File reference: a storage/catalogue handle plus upload-time metadata. Resolve/download via `key` (or `url`).",
+        "properties": {
+            "key": { "type": "string", "description": "Storage/catalogue handle used to resolve and download the file." },
+            "url": { "type": "string", "description": "Convenience URL derived from `key` (`/api/v1/files/<key>`)." },
+            "filename": { "type": "string" },
+            "content_type": { "type": "string" },
+            "size": { "type": "integer" },
+        },
+        "additionalProperties": true,
+    })
+}
 
-    if port_has_file(port) {
-        // Mirror the json shape but swap File fields to binary uploads.
-        let mut properties = serde_json::Map::new();
-        for f in &port.fields {
-            let prop = if matches!(f.kind, FieldKind::File) {
-                json!({ "type": "string", "format": "binary" })
-            } else {
-                f.kind.json_schema(f)
-            };
-            properties.insert(f.name.clone(), prop);
-        }
-        let required: Vec<&str> = port
-            .fields
-            .iter()
-            .filter(|f| f.required)
-            .map(|f| f.name.as_str())
-            .collect();
-        let mut multipart_schema = json!({
-            "type": "object",
-            "properties": properties,
-            "additionalProperties": false,
-        });
-        if !required.is_empty() {
-            multipart_schema["required"] = json!(required);
-        }
-        content["multipart/form-data"] = json!({ "schema": multipart_schema });
+/// Like [`Port::json_schema`], but every `File`-kind field renders as the
+/// file-reference object ([`file_ref_schema`]) rather than the bare
+/// storage-path string. This is the schema emitted for a trigger's
+/// `application/json` request body, so the typed client carries the object
+/// mekhan's strict `/fire` boundary requires.
+fn port_request_json_schema(port: &Port) -> Value {
+    if port.fields.is_empty() {
+        return json!({ "type": "object", "additionalProperties": true });
     }
+    let mut properties = serde_json::Map::new();
+    for f in &port.fields {
+        let prop = if matches!(f.kind, FieldKind::File) {
+            file_ref_schema()
+        } else {
+            f.kind.json_schema(f)
+        };
+        properties.insert(f.name.clone(), prop);
+    }
+    let required: Vec<Value> = port
+        .fields
+        .iter()
+        .filter(|f| f.required)
+        .map(|f| json!(f.name))
+        .collect();
+    let mut schema = json!({
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": false,
+    });
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
+}
 
+/// The `multipart/form-data` alternative schema for a port with File field(s):
+/// File fields become `{type:string, format:binary}` binary uploads and every
+/// other field mirrors the json object shape. The server's
+/// `build_multipart_payload` auto-converts uploads into file-reference objects,
+/// so both content types reach the same handler.
+fn multipart_schema(port: &Port) -> Value {
+    let mut properties = serde_json::Map::new();
+    for f in &port.fields {
+        let prop = if matches!(f.kind, FieldKind::File) {
+            json!({ "type": "string", "format": "binary" })
+        } else {
+            f.kind.json_schema(f)
+        };
+        properties.insert(f.name.clone(), prop);
+    }
+    let required: Vec<&str> = port
+        .fields
+        .iter()
+        .filter(|f| f.required)
+        .map(|f| f.name.as_str())
+        .collect();
+    let mut schema = json!({
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": false,
+    });
+    if !required.is_empty() {
+        schema["required"] = json!(required);
+    }
+    schema
+}
+
+/// Build the requestBody `content` map for a Manual trigger. `application/json`
+/// always `$ref`s the registered `Trigger_<safe>_Request` schema (so a
+/// generated client gets one named request type, with File fields already
+/// rendered as the file-reference object). When the input port has File
+/// field(s) it additionally offers `multipart/form-data` with the file as a
+/// binary upload.
+fn build_request_content(input_port: Option<&Port>, request_ref: &str) -> Value {
+    let mut content = json!({
+        "application/json": {
+            "schema": { "$ref": format!("#/components/schemas/{request_ref}") }
+        }
+    });
+    if let Some(port) = input_port {
+        if port_has_file(port) {
+            content["multipart/form-data"] = json!({ "schema": multipart_schema(port) });
+        }
+    }
     content
 }
 
@@ -382,12 +453,15 @@ fn emit_template_run(
     let safe = sanitize_for_ref(&template_id.to_string());
 
     // One object schema per Start block: { start_block_id: <const>, token: <initial port> }.
+    // `token` uses the file-aware schema so a `file`-kind Start field renders as
+    // the file-reference object (consistent with the Manual-trigger body), not a
+    // bare storage-path string.
     let start_item = |id: &str, port: &Port| -> Value {
         json!({
             "type": "object",
             "properties": {
                 "start_block_id": { "type": "string", "enum": [id] },
-                "token": port.json_schema(),
+                "token": port_request_json_schema(port),
             },
             "required": ["start_block_id", "token"],
             "additionalProperties": false,
@@ -521,11 +595,13 @@ fn emit_manual(
     let input_port = resolve_trigger_input_port(graph, node_id);
     let safe = sanitize_for_ref(node_id);
 
-    // Register the reusable request schema + sync-response envelope.
+    // Register the reusable request schema + sync-response envelope. File-kind
+    // fields render as the file-reference object (not a bare string) so the
+    // typed client carries what the strict `/fire` boundary requires.
     let request_ref = format!("Trigger_{safe}_Request");
     let request_schema = input_port
         .as_ref()
-        .map(|p| p.json_schema())
+        .map(port_request_json_schema)
         .unwrap_or_else(|| json!({ "type": "object", "additionalProperties": true }));
     schemas.insert(request_ref.clone(), request_schema);
 
@@ -544,17 +620,10 @@ fn emit_manual(
         }),
     );
 
-    // Both ops carry the same typed requestBody. The request `content` is built
-    // fresh (not $ref'd) when the input port has File fields, because the
-    // multipart alternative needs the binary-swapped shape inline.
-    let req_content = match &input_port {
-        Some(port) if port_has_file(port) => request_content(port),
-        _ => json!({
-            "application/json": {
-                "schema": { "$ref": format!("#/components/schemas/{request_ref}") }
-            }
-        }),
-    };
+    // Both ops carry the same typed requestBody: `application/json` $refs the
+    // registered request schema; a File-bearing port also gets a
+    // `multipart/form-data` binary alternative.
+    let req_content = build_request_content(input_port.as_ref(), &request_ref);
 
     let security = json!([
         { "sessionCookie": [] },
@@ -1090,10 +1159,25 @@ mod tests {
         );
 
         let content = &paths["/api/v1/triggers/t_file/fire"]["post"]["requestBody"]["content"];
-        // application/json — File is a storage-path string.
-        let json_props = &content["application/json"]["schema"]["properties"];
-        assert_eq!(json_props["attachment"]["type"], json!("string"));
-        assert!(json_props["attachment"].get("format").is_none());
+        // application/json — $refs the registered request schema (one named type).
+        assert_eq!(
+            content["application/json"]["schema"]["$ref"],
+            json!("#/components/schemas/Trigger_t_file_Request")
+        );
+        // The registered schema renders the File field as the file-reference
+        // OBJECT the strict `/fire` boundary requires — NOT a bare string.
+        let req = &schemas["Trigger_t_file_Request"];
+        assert_eq!(req["properties"]["attachment"]["type"], json!("object"));
+        assert!(req["properties"]["attachment"]["properties"]
+            .get("key")
+            .is_some());
+        assert_eq!(
+            req["properties"]["attachment"]["additionalProperties"],
+            json!(true)
+        );
+        assert_eq!(req["properties"]["note"]["type"], json!("string"));
+        // File field is still required at the top level.
+        assert_eq!(req["required"], json!(["attachment"]));
         // multipart/form-data — File becomes a binary upload, others mirror.
         let mp_props = &content["multipart/form-data"]["schema"]["properties"];
         assert_eq!(mp_props["attachment"]["type"], json!("string"));
