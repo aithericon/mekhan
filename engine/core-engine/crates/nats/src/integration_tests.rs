@@ -112,6 +112,110 @@ async fn test_clockmaster_schedule_and_fire() {
     ctx.cleanup().await.ok();
 }
 
+/// Regression: cancelling a durable timer must ABORT its sleeping task, not
+/// leave it sleeping to the original expiry pinning `TimerValue.payload`.
+///
+/// Before the fix, `schedule_timer_execution` was a fire-and-forget
+/// `tokio::spawn` and the watch loop ignored non-`Put` KV ops, so a cancel
+/// (KV Delete) dropped the task on the floor — it kept sleeping for the full
+/// `delay_ms` holding its payload. Under a workflow that schedules and cancels
+/// many long timeouts, those orphaned tasks accumulate and leak memory.
+#[tokio::test]
+async fn test_clockmaster_cancel_aborts_sleep_task() {
+    use crate::clockmaster::{Clockmaster, NatsTimerClient};
+    use petri_domain::timer::{TimerCancelRequest, TimerClient, TimerScheduleRequest};
+    use std::sync::Arc;
+
+    let url = shared_nats_url().await;
+    let ctx = NatsTestContext::with_url(url)
+        .await
+        .expect("Failed to create context");
+
+    let bucket_name = format!("TIMERSC_{}", ctx.prefix.replace("_", "").to_uppercase());
+    ctx.jetstream
+        .create_key_value(async_nats::jetstream::kv::Config {
+            bucket: bucket_name.clone(),
+            history: 1,
+            ..Default::default()
+        })
+        .await
+        .expect("create bucket");
+
+    let timer_client = NatsTimerClient::with_bucket(&ctx.jetstream, &bucket_name)
+        .await
+        .expect("create client");
+
+    let workspace_id = format!("cmws-{}", ctx.prefix);
+    let net_id = "test-net";
+    let place_id = "test-place";
+
+    let clockmaster = Arc::new(
+        Clockmaster::with_options(ctx.jetstream.clone(), &bucket_name, &workspace_id)
+            .await
+            .expect("create clockmaster"),
+    );
+
+    // Schedule a long timer BEFORE the clockmaster starts, so hydration tracks
+    // it deterministically (avoids racing the Put against `watch_all` setup).
+    // Its task would sleep for a full minute if never aborted.
+    let correlation_id = uuid::Uuid::new_v4();
+    timer_client
+        .schedule(TimerScheduleRequest {
+            net_id: net_id.to_string(),
+            place_id: place_id.to_string(),
+            correlation_id,
+            delay_ms: 60_000,
+            payload: serde_json::json!({"foo": "bar"}),
+            workspace_id: workspace_id.clone(),
+        })
+        .await
+        .expect("schedule");
+
+    let cm = clockmaster.clone();
+    let cm_handle = tokio::spawn(async move {
+        cm.run().await.unwrap();
+    });
+
+    // Wait until the clockmaster has hydrated the timer and is tracking its task.
+    let mut tracked = false;
+    for _ in 0..50 {
+        if clockmaster.tracked_timer_count().await == 1 {
+            tracked = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(tracked, "clockmaster never tracked the scheduled timer's task");
+
+    // Cancel the timer (KV Delete). The watch loop must abort+drop the task.
+    let cancelled = timer_client
+        .cancel(TimerCancelRequest {
+            net_id: net_id.to_string(),
+            place_id: place_id.to_string(),
+            correlation_id,
+        })
+        .await
+        .expect("cancel");
+    assert!(cancelled, "cancel should report the timer existed");
+
+    // The sleep task must be gone well before its 60s expiry.
+    let mut released = false;
+    for _ in 0..50 {
+        if clockmaster.tracked_timer_count().await == 0 {
+            released = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        released,
+        "cancelled timer's sleep task was not aborted — it leaked (still tracked)"
+    );
+
+    cm_handle.abort();
+    ctx.cleanup().await.ok();
+}
+
 // =============================================================================
 // ActivityTracker Integration Tests
 // =============================================================================

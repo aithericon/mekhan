@@ -4,6 +4,7 @@
 //! 1. `NatsTimerClient` - Writes keys to a KV bucket.
 //! 2. `Clockmaster` - Watches the KV bucket and schedules signals.
 
+use std::collections::HashMap;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use async_nats::jetstream::{self, kv};
@@ -12,6 +13,8 @@ use futures::StreamExt;
 use petri_domain::timer::{TimerCancelRequest, TimerClient, TimerError, TimerScheduleRequest};
 use petri_domain::ExternalSignal;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info};
 
 use crate::Subjects;
@@ -148,6 +151,12 @@ pub struct Clockmaster {
     js: jetstream::Context,
     kv: kv::Store,
     workspace_id: String,
+    /// Live per-timer sleep tasks, keyed by the KV timer key. Lets the watch
+    /// loop abort a timer's sleeping task when the timer is cancelled or
+    /// fired-and-deleted (KV Delete) or rescheduled (KV Put), instead of
+    /// leaking a `tokio` task that sleeps to the ORIGINAL expiry while pinning
+    /// its `TimerValue.payload`. Mirrors `HibernationMaster::sleep_tasks`.
+    timers: Mutex<HashMap<String, JoinHandle<()>>>,
 }
 
 impl Clockmaster {
@@ -174,7 +183,15 @@ impl Clockmaster {
             js,
             kv,
             workspace_id: workspace_id.to_string(),
+            timers: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Number of live timer sleep tasks currently tracked. Test-only hook used
+    /// to assert that cancelled/rescheduled timers don't leak their tasks.
+    #[cfg(test)]
+    pub(crate) async fn tracked_timer_count(&self) -> usize {
+        self.timers.lock().await.len()
     }
 
     pub async fn run(&self) -> Result<(), String> {
@@ -213,23 +230,28 @@ impl Clockmaster {
                 }
             };
 
-            // Only process PUT operations
-            if entry.operation != kv::Operation::Put {
-                continue;
-            }
-
-            if let Ok(timer) = serde_json::from_slice::<TimerValue>(&entry.value) {
-                // Deduplication is handled inside schedule_timer_execution (it re-checks KV)
-                // But simple check here: if we just hydrated it, we might double-schedule.
-                // schedule_timer_execution spawns a task that sleeps.
-                // If we spawn two tasks, both sleep. Both wake up.
-                // Both check KV.
-                // First one fires and deletes.
-                // Second one checks KV -> Gone. Returns.
-                // So it is safe!
-                info!(key = %entry.key, "Clockmaster observed new timer");
-                self.schedule_timer_execution(entry.key.clone(), timer)
-                    .await;
+            match entry.operation {
+                kv::Operation::Put => {
+                    if let Ok(timer) = serde_json::from_slice::<TimerValue>(&entry.value) {
+                        // `schedule_timer_execution` aborts any prior task for
+                        // this key before spawning, so a reschedule (Put with a
+                        // new expiry) can't leave the old sleeping task behind.
+                        info!(key = %entry.key, "Clockmaster observed new timer");
+                        self.schedule_timer_execution(entry.key.clone(), timer)
+                            .await;
+                    }
+                }
+                kv::Operation::Delete | kv::Operation::Purge => {
+                    // Timer cancelled, or fired-and-deleted by its own task:
+                    // abort the sleep task so a cancelled timer doesn't linger
+                    // to its original expiry pinning `TimerValue.payload`.
+                    // Aborting an already-finished task is a no-op.
+                    let mut timers = self.timers.lock().await;
+                    if let Some(handle) = timers.remove(&entry.key) {
+                        handle.abort();
+                        debug!(key = %entry.key, "Aborted timer sleep task (cancel/expiry)");
+                    }
+                }
             }
         }
 
@@ -253,7 +275,17 @@ impl Clockmaster {
             timer.workspace_id.clone()
         };
 
-        tokio::spawn(async move {
+        // Track (and de-duplicate) the sleep task. Abort any prior task for this
+        // key before spawning so a reschedule never leaves an orphaned sleeper;
+        // the Delete/Purge watch arm removes+aborts on cancel or fire-and-delete,
+        // so the map only ever holds tasks for live timers.
+        let map_key = key.clone();
+        let mut timers = self.timers.lock().await;
+        if let Some(prev) = timers.remove(&key) {
+            prev.abort();
+        }
+
+        let handle = tokio::spawn(async move {
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
@@ -370,5 +402,7 @@ impl Clockmaster {
                 }
             }
         });
+
+        timers.insert(map_key, handle);
     }
 }
