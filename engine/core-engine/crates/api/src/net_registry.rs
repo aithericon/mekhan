@@ -312,7 +312,9 @@ where
                 .service
                 .workspace()
                 .unwrap_or_else(|| petri_api_types::subjects::Subjects::DEFAULT_WORKSPACE.to_string());
-            starter(ws).await;
+            // Bind the consumer to THIS net's cancel token so hibernate/complete
+            // tears it down (dropping its `Arc<MemoryEventStore>`).
+            starter(ws, self.cancel_token.clone()).await;
         }
     }
 
@@ -385,7 +387,8 @@ pub type StoreFactory<E, T, S> = Arc<
 /// (e.g. in-memory test stores).
 pub type ConsumerStarter = Arc<
     dyn Fn(
-            String, // real per-net workspace, resolved post-stamp
+            String,            // real per-net workspace, resolved post-stamp
+            CancellationToken, // net cancel token: stops the consumer on hibernate/complete
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
         + Send
         + Sync,
@@ -776,6 +779,16 @@ where
             resume_from_cell,
         ) = (self.store_factory)(net_id);
 
+        // Per-net cancellation token. Created HERE — before the woken-net consumer
+        // start below AND before the instance is built — so the event consumer can
+        // be bound to it. hibernate()/completion cancel this token; binding the
+        // consumer to it (rather than the process-global shutdown token) means the
+        // consumer STOPS with the net and drops its `Arc<MemoryEventStore>`.
+        // Previously the consumer used the global token, outlived the net, and kept
+        // the store alive forever — invisible to the per-net memory report (which
+        // only walks the live registry), so it read 0 while RSS held the orphans.
+        let cancel_token = CancellationToken::new();
+
         // WOKEN-NET PATH (hazard #2) — done OUTSIDE the registry lock (the
         // consumer start may block on a long NATS history replay; holding the
         // write lock across it would serialize all concurrent net creation and
@@ -881,9 +894,10 @@ where
                 }
 
                 let starter = consumer_starter.clone();
+                let consumer_cancel = cancel_token.clone();
                 tokio::task::block_in_place(|| {
                     tokio::runtime::Handle::current().block_on(async move {
-                        starter(ws).await;
+                        starter(ws, consumer_cancel).await;
                     })
                 });
 
@@ -929,6 +943,10 @@ where
         let mut nets = self.nets.write();
         // Double-check: another thread may have created it while we were hydrating
         if let Some(instance) = nets.get(net_id).cloned() {
+            // This thread may have started its own event consumer during the woken
+            // path above; cancel our token so that consumer is torn down instead of
+            // orphaning the discarded store.
+            cancel_token.cancel();
             return instance; // Discard stores — another thread won the race
         }
 
@@ -981,7 +999,8 @@ where
         let adapter_scheduler = Arc::new(AdapterScheduler::new());
         let (event_tx, _) = broadcast::channel::<SseSignal>(256);
         let event_tx = Arc::new(event_tx);
-        let cancel_token = CancellationToken::new();
+        // `cancel_token` was created earlier (before the woken-net consumer start)
+        // so the event consumer could be bound to it.
 
         let instance = Arc::new(NetInstance {
             net_id: net_id.to_string(),
@@ -2343,7 +2362,7 @@ mod tests {
                 // Multi-tenancy: unstamped shared workspace cell + no-op consumer
                 // starter (mock store has no NATS consumer to defer).
                 Arc::new(std::sync::RwLock::new(None)),
-                Arc::new(|_ws: String| {
+                Arc::new(|_ws: String, _cancel: CancellationToken| {
                     Box::pin(async {})
                         as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                 }),
@@ -2402,6 +2421,70 @@ mod tests {
         assert!(
             cancel.is_cancelled(),
             "Cancel token should be cancelled after hibernate"
+        );
+    }
+
+    /// Regression guard for the event-store leak: the per-net `EventConsumer`
+    /// MUST be started with a cancel token that fires when the net hibernates /
+    /// completes. If it is bound to the process-global shutdown token instead
+    /// (the original bug), hibernate removes the net from the registry but the
+    /// consumer task keeps its `Arc<MemoryEventStore>` alive forever — invisible
+    /// to the per-net memory report (which only walks the live registry), so it
+    /// reads 0 while RSS holds the orphaned store. Here we capture the token the
+    /// `ConsumerStarter` receives and assert hibernate cancels it.
+    #[tokio::test]
+    async fn test_event_consumer_receives_net_scoped_cancel_token() {
+        let captured: Arc<std::sync::Mutex<Option<CancellationToken>>> =
+            Arc::new(std::sync::Mutex::new(None));
+        let captured_for_factory = captured.clone();
+        let factory: StoreFactory<
+            MockEventRepository,
+            MockTopologyRepository,
+            MockStateProjection,
+        > = Arc::new(move |_net_id: &str| {
+            let (_tx, rx) = tokio::sync::watch::channel(0u64);
+            let captured = captured_for_factory.clone();
+            (
+                Arc::new(MockEventRepository::new()),
+                Arc::new(MockTopologyRepository::new()),
+                Arc::new(MockStateProjection::new()),
+                rx,
+                Arc::new(std::sync::RwLock::new(None)),
+                Arc::new(move |_ws: String, cancel: CancellationToken| {
+                    *captured.lock().unwrap() = Some(cancel);
+                    Box::pin(async {})
+                        as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
+                }),
+                Arc::new(std::sync::atomic::AtomicU64::new(0)),
+                Arc::new(RwLock::new(None)),
+            )
+        });
+        let registry = NetRegistry::new(factory);
+
+        let inst = registry.get_or_create("net-1");
+        // Fresh net stashes the deferred starter; the post-load hook invokes it
+        // under the net's real workspace (and now, its cancel token).
+        inst.start_event_consumer().await;
+
+        let consumer_cancel = captured
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("ConsumerStarter should have been invoked with the net's cancel token");
+        assert!(
+            !consumer_cancel.is_cancelled(),
+            "consumer token must not be cancelled before hibernate"
+        );
+
+        registry
+            .hibernate("net-1")
+            .await
+            .expect("hibernate should succeed");
+
+        assert!(
+            consumer_cancel.is_cancelled(),
+            "the event consumer's cancel token MUST fire on hibernate — otherwise \
+             the consumer outlives the net and leaks its Arc<MemoryEventStore>"
         );
     }
 
