@@ -84,7 +84,7 @@ fn registry_with_topologies(topos: Vec<(String, PetriNet)>) -> (Router, Arc<Reg>
                 // Multi-tenancy: unstamped shared workspace cell + no-op consumer
                 // starter (mock store has no NATS consumer to defer).
                 Arc::new(std::sync::RwLock::new(None)),
-                Arc::new(|_ws: String| {
+                Arc::new(|_ws: String, _cancel: tokio_util::sync::CancellationToken| {
                     Box::pin(async {})
                         as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                 }),

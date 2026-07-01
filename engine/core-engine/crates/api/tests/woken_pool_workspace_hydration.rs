@@ -111,7 +111,8 @@ fn build(target_ws: Option<&str>) -> (Router, Arc<Reg>) {
                 let topo = Arc::new(MockTopologyRepository::new());
                 let topo_for_starter = topo.clone();
                 let net = pool_topo.clone();
-                let starter: ConsumerStarter = Arc::new(move |_ws: String| {
+                let starter: ConsumerStarter = Arc::new(
+                    move |_ws: String, _cancel: tokio_util::sync::CancellationToken| {
                     let topo = topo_for_starter.clone();
                     let net = net.clone();
                     Box::pin(async move {
@@ -139,7 +140,7 @@ fn build(target_ws: Option<&str>) -> (Router, Arc<Reg>) {
                     Arc::new(MockStateProjection::new()),
                     rx,
                     Arc::new(std::sync::RwLock::new(None)),
-                    Arc::new(|_ws: String| {
+                    Arc::new(|_ws: String, _cancel: tokio_util::sync::CancellationToken| {
                         Box::pin(async {})
                             as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                     }),
@@ -209,7 +210,8 @@ fn build_with_snapshot() -> (Arc<Reg>, Arc<MockSnapshotStore>) {
                 let topo_for_starter = topo.clone();
                 let resume_for_starter = resume_cell.clone();
                 let net = pool_topo.clone();
-                let starter: ConsumerStarter = Arc::new(move |_ws: String| {
+                let starter: ConsumerStarter = Arc::new(
+                    move |_ws: String, _cancel: tokio_util::sync::CancellationToken| {
                     let topo = topo_for_starter.clone();
                     let resume = resume_for_starter.clone();
                     let net = net.clone();
@@ -240,7 +242,7 @@ fn build_with_snapshot() -> (Arc<Reg>, Arc<MockSnapshotStore>) {
                     Arc::new(MockStateProjection::new()),
                     rx,
                     Arc::new(std::sync::RwLock::new(None)),
-                    Arc::new(|_ws: String| {
+                    Arc::new(|_ws: String, _cancel: tokio_util::sync::CancellationToken| {
                         Box::pin(async {})
                             as std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>
                     }),

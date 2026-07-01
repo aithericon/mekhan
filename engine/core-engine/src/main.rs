@@ -234,7 +234,7 @@ async fn main() {
         let consumer_cell = std::sync::Arc::new(std::sync::Mutex::new(Some((consumer, ready_rx))));
         let resume_cell_for_starter = resume_from_cell.clone();
         let consumer_starter: petri_api::net_registry::ConsumerStarter =
-            Arc::new(move |ws: String| {
+            Arc::new(move |ws: String, net_cancel: tokio_util::sync::CancellationToken| {
                 let js_consumer = js_consumer.clone();
                 let net_id_consumer = net_id_consumer.clone();
                 let shutdown = shutdown.clone();
@@ -251,9 +251,27 @@ async fn main() {
                     if let Some(resume_from) = *resume_cell.read() {
                         consumer = consumer.with_resume_from(resume_from);
                     }
+                    // The consumer must stop when EITHER the process shuts down OR
+                    // this net hibernates/completes. Binding it only to the global
+                    // token leaked the net's `Arc<MemoryEventStore>` forever (the
+                    // orphaned consumer outlived the net). Derive a token cancelled
+                    // by either source; the linker task exits as soon as one fires.
+                    let consumer_shutdown = tokio_util::sync::CancellationToken::new();
+                    {
+                        let cs = consumer_shutdown.clone();
+                        let global = shutdown.clone();
+                        let net = net_cancel.clone();
+                        tokio::spawn(async move {
+                            tokio::select! {
+                                _ = global.cancelled() => {}
+                                _ = net.cancelled() => {}
+                            }
+                            cs.cancel();
+                        });
+                    }
                     tokio::spawn(async move {
                         if let Err(e) = consumer
-                            .start(&js_consumer, &ws, &net_id_consumer, shutdown)
+                            .start(&js_consumer, &ws, &net_id_consumer, consumer_shutdown)
                             .await
                         {
                             tracing::error!(
